@@ -1,0 +1,56 @@
+---
+/**
+ * Upcoming events, rendered on the server from `GET /site-api/events` (in-process).
+ * "Later events" follows the keyset cursor (`?before=`).
+ */
+import Base from '../../layouts/Base.astro';
+import {formatEventTime} from '../../lib/format';
+import type {EventsPage} from '../../lib/types';
+import {backend, read} from '../../server/backend';
+import {pageContext} from '../../server/page';
+
+const before = Astro.url.searchParams.get('before') ?? undefined;
+const [{site, viewer}, result] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  read<EventsPage>(backend(Astro.request).events.$get({query: {before}})),
+]);
+const events = result?.events ?? [];
+if (!result) Astro.response.status = 503;
+const format = (f: string) => f.replace('_', ' ').replace(/^\w/, c => c.toUpperCase());
+---
+
+<Base site={site} viewer={viewer} title="Events" description={`Upcoming events from ${site?.name ?? 'our site'}.`}>
+  <main id="main" tabindex="-1" class="wrap section">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Events</p>
+        <h1>Upcoming events</h1>
+      </div>
+    </div>
+    {
+      !result ? (
+        <p class="notice">Events are not available right now.</p>
+      ) : events.length === 0 ? (
+        <p class="lede">No upcoming events. Check back soon.</p>
+      ) : (
+        <ul class="job-list">
+          {events.map(e => (
+            <li>
+              <a class="job-row" href={`/events/${encodeURIComponent(e.slug)}/`}>
+                <div>
+                  <h2 class="job-title">{e.title}</h2>
+                  <p class="muted">{formatEventTime(e.startAt, e.timezone)}</p>
+                </div>
+                <div class="job-tags">
+                  <span class="chip">{format(e.format)}</span>
+                  {e.venueName && <span class="muted small">{e.venueName}</span>}
+                </div>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+    {result?.next && <nav class="pager"><a href={`/events/?before=${encodeURIComponent(result.next)}`}>Later events →</a></nav>}
+  </main>
+</Base>

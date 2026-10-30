@@ -1,0 +1,60 @@
+---
+/**
+ * One event, rendered on the server from `GET /site-api/events/:slug`. Unknown or unpublished
+ * answers a real 404; a database outage a 503. RSVP lands in the next phase.
+ */
+import NotFound from '../../components/NotFound.astro';
+import Base from '../../layouts/Base.astro';
+import {formatEventTime} from '../../lib/format';
+import type {EventDetail} from '../../lib/types';
+import {backend, read} from '../../server/backend';
+import {pageContext} from '../../server/page';
+
+const slug = Astro.params.slug ?? '';
+const [{site, viewer}, answer] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  backend(Astro.request)
+    .events[':slug'].$get({param: {slug}})
+    .catch(() => null),
+]);
+const found = answer?.ok ? await read<{event: EventDetail}>(Promise.resolve(answer)) : null;
+const event = found?.event ?? null;
+const missing = !event && answer?.status === 404;
+if (!event) {
+  Astro.response.status = missing ? 404 : 503;
+  if (!missing) Astro.response.headers.set('Retry-After', '60');
+}
+const paragraphs = event?.description.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean) ?? [];
+---
+
+{
+  event ? (
+    <Base site={site} viewer={viewer} title={event.title} description={event.description.slice(0, 160) || event.title}>
+      <main id="main" tabindex="-1" class="wrap narrow section">
+        <p><a href="/events/">← All events</a></p>
+        <p class="eyebrow">{formatEventTime(event.startAt, event.timezone)}</p>
+        <h1>{event.title}</h1>
+        <p class="muted">
+          {event.venueName ?? (event.format === 'online' ? 'Online' : '')}
+          {event.venueAddress && ` · ${event.venueAddress}`}
+        </p>
+        <div class="prose">{paragraphs.map(p => <p>{p}</p>)}</div>
+        <div class="actions">
+          {event.mapUrl && <a class="button ghost" href={event.mapUrl} rel="noopener noreferrer" target="_blank">Map</a>}
+        </div>
+      </main>
+    </Base>
+  ) : missing ? (
+    <Base site={site} viewer={viewer} title="Page not found" noindex>
+      <NotFound site={site} />
+    </Base>
+  ) : (
+    <Base site={site} viewer={viewer} title="Not available right now" noindex>
+      <main id="main" tabindex="-1" class="wrap narrow section center">
+        <h1>This event is not available right now</h1>
+        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
+        <p><a class="button" href="/events/">All events</a></p>
+      </main>
+    </Base>
+  )
+}
