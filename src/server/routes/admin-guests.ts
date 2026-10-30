@@ -7,6 +7,7 @@ import {hashToken, newToken} from '../../domain/secureToken';
 import {addMinutes} from '../../domain/time';
 import {hasActiveClaim, nextWaitlistPosition, orderWaitlist, renumberWaitlist} from '../../domain/waitlist';
 import {Prisma, type PrismaClient} from '../../generated/prisma/client';
+import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {attachmentHeader, type CsvValue, toCsv} from '../csv';
 import {eventMailSelect, type GuestNotice, type MailEvent, notifyGuests, publicBase} from '../guest-mail';
@@ -621,6 +622,9 @@ const contactsQuery = validator('query', value => ({
   before: typeof value.before === 'string' ? value.before.toLowerCase().slice(0, 254) : '',
 }));
 
+const auditRemoval = (db: PrismaClient, actor: number | null | undefined, eventId: string, action: 'remove' | 'erase', done: number, failed: number) =>
+  audit(db, {actorUserId: actor ?? null, action: action === 'erase' ? 'guests_erased' : 'guests_removed', target: ['event', eventId], meta: {done, failed}});
+
 /* ── Routes ─────────────────────────────────────────────────────────── */
 
 const guard = [withViewer, requireAuth, requirePermission(MANAGE), withDb] as const;
@@ -649,6 +653,7 @@ export const adminGuestRoutes = new Hono()
       g.marketingConsent ? 'Yes' : 'No', g.checkedInAt, g.attended === null ? '' : g.attended ? 'Yes' : 'No', g.source, g.createdAt,
       ...questions.map(q => answerText(g.answers[q.id])),
     ]);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'guests_exported', target: ['event', event.id], meta: {rows: guests.length}});
     const day = new Date().toISOString().slice(0, 10);
     return c.body(toCsv([header, ...body]), 200, {
       'Content-Type': 'text/csv; charset=utf-8',
@@ -662,7 +667,9 @@ export const adminGuestRoutes = new Hono()
     const event = await loadEvent(c.var.db, c.req.param('eventId'));
     if (!event) return c.json(notFound('Event'), 404);
     const {action, rsvpIds} = c.req.valid('json');
-    return c.json(await runBulk(c.var.db, publicBase(c.req.url), event, action, rsvpIds));
+    const result = await runBulk(c.var.db, publicBase(c.req.url), event, action, rsvpIds);
+    if (action === 'remove' || action === 'erase') await auditRemoval(c.var.db, c.var.viewer.id, event.id, action, result.succeeded.length, result.failed.length);
+    return c.json(result);
   })
 
   .get('/events/:eventId/guests/:rsvpId', ...guard, async c => {
@@ -744,7 +751,10 @@ export const adminGuestRoutes = new Hono()
     if (!event || !isUuid(rsvpId)) return c.json(notFound('Guest'), 404);
     const result = await runBulk(db, publicBase(c.req.url), event, 'remove', [rsvpId]);
     const failure = result.failed[0];
-    if (!failure) return c.json({ok: true});
+    if (!failure) {
+      await auditRemoval(db, c.var.viewer.id, event.id, 'remove', 1, 0);
+      return c.json({ok: true});
+    }
     if (failure.reason === 'not_found') return c.json(notFound('Guest'), 404);
     return c.json(problem('has_order', 'This guest has a payment on record, so they cannot be removed. Erase them instead.'), 409);
   })
@@ -788,6 +798,7 @@ export const adminGuestRoutes = new Hono()
     const body: CsvValue[][] = rows.slice(0, EXPORT_MAX_ROWS).map(r => [
       r.name, r.email, r.eventCount, r.lastEvent.title, r.lastEvent.startAt, r.marketingConsent ? 'Yes' : 'No',
     ]);
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'contacts_exported', meta: {rows: body.length}});
     const header: CsvValue[] = ['Name', 'Email', 'Events', 'Last event', 'Last event date', 'Marketing consent'];
     return c.body(toCsv([header, ...body]), 200, {
       'Content-Type': 'text/csv; charset=utf-8',

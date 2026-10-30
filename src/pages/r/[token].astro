@@ -3,16 +3,19 @@
  * The guest's own page: confirmation AND manage (`/r/<token>`, the link in their email and where the
  * RSVP form sends them). The token is the credential: the page is never cached, never indexed and never
  * sent on as a Referer. A bad, rotated or expired token is a real 404 (indistinguishable on purpose).
+ * Look: the original app's ConfirmationPage (the mint "You're in" band for a confirmed Going guest,
+ * a quiet banner for every other state) followed by its ManageRsvpPage (summary, event, edit, cancel).
  */
 import {renderSVG} from 'uqr';
 
-import NotFound from '../../components/NotFound.astro';
-import {statusCopy} from '../../components/rsvp/copy';
+import ErrorScreen from '../../components/ErrorScreen.astro';
+import GIcon from '../../components/GIcon.astro';
+import {responseLabel, statusBadge, statusCopy} from '../../components/rsvp/copy';
 import RsvpForm from '../../components/rsvp/RsvpForm.astro';
 import {rsvpRead} from '../../components/rsvp/server';
 import Base from '../../layouts/Base.astro';
-import {formatEventTime} from '../../lib/format';
-import type {GuestRsvpView} from '../../lib/rsvp-types';
+import {formatShortWhen, formatDay, formatRange, guestCopy, routeCopy} from '../../lib/guest-format';
+import type {AnswerValue, GuestRsvpView} from '../../lib/rsvp-types';
 import {pageContext} from '../../server/page';
 
 const token = Astro.params.token ?? '';
@@ -28,128 +31,335 @@ if (!guest) {
   Astro.response.status = missing ? 404 : 503;
   if (!missing) Astro.response.headers.set('Retry-After', '60');
 }
-const copy = guest ? statusCopy(guest.rsvp.status, guest.rsvp.response, guest.rsvp.waitlistPosition) : null;
-const going = guest?.rsvp.response === 'going' && guest.rsvp.status === 'confirmed';
-const saved = Astro.url.searchParams.get('saved') === '1';
-const inactive = guest ? guest.rsvp.status === 'cancelled' || guest.event.status === 'cancelled' : false;
-const qr = guest && going ? renderSVG(guest.rsvp.ticketCode, {border: 1}).replace('<svg ', '<svg width="168" height="168" ') : '';
+const hostName = site?.name ?? 'The host';
 const ticket = guest?.event.ticketTypes.find(t => t.id === guest.rsvp.ticketTypeId);
+const paid = guest?.event.ticketTypes.some(t => t.priceCents > 0) ?? false;
+const spec = guest
+  ? statusCopy(guest.rsvp.status, guest.rsvp.response, {host: hostName, email: guest.rsvp.email, waitlistPosition: guest.rsvp.waitlistPosition, paid})
+  : null;
+const youreIn = spec?.youreIn ?? false;
+const confirmed = !!guest && guest.rsvp.status === 'confirmed' && guest.rsvp.response !== 'not_going';
+const saved = Astro.url.searchParams.get('saved') === '1';
+const cancelledEvent = guest?.event.status === 'cancelled';
+const active = !!guest && guest.rsvp.status !== 'cancelled' && guest.rsvp.status !== 'declined' && !cancelledEvent;
+const joinUrl = confirmed && guest && guest.event.format !== 'in_person' ? guest.event.joinUrl : null;
+const showTicket = confirmed && !!guest?.rsvp.ticketCode && guest.event.format !== 'online';
+const qr = guest && showTicket ? renderSVG(guest.rsvp.ticketCode ?? '', {border: 1}) : '';
+const inPerson = guest ? guest.event.format !== 'online' : false;
+const place = guest
+  ? guest.event.format === 'online'
+    ? guestCopy.format.online
+    : [guest.event.venueName, guest.event.venueAddress].filter(Boolean).join(', ')
+  : '';
+const when = guest ? formatShortWhen(guest.event.startAt, guest.event.timezone) : '';
+const formatAnswer = (value: AnswerValue | undefined) => {
+  if (value === undefined) return 'No answer';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : 'No answer';
+  return value.trim() || 'No answer';
+};
+const rsvpGone = routeCopy.rsvpNotFound;
+const failed = routeCopy.loadFailed;
 ---
 
 {
-  guest && copy ? (
-    <Base site={site} viewer={viewer} title={`Your RSVP: ${guest.event.title}`} noindex>
-      <main id="main" tabindex="-1" class="wrap narrow section">
-        <p class="eyebrow">Your RSVP</p>
-        <h1>{guest.event.title}</h1>
-        <p class="muted">{formatEventTime(guest.event.startAt, guest.event.timezone)}</p>
-
-        {saved && <p class="notice notice-ok" role="status">Your changes were saved.</p>}
-        {guest.event.status === 'cancelled' && <p class="notice notice-error" role="alert">This event was cancelled.</p>}
-
-        <div class="card">
-          <h2>{copy.title}</h2>
-          <p>{copy.body}</p>
+  guest && spec ? (
+    <Base site={site} viewer={viewer} title={`Your RSVP: ${guest.event.title}`} noindex secretInUrl guest>
+      <main id="main" tabindex="-1" class="g-main">
+        <div class="g-flow">
           {
-            guest.rsvp.status === 'awaiting_payment' && (
-              <p class="muted">If you closed the payment page, check your email or ask the host for a new link.</p>
+            youreIn ? (
+              <section aria-labelledby="status-title" class="g-signal">
+                <div class="page-container">
+                  <div class="g-signal-text">
+                    <h1 id="status-title" class="type-poster">
+                      {guestCopy.confirmation.youreIn[0]}
+                      <br />
+                      {guestCopy.confirmation.youreIn[1]}
+                    </h1>
+                    <div class="g-signal-facts">
+                      <p class="g-lead g-strong-inherit">{guest.event.title}</p>
+                      <p class="g-strong-inherit" data-numeric>{when}</p>
+                      {place && <p>{place}</p>}
+                      <p>
+                        {guestCopy.confirmation.seatsFor(guest.rsvp.name, guest.rsvp.plusOnes)} · {guestCopy.confirmation.seats(guest.rsvp.seats)}
+                      </p>
+                    </div>
+                  </div>
+                  <div class="g-signal-aside">
+                    {showTicket && (
+                      <section aria-labelledby="ticket-title" class="g-ticket">
+                        <div class="g-ticket-top">
+                          <div class="g-ticket-info">
+                            <h2 id="ticket-title" class="g-ticket-kicker">Your ticket</h2>
+                            {ticket && <p class="g-body-sm g-strong-inherit">{ticket.name}</p>}
+                            <p class="g-body-sm">
+                              {guestCopy.confirmation.seatsFor(guest.rsvp.name, guest.rsvp.plusOnes)} · {guestCopy.confirmation.seats(guest.rsvp.seats)}
+                            </p>
+                          </div>
+                          <div class="g-ticket-qr" role="img" aria-label={`Ticket QR code for ${guest.rsvp.name}`} set:html={qr} />
+                        </div>
+                        <div class="g-ticket-bottom">
+                          <p class="g-ticket-code">
+                            <span class="g-ticket-kicker">Ticket code</span>
+                            <span class="type-code">{guest.rsvp.ticketCode}</span>
+                          </p>
+                          <p class="g-caption">Show this at the door.</p>
+                        </div>
+                      </section>
+                    )}
+                    {active && (
+                      <div class="g-btn-row">
+                        <a class="g-btn g-btn-lg g-btn-ink" href={guest.calendar.icsPath} download data-astro-reload>
+                          <GIcon name="calendar-plus" />
+                          Download .ics
+                        </a>
+                        <a class="g-btn g-btn-lg g-btn-outline g-btn-signal-outline" href={guest.calendar.googleUrl} target="_blank" rel="noopener noreferrer">
+                          Google Calendar
+                          <GIcon name="external-link" />
+                          <span class="sr-only">{guestCopy.location.opensNewTab}</span>
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <section aria-labelledby="status-title" class="g-quiet">
+                <div class="page-container">
+                  <span class="g-quiet-icon" aria-hidden="true">
+                    <GIcon name={spec.icon} class="g-icon-6" stroke={1.75} />
+                  </span>
+                  <span class={`g-badge g-badge-${spec.badge.tone}`}>
+                    <span class="g-badge-dot" aria-hidden="true" />
+                    {spec.badge.label}
+                  </span>
+                  <h1 id="status-title" class="type-display g-display g-display-fixed">{spec.title}</h1>
+                  <p class="g-lead">{spec.body}</p>
+                  {guest.rsvp.status === 'awaiting_payment' && (
+                    <p class="g-body-sm g-muted">If you closed the payment page, check your email or ask the host for a new link.</p>
+                  )}
+                  {guest.rsvp.status === 'cancelled' && (
+                    <a class="g-btn g-btn-lg g-btn-outline" href={`/events/${guest.event.slug}/`}>Back to the event</a>
+                  )}
+                </div>
+              </section>
             )
           }
-        </div>
 
-        {
-          going && (
-            <div class="card">
-              <h2>Your ticket</h2>
-              <p>
-                <strong>{guest.rsvp.ticketCode}</strong>
-                {ticket && ` · ${ticket.name}`}
-                {` · ${guest.rsvp.seats} ${guest.rsvp.seats === 1 ? 'seat' : 'seats'}`}
-              </p>
-              <div class="ticket-qr" role="img" aria-label="QR code of your ticket code" set:html={qr} />
-              <p class="muted">Show this code at the door.</p>
-            </div>
-          )
-        }
+          <div class="page-container">
+            <div class="g-page-narrow-lg">
+              {saved && <p class="g-notice g-notice-ok" role="status">Changes saved</p>}
+              {cancelledEvent && <p class="g-notice g-notice-error" role="alert">{guestCopy.cancelledBanner.title}. {guestCopy.cancelledBanner.body}</p>}
 
-        {
-          guest.event.joinUrl && (
-            <div class="card">
-              <h2>Join online</h2>
-              <p>
-                <a class="button" href={guest.event.joinUrl} rel="noopener noreferrer" target="_blank">Open the join link</a>
-              </p>
-            </div>
-          )
-        }
+              {!youreIn && showTicket && (
+                <section aria-labelledby="ticket-title" class="g-ticket">
+                  <div class="g-ticket-top">
+                    <div class="g-ticket-info">
+                      <h2 id="ticket-title" class="g-ticket-kicker">Your ticket</h2>
+                      {ticket && <p class="g-body-sm g-strong-inherit">{ticket.name}</p>}
+                      <p class="g-body-sm">
+                        {guestCopy.confirmation.seatsFor(guest.rsvp.name, guest.rsvp.plusOnes)} · {guestCopy.confirmation.seats(guest.rsvp.seats)}
+                      </p>
+                    </div>
+                    <div class="g-ticket-qr" role="img" aria-label={`Ticket QR code for ${guest.rsvp.name}`} set:html={qr} />
+                  </div>
+                  <div class="g-ticket-bottom">
+                    <p class="g-ticket-code">
+                      <span class="g-ticket-kicker">Ticket code</span>
+                      <span class="type-code">{guest.rsvp.ticketCode}</span>
+                    </p>
+                    <p class="g-caption">Show this at the door.</p>
+                  </div>
+                </section>
+              )}
 
-        {
-          !inactive && guest.rsvp.status !== 'declined' && (
-            <div class="actions">
-              <a class="button ghost" href={guest.calendar.icsPath} download data-astro-reload>Add to calendar (.ics)</a>
-              <a class="button ghost" href={guest.calendar.googleUrl} rel="noopener noreferrer" target="_blank">Google Calendar</a>
-            </div>
-          )
-        }
+              {!youreIn && confirmed && active && (
+                <section aria-labelledby="calendar-title" class="g-section">
+                  <h2 id="calendar-title" class="g-title-sm">Add to your calendar</h2>
+                  <div class="g-btn-row">
+                    <a class="g-btn g-btn-lg" href={guest.calendar.icsPath} download data-astro-reload>
+                      <GIcon name="calendar-plus" />
+                      Download .ics
+                    </a>
+                    <a class="g-btn g-btn-lg g-btn-outline" href={guest.calendar.googleUrl} target="_blank" rel="noopener noreferrer">
+                      Google Calendar
+                      <GIcon name="external-link" />
+                      <span class="sr-only">{guestCopy.location.opensNewTab}</span>
+                    </a>
+                  </div>
+                </section>
+              )}
 
-        <p>
-          <a href={`/events/${guest.event.slug}/`}>Event page</a>
-          {guest.event.venueName && ` · ${guest.event.venueName}`}
-          {guest.event.venueAddress && `, ${guest.event.venueAddress}`}
-          {guest.event.mapUrl && (
-            <>
-              {' · '}
-              <a href={guest.event.mapUrl} rel="noopener noreferrer" target="_blank">Map</a>
-            </>
-          )}
-        </p>
+              {joinUrl && (
+                <div class="g-card">
+                  <div class="g-card-body">
+                    <div class="g-join">
+                      <span class="g-fact-well" aria-hidden="true"><GIcon name="monitor-play" class="g-icon-5" stroke={1.75} /></span>
+                      <div class="g-host-text">
+                        <h2 class="g-title-sm">Your join link</h2>
+                        <p class="g-body-sm g-join-url">{joinUrl}</p>
+                        <p class="g-body-sm g-muted">Keep this to yourself. It's also in your confirmation email.</p>
+                      </div>
+                    </div>
+                    <a class="g-btn g-btn-lg g-fit" href={joinUrl} target="_blank" rel="noopener noreferrer">
+                      Join the event
+                      <GIcon name="arrow-up-right" />
+                      <span class="sr-only">{guestCopy.location.opensNewTab}</span>
+                    </a>
+                  </div>
+                </div>
+              )}
 
-        {
-          guest.rsvp.canEdit && !guest.event.closed ? (
-            <section class="section" aria-labelledby="change-heading">
-              <h2 id="change-heading">Change your RSVP</h2>
-              <RsvpForm
-                view={guest.event}
-                mode="edit"
-                token={token}
-                values={{
-                  name: guest.rsvp.name,
-                  email: guest.rsvp.email,
-                  response: guest.rsvp.response,
-                  plusOnes: guest.rsvp.plusOnes,
-                  ticketTypeId: guest.rsvp.ticketTypeId,
-                  marketingConsent: guest.rsvp.marketingConsent,
-                  answers: guest.rsvp.answers,
-                }}
-              />
-              <div class="section" data-cancel-root data-token={token}>
-                <button class="button danger" type="button" data-cancel-open>Cancel my RSVP</button>
-                <div data-cancel-confirm hidden>
-                  <p>Cancel your RSVP? Your seat is released.</p>
-                  <p class="notice notice-error" data-cancel-status hidden role="alert"></p>
-                  <div class="actions">
-                    <button class="button danger" type="button" data-cancel-yes>Yes, cancel my RSVP</button>
-                    <button class="button ghost" type="button" data-cancel-no>Keep my RSVP</button>
+              <section aria-labelledby="manage-summary">
+                <div class="g-card">
+                  <div class="g-card-body">
+                    <h2 id="manage-summary" class="g-title-sm">Summary</h2>
+                    <dl class="g-dl">
+                      <dt>Status</dt>
+                      <dd>
+                        <span class={`g-badge g-badge-${statusBadge[guest.rsvp.status].tone}`}>
+                          <span class="g-badge-dot" aria-hidden="true" />
+                          {statusBadge[guest.rsvp.status].label}
+                        </span>
+                      </dd>
+                      <dt>Response</dt>
+                      <dd class="g-strong-inherit">{responseLabel[guest.rsvp.response]}</dd>
+                      {guest.rsvp.response !== 'not_going' && (
+                        <>
+                          <dt>Seats</dt>
+                          <dd data-numeric>
+                            {guestCopy.confirmation.seatsFor(guest.rsvp.name, guest.rsvp.plusOnes)} · {guestCopy.confirmation.seats(guest.rsvp.seats)}
+                          </dd>
+                        </>
+                      )}
+                      {ticket && (
+                        <>
+                          <dt>Ticket</dt>
+                          <dd>
+                            {ticket.name}
+                            {guest.rsvp.ticketCode && (
+                              <>
+                                {' · '}
+                                <span class="type-code">{guest.rsvp.ticketCode}</span>
+                              </>
+                            )}
+                          </dd>
+                        </>
+                      )}
+                    </dl>
+                    {guest.event.questions.length > 0 && (
+                      <div class="g-answers-box">
+                        <h3>Your answers</h3>
+                        <dl class="g-answers">
+                          {guest.event.questions.map(q => (
+                            <div>
+                              <dt>{q.label}</dt>
+                              <dd>{formatAnswer(guest.rsvp.answers[q.id])}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <div class="g-card">
+                <div class="g-card-body">
+                  <h2 id="event-summary-title" class="g-title-sm">{guest.event.title}</h2>
+                  <time class="g-when g-summary-time" datetime={guest.event.startAt} data-numeric>
+                    <span class="g-strong-inherit">{formatDay(guest.event.startAt, guest.event.timezone)}</span>
+                    <span>{formatRange(guest.event.startAt, guest.event.endAt, guest.event.timezone)}</span>
+                  </time>
+                  <div class="g-summary-line">
+                    <GIcon name={inPerson ? 'map-pin' : 'monitor-play'} />
+                    <span>
+                      {inPerson && guest.event.venueName && <span class="g-strong-inherit">{guest.event.venueName}</span>}
+                      {inPerson && guest.event.venueAddress && <span class="g-muted">{guest.event.venueAddress}</span>}
+                      {guest.event.format !== 'in_person' && <span>{guestCopy.format[guest.event.format]}</span>}
+                    </span>
+                  </div>
+                  <p class="g-body-sm g-muted">
+                    {guestCopy.hero.hostedBy} <span class="g-strong-inherit g-fg">{hostName}</span>
+                  </p>
+                  <div class="g-btn-row-wrap">
+                    <a class="g-btn g-btn-outline g-btn-lg" href={`/events/${guest.event.slug}/`}>
+                      View event page
+                      <GIcon name="arrow-right" />
+                    </a>
+                    {guest.event.mapUrl && inPerson && (
+                      <a class="g-btn g-btn-ghost g-btn-lg" href={guest.event.mapUrl} rel="noopener noreferrer" target="_blank">
+                        {guestCopy.location.openMap}
+                        <GIcon name="arrow-up-right" />
+                        <span class="sr-only">{guestCopy.location.opensNewTab}</span>
+                      </a>
+                    )}
                   </div>
                 </div>
               </div>
-            </section>
-          ) : guest.rsvp.canEdit ? (
-            <p class="muted">RSVPs for this event have closed, so changes are no longer accepted here.</p>
-          ) : null
-        }
+
+              {
+                guest.rsvp.canEdit && !guest.event.closed && active ? (
+                  <>
+                    <section class="g-section-rule" aria-labelledby="change-heading">
+                      <h2 id="change-heading" class="g-title-sm">Change your answers</h2>
+                      <RsvpForm
+                        view={guest.event}
+                        mode="edit"
+                        token={token}
+                        hostName={hostName}
+                        values={{
+                          name: guest.rsvp.name,
+                          email: guest.rsvp.email,
+                          response: guest.rsvp.response,
+                          plusOnes: guest.rsvp.plusOnes,
+                          ticketTypeId: guest.rsvp.ticketTypeId,
+                          marketingConsent: guest.rsvp.marketingConsent,
+                          answers: guest.rsvp.answers,
+                        }}
+                      />
+                    </section>
+
+                    <section class="g-section-rule" aria-labelledby="manage-cancel" data-cancel-root data-token={token}>
+                      <h2 id="manage-cancel" class="g-title-sm">Can't make it after all?</h2>
+                      <p class="g-body-sm g-muted g-prose-max">
+                        This frees your {guest.rsvp.seats === 1 ? 'seat' : `${guest.rsvp.seats} seats`} for someone else, and the next person on the waitlist gets it. You can RSVP again later if spaces remain.
+                        {paid && ' For a refund on a paid ticket, contact the host.'}
+                      </p>
+                      <button class="g-btn g-btn-outline g-btn-lg" type="button" data-cancel-open>Cancel my RSVP</button>
+                      <div class="g-cancel-panel" data-cancel-confirm hidden>
+                        <h3 class="g-title-sm">Cancel your RSVP?</h3>
+                        <p class="g-body-sm g-muted">Your seat is released.</p>
+                        <p class="g-notice g-notice-error" data-cancel-status hidden role="alert"></p>
+                        <div class="g-btn-row">
+                          <button class="g-btn g-btn-lg g-btn-destructive" type="button" data-cancel-yes>Yes, cancel my RSVP</button>
+                          <button class="g-btn g-btn-lg g-btn-outline" type="button" data-cancel-no>Keep my RSVP</button>
+                        </div>
+                      </div>
+                    </section>
+                  </>
+                ) : guest.rsvp.canEdit && !cancelledEvent && active ? (
+                  <p class="g-body-sm g-muted">RSVPs for this event have closed, so changes are no longer accepted here.</p>
+                ) : !active && !cancelledEvent ? (
+                  <a class="g-btn g-btn-lg g-fit" href={`/events/${guest.event.slug}/`}>
+                    RSVP again
+                    <GIcon name="arrow-right" />
+                  </a>
+                ) : null
+              }
+            </div>
+          </div>
+        </div>
       </main>
     </Base>
   ) : missing ? (
-    <Base site={site} viewer={viewer} title="Page not found" noindex>
-      <NotFound site={site} />
+    <Base site={site} viewer={viewer} title="Link not found" noindex guest>
+      <ErrorScreen poster={rsvpGone.poster} description={rsvpGone.body} action={{href: '/', label: rsvpGone.action}} />
     </Base>
   ) : (
-    <Base site={site} viewer={viewer} title="Not available right now" noindex>
-      <main id="main" tabindex="-1" class="wrap narrow section center">
-        <h1>This page is not available right now</h1>
-        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
-      </main>
+    <Base site={site} viewer={viewer} title="Not available right now" noindex guest>
+      <ErrorScreen poster={failed.poster} description={failed.body} action={{href: `/r/${encodeURIComponent(token)}/`, label: failed.action, prefetch: false, reload: true}} />
     </Base>
   )
 }

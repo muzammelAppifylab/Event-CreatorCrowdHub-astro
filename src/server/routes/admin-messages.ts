@@ -4,6 +4,7 @@ import {validator} from 'hono/validator';
 import {renderTemplate} from '../../domain/mergeTags';
 import {confirmationEmail, creatorEmail, type CreatorCopy} from '../../emails';
 import type {PrismaClient} from '../../generated/prisma/client';
+import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {
   emailDataFor,
@@ -503,5 +504,6 @@ export const adminMessageRoutes = new Hono()
       );
     }
     await db.message.update({where: {id: message.id}, data: {sentCount: sent}, select: {id: true}});
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'message_broadcast', target: ['event', event.id], meta: {sent, failed}});
     return c.json({message: logEntry({...message, sentCount: sent}, failed), failed}, 201);
   });

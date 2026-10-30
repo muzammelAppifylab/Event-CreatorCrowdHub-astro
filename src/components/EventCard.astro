@@ -1,0 +1,47 @@
+---
+/**
+ * The DICE event tile of the original app (`components/shared/EventCard`): the poster first, no
+ * card chrome, no shadow; type sits flush under the art and the whole tile is one link.
+ */
+import {posterTextFor, type CoverStyle} from '../lib/posters';
+import {formatShortWhen, guestCopy} from '../lib/guest-format';
+import Poster from './Poster.astro';
+
+interface Props {
+  event: {
+    slug: string;
+    title: string;
+    startAt: string;
+    timezone: string;
+    format: 'in_person' | 'online' | 'hybrid';
+    venueName: string | null;
+    coverImageUrl: string | null;
+    coverPoster: string | null;
+    coverStyle?: CoverStyle | null;
+  };
+  /** "Free", "From $25": omit when the list does not carry ticket prices. */
+  price?: string;
+  href?: string;
+}
+
+const {event, price, href = `/events/${encodeURIComponent(event.slug)}/`} = Astro.props;
+const venue = event.format === 'online' ? guestCopy.format.online : (event.venueName ?? guestCopy.format[event.format]);
+---
+
+<a class="g-tile" href={href} data-astro-prefetch>
+  <div class="g-tile-art">
+    {
+      event.coverImageUrl ? (
+        <img src={event.coverImageUrl} alt="" loading="lazy" width="300" height="400" />
+      ) : (
+        <Poster design={event.coverPoster} seed={event.slug} text={posterTextFor(event, event.coverStyle)} palette={event.coverStyle?.palette} />
+      )
+    }
+  </div>
+  <div class="g-tile-text">
+    <h3>{event.title}</h3>
+    <p>{formatShortWhen(event.startAt, event.timezone)}</p>
+    <p class="g-tile-venue">{venue}</p>
+    {price && <p class="g-tile-price" data-numeric>{price}</p>}
+  </div>
+</a>

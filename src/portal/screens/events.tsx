@@ -32,15 +32,17 @@ import {
   useToast,
 } from '../ui';
 
-const TAB_LABELS: Record<EventListTab, string> = {upcoming: 'Upcoming', past: 'Past and cancelled', drafts: 'Drafts'};
+const TAB_LABELS: Record<EventListTab, string> = {upcoming: 'Upcoming', past: 'Past', drafts: 'Drafts'};
 const STATUS_TONES = {draft: 'neutral', published: 'success', cancelled: 'danger'} as const;
 const FORMAT_LABELS = {in_person: 'In person', online: 'Online', hybrid: 'Hybrid'} as const;
 const VISIBILITY_LABELS = {public: 'Public', unlisted: 'Unlisted', private: 'Private'} as const;
 const EMPTY_TEXT: Record<EventListTab, string> = {
-  upcoming: 'Published events that have not ended show here.',
-  past: 'Events that ended or were cancelled show here.',
-  drafts: 'Events you have not published yet show here.',
+  upcoming: 'Create an event and share the link. Every guest lands in your Guests list.',
+  past: 'Events move here once they end, with their guest lists kept.',
+  drafts: 'Saved but unpublished events wait here until you publish them.',
 };
+const EMPTY_TITLE: Record<EventListTab, string> = {upcoming: 'No upcoming events', past: 'No past events yet', drafts: 'No drafts'};
+const EMPTY_ACTION: Record<EventListTab, string> = {upcoming: 'Create your first event', past: 'See upcoming events', drafts: 'Start a draft'};
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const when = (e: AdminEventSummary) => formatInZone(new Date(e.startAt), e.timezone);
@@ -133,27 +135,28 @@ export function Events() {
             </a>
           </span>
           <span className="cell-sub">
-            {FORMAT_LABELS[e.format]} · {VISIBILITY_LABELS[e.visibility]}
+            {FORMAT_LABELS[e.format]} · /e/{e.slug}
           </span>
         </div>
       ),
     },
-    {key: 'when', header: 'Starts', width: 'shrink', cell: e => when(e)},
+    {key: 'when', header: 'Date', width: 'shrink', cell: e => when(e)},
     {
       key: 'status',
       header: 'Status',
       width: 'shrink',
       cell: e => <StatusBadge tone={STATUS_TONES[e.status]}>{e.status === 'draft' ? 'Draft' : e.status === 'published' ? 'Published' : 'Cancelled'}</StatusBadge>,
     },
+    {key: 'visibility', header: 'Visibility', width: 'shrink', hideOnMobile: true, cell: e => VISIBILITY_LABELS[e.visibility]},
     {
       key: 'guests',
-      header: 'Guests',
+      header: 'Going',
       width: 'shrink',
       hideOnMobile: true,
       cell: e => (
         <span>
-          {e.counts.confirmed}
-          {e.capacity ? ` / ${e.capacity}` : ''}
+          <strong>{e.counts.confirmed}</strong>
+          <span className="muted"> / {e.capacity ?? 'No limit'}</span>
           {e.counts.waitlisted > 0 && (
             <>
               {' '}
@@ -175,6 +178,7 @@ export function Events() {
             label={`Actions for “${e.title}”`}
             disabled={busyKey !== null}
             items={[
+              {label: 'Open', icon: 'external', onSelect: () => go(`/events/${e.id}`)},
               {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}`)},
               e.status === 'draft'
                 ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
@@ -196,16 +200,11 @@ export function Events() {
     <div className="app-page screen-events">
       <PageHeader
         title="Events"
-        description="Create events, publish them, and open one to edit its details, tickets and questions."
+        description="Everything you're running, have run, or are still drafting."
         actions={
-          <>
-            <Button variant="secondary" onClick={() => go('/event-settings')}>
-              Settings
-            </Button>
-            <Button icon="plus" onClick={() => go('/events/new')}>
-              New event
-            </Button>
-          </>
+          <Button icon="plus" onClick={() => go('/events/new')}>
+            Create event
+          </Button>
         }
       />
 
@@ -227,12 +226,18 @@ export function Events() {
             busyKey={busyKey}
             empty={
               <EmptyState
-                icon="clock"
-                title={`No ${TAB_LABELS[tab].toLowerCase()} events`}
+                icon={tab === 'drafts' ? 'file' : 'clock'}
+                title={EMPTY_TITLE[tab]}
                 action={
-                  <Button variant="secondary" icon="plus" onClick={() => go('/events/new')}>
-                    New event
-                  </Button>
+                  tab === 'past' ? (
+                    <Button variant="secondary" onClick={() => setTab('upcoming')}>
+                      {EMPTY_ACTION[tab]}
+                    </Button>
+                  ) : (
+                    <Button icon="plus" onClick={() => go('/events/new')}>
+                      {EMPTY_ACTION[tab]}
+                    </Button>
+                  )
                 }>
                 {EMPTY_TEXT[tab]}
               </EmptyState>
@@ -247,7 +252,7 @@ export function Events() {
         onClose={() => setCopying(null)}
         onDone={created => {
           setCopying(null);
-          toast.success('Created a draft copy.');
+          toast.success('Copy saved as a draft');
           void refresh();
           go(`/events/${created}`);
         }}
@@ -263,7 +268,7 @@ function DuplicateModal({event, onClose, onDone}: {event: AdminEventSummary | nu
 
 function DuplicateForm({event, onClose, onDone}: {event: AdminEventSummary; onClose: () => void; onDone: (id: string) => void}) {
   const shifted = (iso: string) => toLocalInput(new Date(new Date(iso).getTime() + WEEK_MS).toISOString(), event.timezone);
-  const [title, setTitle] = useState(`Copy of ${event.title}`.slice(0, 120));
+  const [title, setTitle] = useState(`${event.title} (copy)`.slice(0, 120));
   const [start, setStart] = useState(shifted(event.startAt));
   const [end, setEnd] = useState(shifted(event.endAt));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -299,19 +304,19 @@ function DuplicateForm({event, onClose, onDone}: {event: AdminEventSummary; onCl
       onClose={onClose}
       dismissible={!copy.isPending}
       title="Duplicate event"
-      description={`Copies the details, questions, tickets and emails as a draft. Times are in ${event.timezone}.`}
+      description={`Copies settings, questions, tickets, reminders and polls (with votes reset). Guests and orders stay with the original. The copy starts as a draft. Times are in the event's timezone, ${event.timezone.replace(/_/g, ' ')}.`}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={copy.isPending}>
             Cancel
           </Button>
-          <Button type="submit" form="duplicate-event" pending={copy.isPending} pendingLabel="Duplicating…">
-            Duplicate
+          <Button type="submit" form="duplicate-event" pending={copy.isPending} pendingLabel="Copying…">
+            Create copy
           </Button>
         </>
       }>
       <form ref={formRef} id="duplicate-event" className="form-stack" noValidate onSubmit={submit}>
-        <Field id="dup-title" label="Title" error={errors.title}>
+        <Field id="dup-title" label="Title of the copy" error={errors.title}>
           <input id="dup-title" {...fieldAria('dup-title', errors.title)} value={title} onChange={ev => setTitle(ev.target.value)} maxLength={120} autoComplete="off" />
         </Field>
         <div className="form-grid">

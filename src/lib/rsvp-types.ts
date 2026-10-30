@@ -102,7 +102,7 @@ export interface GuestRsvpView {
     status: RsvpStatus;
     plusOnes: number;
     seats: number;
-    ticketCode: string;
+    ticketCode: string | null;
     ticketTypeId: string | null;
     marketingConsent: boolean;
     waitlistPosition: number | null;

@@ -3,15 +3,16 @@
  * One event, rendered on the server from `GET /site-api/events/:slug`. Unknown or unpublished
  * answers a real 404; a database outage a 503. The RSVP form (free tickets; paid tickets hook into `src/server/routes/rsvp.ts`) comes from
  * `GET /site-api/rsvp/events/:slug`; if that route is not mounted yet the page simply has no form.
+ * The look is the original app's guest event page (`src/components/EventView.astro`).
  */
-import NotFound from '../../components/NotFound.astro';
+import ErrorScreen from '../../components/ErrorScreen.astro';
+import EventView from '../../components/EventView.astro';
+import {copy} from '../../config/copy';
 import Base from '../../layouts/Base.astro';
-import {formatEventTime} from '../../lib/format';
+import {routeCopy} from '../../lib/guest-format';
 import {eventJsonLd} from '../../lib/seo';
 import type {EventDetail} from '../../lib/types';
 import {backend, read} from '../../server/backend';
-import ManageLinkForm from '../../components/rsvp/ManageLinkForm.astro';
-import RsvpForm from '../../components/rsvp/RsvpForm.astro';
 import {rsvpRead} from '../../components/rsvp/server';
 import type {RsvpEventView} from '../../lib/rsvp-types';
 import {pageContext} from '../../server/page';
@@ -31,60 +32,24 @@ if (!event) {
   if (!missing) Astro.response.headers.set('Retry-After', '60');
 }
 const rsvp = event ? (await rsvpRead<{event: RsvpEventView}>(Astro.request, `/events/${encodeURIComponent(slug)}`)).data?.event ?? null : null;
-const paragraphs = event?.description.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean) ?? [];
+const failed = routeCopy.loadFailed;
+const gone = copy.errors.eventNotFound;
 ---
 
 {
   event ? (
-    <Base site={site} viewer={viewer} title={event.title} description={event.description.slice(0, 160) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
-      <main id="main" tabindex="-1" class="wrap narrow section" data-event-slug={event.slug}>
-        <p><a href="/events/">← All events</a></p>
-        <p class="eyebrow">{formatEventTime(event.startAt, event.timezone)}</p>
-        <h1>{event.title}</h1>
-        <p class="muted">
-          {event.venueName ?? (event.format === 'online' ? 'Online' : '')}
-          {event.venueAddress && ` · ${event.venueAddress}`}
-        </p>
-        <div class="prose">{paragraphs.map(p => <p>{p}</p>)}</div>
-        <div class="actions">
-          {event.mapUrl && <a class="button ghost" href={event.mapUrl} rel="noopener noreferrer" target="_blank">Map</a>}
-        </div>
-        {
-          rsvp && (
-            <section class="section" aria-labelledby="rsvp-heading">
-              <h2 id="rsvp-heading">RSVP</h2>
-              {rsvp.status === 'cancelled' ? (
-                <p class="notice">This event was cancelled.</p>
-              ) : rsvp.closed ? (
-                <p class="notice">RSVPs for this event have closed.</p>
-              ) : (
-                <>
-                  {rsvp.seatsLeft === 0 && (
-                    <p class="notice">
-                      {rsvp.waitlistEnabled ? 'This event is full. You can join the waitlist.' : 'This event is full.'}
-                    </p>
-                  )}
-                  {rsvp.approvalRequired && <p class="muted">The host approves each request.</p>}
-                  <RsvpForm view={rsvp} mode="create" />
-                </>
-              )}
-              <ManageLinkForm slug={rsvp.slug} />
-            </section>
-          )
-        }
+    <Base site={site} viewer={viewer} guest title={event.title} description={event.description.slice(0, 160) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
+      <main id="main" tabindex="-1" class="g-main" data-event-slug={event.slug}>
+        <EventView event={event} rsvp={rsvp} site={site} />
       </main>
     </Base>
   ) : missing ? (
-    <Base site={site} viewer={viewer} title="Page not found" noindex>
-      <NotFound site={site} />
+    <Base site={site} viewer={viewer} title="Event not found" noindex guest>
+      <ErrorScreen poster={gone.poster} description={gone.body} action={{href: '/events/', label: gone.action}} />
     </Base>
   ) : (
-    <Base site={site} viewer={viewer} title="Not available right now" noindex>
-      <main id="main" tabindex="-1" class="wrap narrow section center">
-        <h1>This event is not available right now</h1>
-        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
-        <p><a class="button" href="/events/">All events</a></p>
-      </main>
+    <Base site={site} viewer={viewer} title="Not available right now" noindex guest>
+      <ErrorScreen poster={failed.poster} description={failed.body} action={{href: `/events/${encodeURIComponent(slug)}/`, label: failed.action, prefetch: false, reload: true}} />
     </Base>
   )
 }

@@ -1,0 +1,115 @@
+---
+/**
+ * An authored typographic event poster (port of CreatorCrowdHub `InvitePoster`). Colour lives in
+ * the artwork, never in UI chrome. Sized with container units (`.poster` in public.css), so it
+ * reads the same as a 120px thumbnail or a 480px cover. The palette is a class (`poster-pal-*`)
+ * and the fitted headline size a class (`poster-fs-N`): the CSP forbids style attributes.
+ */
+import {
+  defaultPalette,
+  headlineStep,
+  isPosterDesign,
+  posterFor,
+  sampleText,
+  type PosterDesign,
+  type PosterPalette,
+  type PosterText,
+} from '../lib/posters';
+
+interface Props {
+  design?: string | null;
+  /** The event's words; omit for the design's sample copy. */
+  text?: PosterText;
+  /** Omit for the design's own palette. */
+  palette?: PosterPalette | null;
+  class?: string;
+  /** Decorative in galleries; pass a label when the poster is the event cover. */
+  label?: string;
+  /** Used to pick a stable design when `design` is empty. */
+  seed?: string;
+}
+
+const {design: rawDesign, text: rawText, palette, class: className, label, seed = ''} = Astro.props;
+const design: PosterDesign = isPosterDesign(rawDesign) ? rawDesign : posterFor(seed);
+const text = rawText ?? sampleText[design];
+const step = headlineStep(design, text.headline);
+const pal = palette ?? defaultPalette[design];
+const line = [text.eyebrow, text.footer].filter(Boolean).join(' · ');
+const dots = Array.from({length: 10}, (_, i) => i < 7);
+const star = 'M50 0 61 32 95 25 70 50 95 75 61 68 50 100 39 68 5 75 30 50 5 25 39 32Z';
+---
+
+<div
+  class:list={['poster', `poster-pal-${pal}`, `poster-${design}`, className]}
+  role={label ? 'img' : undefined}
+  aria-label={label}
+  aria-hidden={label ? undefined : 'true'}>
+  {
+    design === 'breakfast' && (
+      <div class="poster-in poster-between">
+        <p class="poster-small poster-trunc">{text.eyebrow}</p>
+        <p class={`poster-h poster-h-poster poster-fs-${step}`}>{text.headline}</p>
+        <div class="poster-foot">
+          <span class="poster-footer poster-trunc">{text.footer}</span>
+          <span class="poster-badge">
+            <svg viewBox="0 0 100 100" aria-hidden="true">
+              <path fill="currentColor" d={star} />
+            </svg>
+          </span>
+        </div>
+      </div>
+    )
+  }
+  {
+    design === 'launch' && (
+      <div class="poster-in poster-end">
+        <svg viewBox="0 0 100 100" class="poster-star" aria-hidden="true">
+          <path fill="currentColor" d={star} />
+        </svg>
+        <p class={`poster-h poster-h-display poster-fs-${step}`}>{text.headline}</p>
+        {line && <p class="poster-small poster-line">{line}</p>}
+      </div>
+    )
+  }
+  {
+    design === 'ama' && (
+      <div class="poster-in">
+        <p class="poster-small poster-trunc">{text.eyebrow}</p>
+        <p class={`poster-h poster-h-poster poster-push poster-fs-${step}`}>{text.headline}</p>
+        {text.footer && <span class="poster-pill">{text.footer}</span>}
+      </div>
+    )
+  }
+  {
+    design === 'mastermind' && (
+      <div class="poster-in poster-center">
+        {text.eyebrow && <span class="poster-eyebrow-wide">{text.eyebrow}</span>}
+        <span class="poster-rule"></span>
+        <p class={`poster-h poster-h-serif poster-fs-${step}`}>{text.headline}</p>
+        <span class="poster-rule"></span>
+        {text.footer && <span class="poster-footer-clamp">{text.footer}</span>}
+      </div>
+    )
+  }
+  {
+    design === 'workshop' && (
+      <div class="poster-in">
+        {text.eyebrow && <p class="poster-small poster-trunc poster-mb">{text.eyebrow}</p>}
+        <p class={`poster-h poster-h-poster poster-fs-${step}`}>{text.headline}</p>
+        <div class="poster-dots">
+          {dots.map(on => <span class:list={['poster-dot', {'poster-dot-on': on}]}></span>)}
+        </div>
+        {text.footer && <p class="poster-small poster-trunc poster-mt">{text.footer}</p>}
+      </div>
+    )
+  }
+  {
+    design === 'kickoff' && (
+      <div class="poster-in poster-between">
+        {text.eyebrow ? <span class="poster-tag">{text.eyebrow}</span> : <span />}
+        <p class={`poster-h poster-h-rounded poster-fs-${step}`}>{text.headline}</p>
+        <p class="poster-footer-clamp poster-footer-sub">{text.footer}</p>
+      </div>
+    )
+  }
+</div>

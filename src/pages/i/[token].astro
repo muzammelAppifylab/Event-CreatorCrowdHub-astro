@@ -1,14 +1,15 @@
 ---
 /**
  * Invite landing (`/i/<token>`): the link in an invitation email. Works for private events too (the invite
- * token is what makes them visible). The RSVP form is pre-filled with the invitee; the token travels with
- * the RSVP so it counts as invited. Never cached, never indexed. A bad or bounced invite is a real 404.
+ * token is what makes them visible). It shows the event page of the original app with the RSVP form
+ * pre-filled with the invitee; the token travels with the RSVP so it counts as invited. Never cached,
+ * never indexed. A bad or bounced invite is a real 404.
  */
-import NotFound from '../../components/NotFound.astro';
-import RsvpForm from '../../components/rsvp/RsvpForm.astro';
+import ErrorScreen from '../../components/ErrorScreen.astro';
+import EventView from '../../components/EventView.astro';
 import {rsvpRead} from '../../components/rsvp/server';
 import Base from '../../layouts/Base.astro';
-import {formatEventTime} from '../../lib/format';
+import {routeCopy} from '../../lib/guest-format';
 import type {InviteView} from '../../lib/rsvp-types';
 import {pageContext} from '../../server/page';
 
@@ -26,60 +27,29 @@ if (!data) {
   if (!missing) Astro.response.headers.set('Retry-After', '60');
 }
 const event = data?.event;
-const paragraphs = event?.description.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean) ?? [];
+const incomplete = routeCopy.inviteIncomplete;
+const failed = routeCopy.loadFailed;
 ---
 
 {
   data && event ? (
-    <Base site={site} viewer={viewer} title={`You’re invited: ${event.title}`} noindex>
-      <main id="main" tabindex="-1" class="wrap narrow section">
-        <p class="eyebrow">{data.invite.name ? `${data.invite.name}, you’re invited` : 'You’re invited'}</p>
-        <h1>{event.title}</h1>
-        <p class="muted">
-          {formatEventTime(event.startAt, event.timezone)}
-          {event.venueName && ` · ${event.venueName}`}
-          {event.venueAddress && `, ${event.venueAddress}`}
-        </p>
-        <div class="prose">{paragraphs.map(p => <p>{p}</p>)}</div>
-
-        <section class="section" aria-labelledby="rsvp-heading">
-          <h2 id="rsvp-heading">RSVP</h2>
-          {
-            event.status === 'cancelled' ? (
-              <p class="notice">This event was cancelled.</p>
-            ) : event.closed ? (
-              <p class="notice">RSVPs for this event have closed.</p>
-            ) : data.alreadyResponded ? (
-              <p class="notice">
-                You have already answered this invitation. Open the link in your confirmation email to view or change your RSVP.
-              </p>
-            ) : (
-              <>
-                {event.seatsLeft === 0 && (
-                  <p class="notice">{event.waitlistEnabled ? 'This event is full. You can join the waitlist.' : 'This event is full.'}</p>
-                )}
-                <RsvpForm
-                  view={event}
-                  mode="create"
-                  inviteToken={data.invite.token}
-                  values={{name: data.invite.name ?? '', email: data.invite.email}}
-                />
-              </>
-            )
-          }
-        </section>
+    <Base site={site} viewer={viewer} title={`You’re invited: ${event.title}`} noindex secretInUrl guest>
+      <main id="main" tabindex="-1" class="g-main">
+        <EventView
+          event={event}
+          rsvp={event}
+          site={site}
+          invite={{name: data.invite.name, email: data.invite.email, token: data.invite.token, alreadyResponded: data.alreadyResponded}}
+        />
       </main>
     </Base>
   ) : missing ? (
-    <Base site={site} viewer={viewer} title="Page not found" noindex>
-      <NotFound site={site} />
+    <Base site={site} viewer={viewer} title="Invite not found" noindex guest>
+      <ErrorScreen poster={incomplete.poster} description={incomplete.body} action={{href: '/', label: incomplete.action}} />
     </Base>
   ) : (
-    <Base site={site} viewer={viewer} title="Not available right now" noindex>
-      <main id="main" tabindex="-1" class="wrap narrow section center">
-        <h1>This invitation is not available right now</h1>
-        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
-      </main>
+    <Base site={site} viewer={viewer} title="Not available right now" noindex guest>
+      <ErrorScreen poster={failed.poster} description={failed.body} action={{href: `/i/${encodeURIComponent(token)}/`, label: failed.action, prefetch: false, reload: true}} />
     </Base>
   )
 }

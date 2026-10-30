@@ -9,7 +9,7 @@ import { esc, link, ticketCode } from "./layout"
 import type { EmailData, EmailEventInfo, EmailGuestInfo } from "./types"
 
 export function canSeeJoinLink(guest: EmailGuestInfo): boolean {
-  return guest.status === "confirmed"
+  return guest.status === "confirmed" && guest.response === "going"
 }
 
 export function joinUrlFor(data: EmailData): string | null {
@@ -21,7 +21,7 @@ export function mergeContextFor(data: EmailData): MergeContext {
   return {
     guest: { name: data.guest.name },
     event: { title: data.event.title, startLocal: data.event.startLocal, joinUrl: data.event.joinUrl ?? null, venue: venue || null },
-    rsvp: { status: data.guest.status, manageUrl: data.guest.manageUrl },
+    rsvp: { status: canSeeJoinLink(data.guest) ? "confirmed" : data.guest.status === "confirmed" ? "maybe" : data.guest.status, manageUrl: data.guest.manageUrl },
     poll: { joinUrl: data.event.pollUrl ?? null },
   }
 }

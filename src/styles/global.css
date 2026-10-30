@@ -1,132 +1,25 @@
 /*
  * One plain stylesheet, no UI library.
- * Colours are tokens on :root; the dark set is the same tokens redefined under
- * prefers-color-scheme so every surface flips together.
- */
-
-/*
- * THE colour, type and shape tokens of the whole site: the website, the
- * sign-in pages and the dashboard (`app.css`). Change the brand here, once:
- * `--accent` is the brand colour (buttons, links, the active nav item), and
- * every other token is derived from or paired with it.
+ * The colour, type, radius and shadow tokens are the Marquee design system
+ * copied from the original app (tokens.css = primitives, theme.css = roles,
+ * light/dark, brand override, and the template aliases such as --accent, --bg,
+ * --line). See docs/porting/design-tokens.md. Never a hex value outside those
+ * two files, never style="" (the CSP blocks it).
  *
- * Light by default, dark under prefers-color-scheme; `data-theme="light" |
- * "dark"` on <html> (the dashboard's theme menu) forces one or the other.
+ * Dark: prefers-color-scheme, data-theme="dark" on <html> (the dashboard's
+ * theme menu) or .dark. data-theme="light" forces light.
  */
-:root {
-  color-scheme: light;
 
-  --bg: #ffffff;
-  --surface: #f5f3ef;
-  --card: #ffffff;
-  --ink: #0e0f0f;
-  --muted: #545b57;
-  --subtle: #6b726e;
-  --line: #e3e1da;
-  --line-strong: #cfccc3;
-  --hover: #f0eee8;
+/* Self-hosted fonts (OFL, font-display: swap). Display presets load their own file. */
+@import '@fontsource/anton/latin-400.css';
+@import '@fontsource-variable/bricolage-grotesque/opsz.css';
+@import '@fontsource-variable/hanken-grotesk/wght.css';
+@import '@fontsource-variable/jetbrains-mono/wght.css';
+@import '@fontsource/young-serif/latin-400.css';
+@import '@fontsource-variable/nunito/wght.css';
 
-  --accent: #111111;
-  --accent-hover: #333333;
-  --accent-ink: #ffffff;
-  --accent-soft: #e3eeff;
-  --accent-text: #001666;
-
-  --success: #1f7a4d;
-  --success-soft: #dcf0e3;
-  --warning: #8a5a00;
-  --warning-soft: #fbeccc;
-  --danger: #b42318;
-  --danger-hover: #912018;
-  --danger-soft: #fde4e1;
-  --info: #1d5fa8;
-  --info-soft: #dfeafa;
-
-  --shadow-sm: 0 1px 2px rgb(16 24 20 / 0.06), 0 1px 3px rgb(16 24 20 / 0.08);
-  --shadow-md: 0 4px 8px -2px rgb(16 24 20 / 0.08), 0 2px 4px -2px rgb(16 24 20 / 0.06);
-  --shadow-lg: 0 12px 24px -6px rgb(16 24 20 / 0.14), 0 4px 8px -4px rgb(16 24 20 / 0.08);
-  --overlay: rgb(10 14 12 / 0.5);
-
-  --radius-sm: 8px;
-  --radius: 12px;
-  --radius-lg: 16px;
-
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-display: var(--font-sans);
-  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
-}
-
-:root[data-theme='dark'] {
-  color-scheme: dark;
-
-  --bg: #0d1110;
-  --surface: #111614;
-  --card: #171d1b;
-  --ink: #eceeed;
-  --muted: #a3ada8;
-  --subtle: #8b9590;
-  --line: #27302d;
-  --line-strong: #3a4541;
-  --hover: #1e2623;
-
-  --accent: #ffffff;
-  --accent-hover: #e6e6e6;
-  --accent-ink: #000000;
-  --accent-soft: #1b2a55;
-  --accent-text: #96c4ff;
-
-  --success: #5ccf92;
-  --success-soft: #15342a;
-  --warning: #f0b955;
-  --warning-soft: #3a2c12;
-  --danger: #ff8a80;
-  --danger-hover: #ffaaa3;
-  --danger-soft: #3d1a18;
-  --info: #7db4f2;
-  --info-soft: #172b44;
-
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 4px 10px -2px rgb(0 0 0 / 0.45);
-  --shadow-lg: 0 16px 32px -8px rgb(0 0 0 / 0.6);
-  --overlay: rgb(0 0 0 / 0.6);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    color-scheme: dark;
-
-    --bg: #0d1110;
-    --surface: #111614;
-    --card: #171d1b;
-    --ink: #eceeed;
-    --muted: #a3ada8;
-    --subtle: #8b9590;
-    --line: #27302d;
-    --line-strong: #3a4541;
-    --hover: #1e2623;
-
-    --accent: #ffffff;
-    --accent-hover: #e6e6e6;
-    --accent-ink: #000000;
-    --accent-soft: #1b2a55;
-    --accent-text: #96c4ff;
-
-    --success: #5ccf92;
-    --success-soft: #15342a;
-    --warning: #f0b955;
-    --warning-soft: #3a2c12;
-    --danger: #ff8a80;
-    --danger-hover: #ffaaa3;
-    --danger-soft: #3d1a18;
-    --info: #7db4f2;
-    --info-soft: #172b44;
-
-    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-    --shadow-md: 0 4px 10px -2px rgb(0 0 0 / 0.45);
-    --shadow-lg: 0 16px 32px -8px rgb(0 0 0 / 0.6);
-    --overlay: rgb(0 0 0 / 0.6);
-  }
-}
+@import './tokens.css';
+@import './theme.css';
 
 * {
   box-sizing: border-box;
@@ -144,12 +37,34 @@ body {
   padding: 0;
 }
 
+html {
+  background: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+  -webkit-tap-highlight-color: transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+::selection {
+  background: var(--selection);
+  color: var(--selection-foreground);
+}
+
+[id] {
+  scroll-margin-top: calc(var(--nav-height) + 3.5rem);
+}
+
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: var(--font-sans);
-  font-size: 16px;
-  line-height: 1.6;
+  font-family: var(--type-ui);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-feature-settings: 'ss01', 'cv11';
+  overflow-x: clip;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -168,9 +83,41 @@ a {
   color: inherit;
 }
 
-a:focus-visible {
-  outline: 2px solid var(--accent);
+/* One focus language everywhere: a 2px ring offset from the element. */
+:focus-visible {
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+a {
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+input,
+textarea {
+  caret-color: var(--primary);
+}
+
+table,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
+}
+
+button:not(:disabled),
+[role='button']:not(:disabled) {
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* "Skip to content" (layouts/Base.astro): hidden until focused; it moves focus to <main id="main">. */
@@ -214,22 +161,98 @@ main:focus {
 
 h1,
 h2,
-h3 {
-  line-height: 1.15;
+h3,
+h4 {
+  font-family: var(--type-display);
+  font-weight: 650;
+  font-variation-settings: 'opsz' 96;
+  line-height: var(--lh-heading);
   margin: 0 0 0.4em;
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-heading);
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 h1 {
-  font-size: clamp(30px, 5vw, 48px);
+  font-size: clamp(var(--fs-heading), 5vw, var(--fs-display));
+  line-height: var(--lh-display);
+  letter-spacing: var(--tracking-display);
 }
 
 h2 {
-  font-size: clamp(22px, 3vw, 30px);
+  font-size: clamp(var(--fs-title), 3vw, var(--fs-heading));
 }
 
 h3 {
-  font-size: 18px;
+  font-size: var(--fs-title-sm);
+}
+
+h4 {
+  font-size: var(--fs-lead);
+}
+
+/* Marquee type utilities (the source's Tailwind @utility classes). */
+.type-poster {
+  font-family: var(--type-poster);
+  font-size: var(--fs-poster);
+  line-height: var(--lh-poster);
+  letter-spacing: var(--tracking-poster);
+  text-transform: uppercase;
+  font-weight: 400;
+}
+
+.type-display {
+  font-family: var(--type-display);
+  font-weight: 650;
+  font-variation-settings: 'opsz' 96;
+  letter-spacing: var(--tracking-display);
+}
+
+.type-label {
+  font-family: var(--type-ui);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.type-code {
+  font-family: var(--type-code);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+.bg-wash-party {
+  background: var(--wash-party);
+}
+
+.bg-wash-sky {
+  background: var(--wash-sky);
+}
+
+.bg-wash-spearmint {
+  background: var(--wash-spearmint);
+}
+
+.bg-wash-aura {
+  background: var(--wash-aura);
+}
+
+.page-container {
+  width: 100%;
+  max-width: calc(var(--page-max) + var(--gutter) * 2);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.section-y {
+  padding-block: var(--section-gap);
 }
 
 hr {

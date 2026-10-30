@@ -72,6 +72,7 @@ const QUESTION_LABELS: Record<QuestionType, string> = {
   multi_choice: 'Pick several',
   checkbox: 'Yes / no',
 };
+const EDITOR_SECTIONS = [['details', 'Details'], ['location', 'Location'], ['datetime', 'Date & time'], ['rsvp', 'Capacity & RSVP'], ['questions', 'Questions'], ['tickets', 'Tickets'], ['reminders', 'Reminders'], ['polls', 'Polls']] as const;
 const STATUS_TONES = {draft: 'neutral', published: 'success', cancelled: 'danger'} as const;
 
 type QuestionDraft = {id?: string; label: string; type: QuestionType; options: string; required: boolean};
@@ -345,7 +346,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
     <div className="app-page screen-event-editor">
       <form ref={formRef} noValidate onSubmit={submit}>
         <PageHeader
-          title={isNew ? 'New event' : event.title}
+          title={isNew ? 'New event' : 'Edit event'}
           description={
             event ? (
               <>
@@ -357,13 +358,13 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                 )}
               </>
             ) : (
-              'It stays a draft until you publish it.'
+              'Publishing saves your changes first, then makes the page live.'
             )
           }
           actions={
             <>
               <Button variant="secondary" icon="arrow-left" onClick={() => nav('/events')} disabled={busy}>
-                Events
+                Back to events
               </Button>
               {event && !cancelled && (
                 <Button variant="secondary" onClick={() => setStatus.mutate(published ? 'unpublish' : 'publish')} pending={setStatus.isPending} pendingLabel={published ? 'Unpublishing…' : 'Publishing…'} disabled={save.isPending}>
@@ -371,11 +372,25 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                 </Button>
               )}
               <Button type="submit" pending={save.isPending} pendingLabel="Saving…" disabled={setStatus.isPending || cancelled}>
-                {isNew ? 'Create draft' : 'Save changes'}
+                {isNew ? 'Save draft' : 'Save changes'}
               </Button>
             </>
           }
         />
+
+        <nav aria-label="Editor sections" className="editor-nav">
+          {EDITOR_SECTIONS.map(([id, label]) => (
+            <a
+              key={id}
+              href={`#sec-${id}`}
+              onClick={ev => {
+                ev.preventDefault();
+                document.getElementById(`sec-${id}`)?.scrollIntoView({behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+              }}>
+              {label}
+            </a>
+          ))}
+        </nav>
 
         {cancelled && <Notice tone="warning" title="This event is cancelled">A cancelled event can’t be edited or published again. Duplicate it to run it again.</Notice>}
         {failed && <ErrorNote error={error!} />}
@@ -388,174 +403,198 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
         )}
 
         <fieldset className="form-stack" disabled={cancelled}>
-          <Card title="Basics">
-            <div className="form-stack">
-              <Field id="f-title" label="Title" error={form.error('title')}>
-                <input {...form.field('title')} maxLength={120} autoComplete="off" />
-              </Field>
-              <Field id="f-slug" label="Link" optional={isNew} hint={`The public page is /e/${v.slug.trim() || 'your-title'}. ${isNew ? 'Leave it blank to make one from the title.' : ''}`} error={form.error('slug')}>
-                <input {...form.field('slug')} maxLength={60} autoComplete="off" spellCheck={false} />
-              </Field>
-              <Field id="f-description" label="Description" hint="Shown on the event page. Leave a blank line between paragraphs." error={form.error('description')}>
-                <textarea {...form.field('description')} rows={6} />
-              </Field>
-            </div>
-          </Card>
-
-          <Card title="When" description="Times are the wall-clock times in the event’s timezone.">
-            <div className="form-stack">
-              <Field id="f-timezone" label="Timezone" error={form.error('timezone')}>
-                <Select {...form.field('timezone')} options={zones} />
-              </Field>
-              <div className="form-grid">
-                <Field id="f-startAt" label="Starts" error={form.error('startAt')}>
-                  <input {...form.field('startAt')} type="datetime-local" />
-                </Field>
-                <Field id="f-endAt" label="Ends" error={form.error('endAt')}>
-                  <input {...form.field('endAt')} type="datetime-local" />
-                </Field>
-              </div>
-              <Field id="f-rsvpDeadline" label="RSVP deadline" optional hint="Guests can’t RSVP after this. Blank means until the event starts." error={form.error('rsvpDeadline')}>
-                <input {...form.field('rsvpDeadline')} type="datetime-local" />
-              </Field>
-              {event && v.startAt && (
-                <p className="muted">
-                  Saved as {formatInZone(new Date(event.startAt), event.timezone)}.
-                </p>
-              )}
-            </div>
-          </Card>
-
-          <Card title="Where">
-            <div className="form-stack">
-              <RadioCards
-                legend="Format"
-                name="format"
-                columns={3}
-                value={v.format as EventFormat}
-                onChange={format => form.set('format', format)}
-                options={EVENT_FORMATS.map(f => ({value: f, title: FORMAT_INFO[f].title, description: FORMAT_INFO[f].description}))}
-              />
-              {needsVenue && (
-                <>
-                  <Field id="f-venueName" label="Venue name" error={form.error('venueName')}>
-                    <input {...form.field('venueName')} maxLength={200} />
-                  </Field>
-                  <Field id="f-venueAddress" label="Venue address" error={form.error('venueAddress')}>
-                    <textarea {...form.field('venueAddress')} rows={2} maxLength={500} />
-                  </Field>
-                  <Field id="f-mapUrl" label="Map link" optional error={form.error('mapUrl')}>
-                    <input {...form.field('mapUrl')} inputMode="url" placeholder="https://maps.example.com/…" />
-                  </Field>
-                </>
-              )}
-              {needsLink && (
-                <Field id="f-joinUrl" label="Join link" hint="Only confirmed guests ever see it." error={form.error('joinUrl')}>
-                  <input {...form.field('joinUrl')} inputMode="url" placeholder="https://meet.example.com/…" />
-                </Field>
-              )}
-            </div>
-          </Card>
-
-          <Card title="Guests">
-            <div className="form-stack">
-              <RadioCards
-                legend="Who can find it"
-                name="visibility"
-                columns={3}
-                value={v.visibility as EventVisibility}
-                onChange={visibility => form.set('visibility', visibility)}
-                options={EVENT_VISIBILITIES.map(o => ({value: o, title: VISIBILITY_INFO[o].title, description: VISIBILITY_INFO[o].description}))}
-              />
-              <div className="form-grid">
-                <Field id="f-capacity" label="Capacity" optional hint="Blank means no limit." error={form.error('capacity')}>
-                  <input {...form.field('capacity')} type="number" min={1} inputMode="numeric" />
-                </Field>
-                <Field id="f-maxPlusOnes" label="Plus-ones per guest" hint={`0 to ${MAX_PLUS_ONES}.`} error={form.error('maxPlusOnes')}>
-                  <input {...form.field('maxPlusOnes')} type="number" min={0} max={MAX_PLUS_ONES} inputMode="numeric" />
-                </Field>
-              </div>
-              {checkbox('waitlistEnabled', 'Waitlist', 'When the event is full, guests can join a waitlist.')}
-              {checkbox('approvalRequired', 'Approve guests', 'You approve each RSVP before the guest is confirmed.')}
-              {checkbox('allowMaybe', 'Allow “Maybe”', 'Guests can answer going, maybe or not going.')}
-              {checkbox('showGuestList', 'Show the guest list', 'Confirmed guests see who else is coming.')}
-              <Field id="f-thankYouLink" label="Thank-you link" optional hint="Where the thank-you email sends guests (a survey, a recording)." error={form.error('thankYouLink')}>
-                <input {...form.field('thankYouLink')} inputMode="url" placeholder="https://…" />
-              </Field>
-            </div>
-          </Card>
-
-          <Card title="Cover" description="Without an image, guests see an authored poster.">
-            <div className="form-stack">
-              <Field id="f-coverImageUrl" label="Cover image link" optional hint="A 3:4 image works best." error={form.error('coverImageUrl')}>
-                <input {...form.field('coverImageUrl')} inputMode="url" placeholder="https://…" />
-              </Field>
-              <div className="form-grid">
-                <Field id="f-coverPoster" label="Poster" optional error={form.error('coverPoster')}>
-                  <Select {...form.field('coverPoster')} options={[{value: '', label: 'Automatic'}, ...POSTER_DESIGNS.map(p => ({value: p, label: p[0]!.toUpperCase() + p.slice(1)}))]} />
-                </Field>
-                <Field id="f-palette" label="Poster colours" optional error={form.error('palette')}>
-                  <Select {...form.field('palette')} options={[{value: '', label: 'Poster default'}, ...POSTER_PALETTES.map(p => ({value: p, label: p[0]!.toUpperCase() + p.slice(1)}))]} />
-                </Field>
-              </div>
-              <div className="form-grid">
-                <Field id="f-headline" label="Poster headline" optional hint="Blank uses the title." error={form.error('headline')}>
-                  <input {...form.field('headline')} maxLength={80} />
-                </Field>
-                <Field id="f-eyebrow" label="Poster eyebrow" optional error={form.error('eyebrow')}>
-                  <input {...form.field('eyebrow')} maxLength={40} />
-                </Field>
-              </div>
-              <Field id="f-footer" label="Poster footer" optional error={form.error('footer')}>
-                <input {...form.field('footer')} maxLength={60} />
-              </Field>
-            </div>
-          </Card>
-
-          <Card
-            title="RSVP questions"
-            description={`Asked when someone RSVPs. Up to ${MAX_RSVP_QUESTIONS}. Saved with the event.`}
-            actions={
-              <Button variant="secondary" size="sm" icon="plus" disabled={questions.length >= MAX_RSVP_QUESTIONS} onClick={() => setQuestions(current => [...current, {label: '', type: 'short_text', options: '', required: false}])}>
-                Add question
-              </Button>
-            }>
-            {questions.length === 0 ? (
-              <p className="muted">No questions yet. Guests only give their name and email.</p>
-            ) : (
+          <div id="sec-details" className="editor-section">
+            <Card title="Details">
               <div className="form-stack">
-                {questions.map((q, i) => (
-                  <div key={q.id ?? `new-${i}`} className="form-stack">
-                    <div className="form-grid">
-                      <Field id={`q-${i}-label`} label={`Question ${i + 1}`} error={problems[`questions.${i}.label`]}>
-                        <input id={`q-${i}-label`} {...fieldAria(`q-${i}-label`, problems[`questions.${i}.label`])} value={q.label} maxLength={200} onChange={ev => setQuestion(i, {label: ev.target.value})} />
-                      </Field>
-                      <Field id={`q-${i}-type`} label="Answer type" error={problems[`questions.${i}.type`]}>
-                        <Select id={`q-${i}-type`} {...fieldAria(`q-${i}-type`, problems[`questions.${i}.type`])} value={q.type} onChange={ev => setQuestion(i, {type: ev.target.value as QuestionType})} options={QUESTION_TYPES.map(t => ({value: t, label: QUESTION_LABELS[t]}))} />
-                      </Field>
-                    </div>
-                    {(q.type === 'single_choice' || q.type === 'multi_choice') && (
-                      <Field id={`q-${i}-options`} label="Options" hint="One per line, at least two." error={problems[`questions.${i}.options`]}>
-                        <textarea id={`q-${i}-options`} {...fieldAria(`q-${i}-options`, problems[`questions.${i}.options`], true)} rows={4} value={q.options} onChange={ev => setQuestion(i, {options: ev.target.value})} />
-                      </Field>
-                    )}
-                    <div className="toolbar">
-                      <Checkbox label="Required" checked={q.required} onChange={required => setQuestion(i, {required})} />
-                      <IconButton icon="trash" label={`Remove question ${i + 1}`} size="sm" onClick={() => setQuestions(current => current.filter((_, at) => at !== i))} />
-                    </div>
-                  </div>
-                ))}
+                <Field id="f-title" label="Title" error={form.error('title')}>
+                  <input {...form.field('title')} maxLength={120} autoComplete="off" />
+                </Field>
+                <Field id="f-slug" label="Link" optional={isNew} hint={`The public page is /e/${v.slug.trim() || 'your-title'}. ${isNew ? 'Leave it blank to make one from the title.' : ''}`} error={form.error('slug')}>
+                  <input {...form.field('slug')} maxLength={60} autoComplete="off" spellCheck={false} />
+                </Field>
+                <Field id="f-description" label="Description" hint="Shown on the event page. Leave a blank line between paragraphs." error={form.error('description')}>
+                  <textarea {...form.field('description')} rows={6} />
+                </Field>
               </div>
-            )}
-          </Card>
+            </Card>
+          </div>
+
+          <div id="sec-cover" className="editor-section">
+            <Card title="Cover" description="Without an image, guests see an authored poster.">
+              <div className="form-stack">
+                <Field id="f-coverImageUrl" label="Cover image link" optional hint="A 3:4 image works best." error={form.error('coverImageUrl')}>
+                  <input {...form.field('coverImageUrl')} inputMode="url" placeholder="https://…" />
+                </Field>
+                <div className="form-grid">
+                  <Field id="f-coverPoster" label="Poster" optional error={form.error('coverPoster')}>
+                    <Select {...form.field('coverPoster')} options={[{value: '', label: 'Automatic'}, ...POSTER_DESIGNS.map(p => ({value: p, label: p[0]!.toUpperCase() + p.slice(1)}))]} />
+                  </Field>
+                  <Field id="f-palette" label="Poster colours" optional error={form.error('palette')}>
+                    <Select {...form.field('palette')} options={[{value: '', label: 'Poster default'}, ...POSTER_PALETTES.map(p => ({value: p, label: p[0]!.toUpperCase() + p.slice(1)}))]} />
+                  </Field>
+                </div>
+                <div className="form-grid">
+                  <Field id="f-headline" label="Poster headline" optional hint="Blank uses the title." error={form.error('headline')}>
+                    <input {...form.field('headline')} maxLength={80} />
+                  </Field>
+                  <Field id="f-eyebrow" label="Poster eyebrow" optional error={form.error('eyebrow')}>
+                    <input {...form.field('eyebrow')} maxLength={40} />
+                  </Field>
+                </div>
+                <Field id="f-footer" label="Poster footer" optional error={form.error('footer')}>
+                  <input {...form.field('footer')} maxLength={60} />
+                </Field>
+              </div>
+            </Card>
+          </div>
+
+          <div id="sec-location" className="editor-section">
+            <Card title="Location">
+              <div className="form-stack">
+                <RadioCards
+                  legend="Format"
+                  name="format"
+                  columns={3}
+                  value={v.format as EventFormat}
+                  onChange={format => form.set('format', format)}
+                  options={EVENT_FORMATS.map(f => ({value: f, title: FORMAT_INFO[f].title, description: FORMAT_INFO[f].description}))}
+                />
+                {needsVenue && (
+                  <>
+                    <Field id="f-venueName" label="Venue name" error={form.error('venueName')}>
+                      <input {...form.field('venueName')} maxLength={200} />
+                    </Field>
+                    <Field id="f-venueAddress" label="Venue address" error={form.error('venueAddress')}>
+                      <textarea {...form.field('venueAddress')} rows={2} maxLength={500} />
+                    </Field>
+                    <Field id="f-mapUrl" label="Map link" optional error={form.error('mapUrl')}>
+                      <input {...form.field('mapUrl')} inputMode="url" placeholder="https://maps.example.com/…" />
+                    </Field>
+                  </>
+                )}
+                {needsLink && (
+                  <Field id="f-joinUrl" label="Join link" hint="Only confirmed guests ever see it." error={form.error('joinUrl')}>
+                    <input {...form.field('joinUrl')} inputMode="url" placeholder="https://meet.example.com/…" />
+                  </Field>
+                )}
+              </div>
+            </Card>
+          </div>
+
+          <div id="sec-datetime" className="editor-section">
+            <Card title="Date & time" description="Guests see their own local time first, with the event’s timezone underneath.">
+              <div className="form-stack">
+                <Field id="f-timezone" label="Timezone" error={form.error('timezone')}>
+                  <Select {...form.field('timezone')} options={zones} />
+                </Field>
+                <div className="form-grid">
+                  <Field id="f-startAt" label="Starts" error={form.error('startAt')}>
+                    <input {...form.field('startAt')} type="datetime-local" />
+                  </Field>
+                  <Field id="f-endAt" label="Ends" error={form.error('endAt')}>
+                    <input {...form.field('endAt')} type="datetime-local" />
+                  </Field>
+                </div>
+                <Field id="f-rsvpDeadline" label="RSVP deadline" optional hint="Guests can’t RSVP after this. Blank means until the event starts." error={form.error('rsvpDeadline')}>
+                  <input {...form.field('rsvpDeadline')} type="datetime-local" />
+                </Field>
+                {event && v.startAt && (
+                  <p className="muted">
+                    Saved as {formatInZone(new Date(event.startAt), event.timezone)}.
+                  </p>
+                )}
+              </div>
+            </Card>
+          </div>
+
+          <div id="sec-rsvp" className="editor-section">
+            <Card title="Capacity & RSVP">
+              <div className="form-stack">
+                <RadioCards
+                  legend="Who can find it"
+                  name="visibility"
+                  columns={3}
+                  value={v.visibility as EventVisibility}
+                  onChange={visibility => form.set('visibility', visibility)}
+                  options={EVENT_VISIBILITIES.map(o => ({value: o, title: VISIBILITY_INFO[o].title, description: VISIBILITY_INFO[o].description}))}
+                />
+                <div className="form-grid">
+                  <Field id="f-capacity" label="Capacity" optional hint="Blank means no limit." error={form.error('capacity')}>
+                    <input {...form.field('capacity')} type="number" min={1} inputMode="numeric" />
+                  </Field>
+                  <Field id="f-maxPlusOnes" label="Plus-ones per guest" hint={`0 to ${MAX_PLUS_ONES}.`} error={form.error('maxPlusOnes')}>
+                    <input {...form.field('maxPlusOnes')} type="number" min={0} max={MAX_PLUS_ONES} inputMode="numeric" />
+                  </Field>
+                </div>
+                {checkbox('waitlistEnabled', 'Waitlist', 'When the event is full, guests can join a waitlist.')}
+                {checkbox('approvalRequired', 'Approve guests', 'You approve each RSVP before the guest is confirmed.')}
+                {checkbox('allowMaybe', 'Allow “Maybe”', 'Guests can answer going, maybe or not going.')}
+                {checkbox('showGuestList', 'Show the guest list', 'Confirmed guests see who else is coming.')}
+                <Field id="f-thankYouLink" label="Thank-you link" optional hint="Where the thank-you email sends guests (a survey, a recording)." error={form.error('thankYouLink')}>
+                  <input {...form.field('thankYouLink')} inputMode="url" placeholder="https://…" />
+                </Field>
+              </div>
+            </Card>
+          </div>
+
+          <div id="sec-questions" className="editor-section">
+            <Card
+              title="Questions"
+              description={`Ask up to ${MAX_RSVP_QUESTIONS} questions on the RSVP form. Answers appear in the guest list and CSV.`}
+              actions={
+                <Button variant="secondary" size="sm" icon="plus" disabled={questions.length >= MAX_RSVP_QUESTIONS} onClick={() => setQuestions(current => [...current, {label: '', type: 'short_text', options: '', required: false}])}>
+                  Add question
+                </Button>
+              }>
+              {questions.length === 0 ? (
+                <p className="muted">No questions yet. Name and email are always collected.</p>
+              ) : (
+                <div className="form-stack">
+                  {questions.map((q, i) => (
+                    <div key={q.id ?? `new-${i}`} className="form-stack">
+                      <div className="form-grid">
+                        <Field id={`q-${i}-label`} label={`Question ${i + 1}`} error={problems[`questions.${i}.label`]}>
+                          <input id={`q-${i}-label`} {...fieldAria(`q-${i}-label`, problems[`questions.${i}.label`])} value={q.label} maxLength={200} onChange={ev => setQuestion(i, {label: ev.target.value})} />
+                        </Field>
+                        <Field id={`q-${i}-type`} label="Answer type" error={problems[`questions.${i}.type`]}>
+                          <Select id={`q-${i}-type`} {...fieldAria(`q-${i}-type`, problems[`questions.${i}.type`])} value={q.type} onChange={ev => setQuestion(i, {type: ev.target.value as QuestionType})} options={QUESTION_TYPES.map(t => ({value: t, label: QUESTION_LABELS[t]}))} />
+                        </Field>
+                      </div>
+                      {(q.type === 'single_choice' || q.type === 'multi_choice') && (
+                        <Field id={`q-${i}-options`} label="Options" hint="One per line, at least two." error={problems[`questions.${i}.options`]}>
+                          <textarea id={`q-${i}-options`} {...fieldAria(`q-${i}-options`, problems[`questions.${i}.options`], true)} rows={4} value={q.options} onChange={ev => setQuestion(i, {options: ev.target.value})} />
+                        </Field>
+                      )}
+                      <div className="toolbar">
+                        <Checkbox label="Required" checked={q.required} onChange={required => setQuestion(i, {required})} />
+                        <IconButton icon="trash" label={`Remove question ${i + 1}`} size="sm" onClick={() => setQuestions(current => current.filter((_, at) => at !== i))} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
         </fieldset>
       </form>
 
-      {event ? <Tickets event={event} /> : (
-        <Card title="Tickets">
-          <p className="muted">Save the draft first, then add ticket types here.</p>
+      <div id="sec-tickets" className="editor-section">
+        {event ? <Tickets event={event} /> : (
+          <Card title="Tickets">
+            <p className="muted">Save the draft first, then add ticket types here.</p>
+          </Card>
+        )}
+      </div>
+      <div id="sec-reminders" className="editor-section">
+        <Card title="Reminders">
+          <p className="muted">{event ? 'Edit this event’s automatic emails in the Messages tab of the event hub.' : 'Save the event first, then edit its automatic emails here. New events start with the defaults from Settings.'}</p>
         </Card>
-      )}
+      </div>
+      <div id="sec-polls" className="editor-section">
+        <Card title="Polls">
+          <p className="muted">{event ? 'Prepare questions before the event, then open them one at a time from the event hub while you present.' : 'Save the event first, then prepare its polls here. You open them live from the event hub.'}</p>
+        </Card>
+      </div>
     </div>
   );
 }

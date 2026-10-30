@@ -36,7 +36,26 @@ export function consentUrl(origin: string, rsvpId: string, secret: string, now?:
   return `${origin}/privacy/consent/${encodeURIComponent(consentToken(rsvpId, secret, now))}`;
 }
 
-/** Unsubscribe links carry the manage token: `/privacy/unsubscribe/<manage token>`. */
+/**
+ * Headers for an IN-PROCESS `app.request()` from an SSR page: the real client IP (so the rate
+ * limiter keys per visitor, not one shared 'local' bucket) plus any other named headers.
+ * `cf-connecting-ip` is set by Cloudflare, never by the visitor.
+ */
+export function inProcessHeaders(request: Request, extra: string[] = []): Headers {
+  const headers = new Headers();
+  for (const name of ['cf-connecting-ip', 'user-agent', ...extra]) {
+    const value = request.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return headers;
+}
+
+/**
+ * Unsubscribe links carry the manage token: `/privacy/unsubscribe/<manage token>`.
+ * Marketing and broadcast emails MUST carry one, built here. The raw manage token is only known
+ * when minted or rotated (the DB keeps its hash), so the sender holding it adds the link; the
+ * templates (`src/emails/layout.ts`) render it through `manageUrl`.
+ */
 export const unsubscribeUrl = (origin: string, manageToken: string) =>
   `${origin}/privacy/unsubscribe/${encodeURIComponent(manageToken)}`;
 export const guestPrivacyUrl = (origin: string, manageToken: string) =>

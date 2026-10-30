@@ -1,0 +1,309 @@
+/*
+ * Semantic theme: the source's theme.css (CreatorCrowdHub/src/styles/theme.css),
+ * same names and values, with these changes for the template:
+ *   1. Dark applies under `.dark` (source), `:root[data-theme='dark']` (the
+ *      template's theme menu) AND prefers-color-scheme unless the visitor
+ *      forced light (`:root[data-theme='light']`).
+ *   2. Names the template already used keep the TEMPLATE meaning:
+ *        --ink, --card   same meaning (text / card) and same values
+ *        --accent        = the brand/primary colour (source: --primary)
+ *        --muted         = muted TEXT (source: --muted-foreground)
+ *      The source's own meanings are --accent-bg / --accent-foreground and
+ *      --surface-muted.
+ *   3. The template aliases (--bg, --surface, --line …) are at the bottom.
+ * See docs/porting/design-tokens.md.
+ */
+
+:root {
+  color-scheme: light;
+
+  --ink: var(--ink-1000);
+  --on-ink: var(--paper);
+
+  --background: var(--paper);
+  --foreground: var(--ink-1000);
+  --surface-sunken: var(--ink-50);
+  --surface-muted: var(--ink-100);
+  --card: var(--paper);
+  --card-foreground: var(--ink-1000);
+  --popover: var(--paper);
+  --popover-foreground: var(--ink-1000);
+
+  --primary: var(--brand, var(--ink));
+  --primary-foreground: var(--brand-foreground, var(--on-ink));
+  --primary-text: var(--brand-text, var(--ink));
+  --secondary: var(--ink-100);
+  --secondary-foreground: var(--ink-1000);
+  --accent-bg: var(--ink-50);
+  --accent-foreground: var(--ink-1000);
+  --muted-foreground: var(--ink-600);
+  --subtle-foreground: var(--ink-500);
+  --destructive: var(--ember-600);
+  --destructive-foreground: var(--paper);
+
+  --border: var(--ink-200);
+  --border-strong: var(--ink-1000);
+  --input: var(--ink-200);
+  --control-off: var(--ink-500);
+  --ring: var(--primary-text);
+
+  --rsvp-going: var(--leaf-500);
+  --rsvp-going-foreground: var(--ink-1000);
+  --rsvp-going-soft: var(--leaf-100);
+  --rsvp-going-soft-foreground: var(--leaf-800);
+  --rsvp-maybe: var(--amber-500);
+  --rsvp-maybe-foreground: var(--ink-1000);
+  --rsvp-maybe-soft: var(--amber-100);
+  --rsvp-maybe-soft-foreground: var(--amber-800);
+  --rsvp-no: var(--ember-600);
+  --rsvp-no-foreground: var(--paper);
+  --rsvp-no-soft: var(--ember-100);
+  --rsvp-no-soft-foreground: var(--ember-800);
+  --rsvp-waitlist: var(--periwinkle-400);
+  --rsvp-waitlist-foreground: var(--midnight-900);
+  --rsvp-waitlist-soft: var(--periwinkle-100);
+  --rsvp-waitlist-soft-foreground: var(--midnight-900);
+
+  --signal: var(--mint-400);
+  --signal-foreground: var(--ink-1000);
+
+  --wash-party: linear-gradient(180deg, var(--wash-pink-from) 0%, var(--wash-pink-to) 100%);
+  --wash-sky: linear-gradient(180deg, color-mix(in oklab, var(--periwinkle-400) 14%, transparent) 0%, var(--paper) 100%);
+  --wash-spearmint: linear-gradient(130deg, var(--wash-spearmint-from) 0%, var(--wash-spearmint-to) 100%);
+  --wash-aura:
+    radial-gradient(60% 70% at 18% 30%, color-mix(in oklab, var(--wash-lilac) 90%, transparent) 0%, transparent 70%),
+    radial-gradient(50% 60% at 85% 20%, color-mix(in oklab, var(--wash-pink-from) 55%, transparent) 0%, transparent 70%),
+    radial-gradient(55% 55% at 70% 90%, color-mix(in oklab, var(--wash-periwinkle) 80%, transparent) 0%, transparent 70%),
+    var(--paper);
+
+  --chart-1: var(--primary);
+  --chart-2: var(--ink-600);
+  --chart-3: var(--ink-400);
+  --chart-4: var(--ink-300);
+  --chart-5: var(--ink-200);
+
+  --sidebar: var(--ink-50);
+  --sidebar-foreground: var(--ink-1000);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: var(--ink-100);
+  --sidebar-accent-foreground: var(--ink-1000);
+  --sidebar-border: var(--ink-200);
+  --sidebar-ring: var(--ring);
+
+  --selection: var(--ink-1000);
+  --selection-foreground: var(--paper);
+  --scrollbar-thumb: var(--ink-300);
+
+  --type-poster: var(--font-family-poster);
+  --type-display: var(--font-family-display);
+  --type-ui: var(--font-family-ui);
+  --type-code: var(--font-family-mono);
+}
+
+/* DARK. The same block appears twice: for `.dark` / data-theme, and for the
+   device preference. Keep them identical. */
+.dark,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --ink: var(--paper);
+  --on-ink: var(--ink-1000);
+
+  --primary: var(--brand, var(--ink));
+  --primary-foreground: var(--brand-foreground, var(--on-ink));
+  --primary-text: var(--ink);
+  --ring: var(--primary-text);
+  --chart-1: var(--primary);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-ring: var(--ring);
+
+  --background: var(--ink-1000);
+  --foreground: var(--paper);
+  --surface-sunken: var(--ink-900);
+  --surface-muted: var(--ink-850);
+  --card: var(--ink-900);
+  --card-foreground: var(--paper);
+  --popover: var(--ink-850);
+  --popover-foreground: var(--paper);
+
+  --secondary: var(--ink-800);
+  --secondary-foreground: var(--paper);
+  --accent-bg: var(--ink-850);
+  --accent-foreground: var(--paper);
+  --muted-foreground: var(--ink-400);
+  --subtle-foreground: #8c8c8c;
+  --destructive: var(--ember-500);
+
+  --border: color-mix(in oklab, var(--paper) 14%, transparent);
+  --border-strong: var(--paper);
+  --input: color-mix(in oklab, var(--paper) 18%, transparent);
+  --control-off: var(--ink-600);
+
+  --rsvp-going-soft: color-mix(in oklab, var(--leaf-500) 18%, var(--ink-1000));
+  --rsvp-going-soft-foreground: #8ef08e;
+  --rsvp-maybe-soft: color-mix(in oklab, var(--amber-500) 18%, var(--ink-1000));
+  --rsvp-maybe-soft-foreground: #ffd27a;
+  --rsvp-no-soft: color-mix(in oklab, var(--ember-500) 20%, var(--ink-1000));
+  --rsvp-no-soft-foreground: #ff9d90;
+  --rsvp-waitlist-soft: color-mix(in oklab, var(--periwinkle-400) 20%, var(--ink-1000));
+  --rsvp-waitlist-soft-foreground: #c4dcff;
+
+  --wash-sky: linear-gradient(180deg, color-mix(in oklab, var(--periwinkle-400) 12%, var(--ink-1000)) 0%, var(--ink-1000) 100%);
+  --wash-aura:
+    radial-gradient(60% 70% at 18% 30%, color-mix(in oklab, #6d4bd8 40%, transparent) 0%, transparent 70%),
+    radial-gradient(50% 60% at 85% 20%, color-mix(in oklab, #c04bb0 30%, transparent) 0%, transparent 70%),
+    var(--ink-1000);
+
+  --chart-2: var(--ink-400);
+  --chart-3: var(--ink-600);
+  --chart-4: var(--ink-700);
+  --chart-5: var(--ink-800);
+
+  --sidebar: var(--ink-900);
+  --sidebar-foreground: var(--paper);
+  --sidebar-accent: var(--ink-850);
+  --sidebar-accent-foreground: var(--paper);
+  --sidebar-border: var(--border);
+
+  --selection: var(--paper);
+  --selection-foreground: var(--ink-1000);
+  --scrollbar-thumb: var(--ink-700);
+
+  --shadow-color: 0 0% 0%;
+  --elev-1: 0 1px 2px hsl(0 0% 0% / 0.5), 0 0 0 1px color-mix(in oklab, var(--paper) 8%, transparent);
+  --elev-2: 0 4px 16px -2px hsl(0 0% 0% / 0.6), 0 0 0 1px color-mix(in oklab, var(--paper) 10%, transparent);
+  --elev-3: 0 20px 60px -4px hsl(0 0% 0% / 0.7), 0 0 0 1px color-mix(in oklab, var(--paper) 10%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']):not(.dark) {
+    color-scheme: dark;
+
+    --ink: var(--paper);
+    --on-ink: var(--ink-1000);
+
+    --primary: var(--brand, var(--ink));
+    --primary-foreground: var(--brand-foreground, var(--on-ink));
+    --primary-text: var(--ink);
+    --ring: var(--primary-text);
+    --chart-1: var(--primary);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-ring: var(--ring);
+
+    --background: var(--ink-1000);
+    --foreground: var(--paper);
+    --surface-sunken: var(--ink-900);
+    --surface-muted: var(--ink-850);
+    --card: var(--ink-900);
+    --card-foreground: var(--paper);
+    --popover: var(--ink-850);
+    --popover-foreground: var(--paper);
+
+    --secondary: var(--ink-800);
+    --secondary-foreground: var(--paper);
+    --accent-bg: var(--ink-850);
+    --accent-foreground: var(--paper);
+    --muted-foreground: var(--ink-400);
+    --subtle-foreground: #8c8c8c;
+    --destructive: var(--ember-500);
+
+    --border: color-mix(in oklab, var(--paper) 14%, transparent);
+    --border-strong: var(--paper);
+    --input: color-mix(in oklab, var(--paper) 18%, transparent);
+    --control-off: var(--ink-600);
+
+    --rsvp-going-soft: color-mix(in oklab, var(--leaf-500) 18%, var(--ink-1000));
+    --rsvp-going-soft-foreground: #8ef08e;
+    --rsvp-maybe-soft: color-mix(in oklab, var(--amber-500) 18%, var(--ink-1000));
+    --rsvp-maybe-soft-foreground: #ffd27a;
+    --rsvp-no-soft: color-mix(in oklab, var(--ember-500) 20%, var(--ink-1000));
+    --rsvp-no-soft-foreground: #ff9d90;
+    --rsvp-waitlist-soft: color-mix(in oklab, var(--periwinkle-400) 20%, var(--ink-1000));
+    --rsvp-waitlist-soft-foreground: #c4dcff;
+
+    --wash-sky: linear-gradient(180deg, color-mix(in oklab, var(--periwinkle-400) 12%, var(--ink-1000)) 0%, var(--ink-1000) 100%);
+    --wash-aura:
+      radial-gradient(60% 70% at 18% 30%, color-mix(in oklab, #6d4bd8 40%, transparent) 0%, transparent 70%),
+      radial-gradient(50% 60% at 85% 20%, color-mix(in oklab, #c04bb0 30%, transparent) 0%, transparent 70%),
+      var(--ink-1000);
+
+    --chart-2: var(--ink-400);
+    --chart-3: var(--ink-600);
+    --chart-4: var(--ink-700);
+    --chart-5: var(--ink-800);
+
+    --sidebar: var(--ink-900);
+    --sidebar-foreground: var(--paper);
+    --sidebar-accent: var(--ink-850);
+    --sidebar-accent-foreground: var(--paper);
+    --sidebar-border: var(--border);
+
+    --selection: var(--paper);
+    --selection-foreground: var(--ink-1000);
+    --scrollbar-thumb: var(--ink-700);
+
+    --shadow-color: 0 0% 0%;
+    --elev-1: 0 1px 2px hsl(0 0% 0% / 0.5), 0 0 0 1px color-mix(in oklab, var(--paper) 8%, transparent);
+    --elev-2: 0 4px 16px -2px hsl(0 0% 0% / 0.6), 0 0 0 1px color-mix(in oklab, var(--paper) 10%, transparent);
+    --elev-3: 0 20px 60px -4px hsl(0 0% 0% / 0.7), 0 0 0 1px color-mix(in oklab, var(--paper) 10%, transparent);
+  }
+}
+
+/* Workspace font presets: `data-font-preset` on <html> (see applyFontPreset in
+   src/lib/event-brand.ts). Only the display voice changes; UI text stays Hanken. */
+[data-font-preset='serif'] {
+  --type-display: var(--font-family-serif);
+}
+[data-font-preset='rounded'] {
+  --type-display: var(--font-family-rounded);
+}
+
+/*
+ * TEMPLATE ALIASES. The template and its UI kit use these names; they resolve
+ * to the tokens above, so everything flips with light/dark and the brand
+ * colour. Declared on `:root, .dark` so a nested .dark band re-resolves them.
+ */
+:root,
+.dark {
+  --bg: var(--background);
+  --surface: var(--surface-sunken);
+  --muted: var(--muted-foreground);
+  --subtle: var(--subtle-foreground);
+  --line: var(--border);
+  --line-strong: color-mix(in oklab, var(--foreground) 28%, var(--background));
+  --hover: var(--accent-bg);
+
+  --accent: var(--primary);
+  --accent-hover: color-mix(in oklab, var(--primary) 85%, var(--background));
+  --accent-ink: var(--primary-foreground);
+  --accent-soft: color-mix(in oklab, var(--primary) 10%, var(--background));
+  --accent-text: var(--primary-text);
+
+  --success: var(--rsvp-going-soft-foreground);
+  --success-soft: var(--rsvp-going-soft);
+  --warning: var(--rsvp-maybe-soft-foreground);
+  --warning-soft: var(--rsvp-maybe-soft);
+  --danger: var(--destructive);
+  --danger-hover: color-mix(in oklab, var(--destructive) 85%, var(--foreground));
+  --danger-soft: var(--rsvp-no-soft);
+  --info: var(--rsvp-waitlist-soft-foreground);
+  --info-soft: var(--rsvp-waitlist-soft);
+
+  --shadow-sm: var(--elev-1);
+  --shadow-md: var(--elev-2);
+  --shadow-lg: var(--elev-3);
+  --overlay: color-mix(in oklab, var(--ink-1000) 50%, transparent);
+
+  --radius-sm: var(--r-sm);
+  --radius: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-pill: var(--r-pill);
+
+  --font-sans: var(--type-ui);
+  --font-display: var(--type-display);
+  --font-mono: var(--type-code);
+}

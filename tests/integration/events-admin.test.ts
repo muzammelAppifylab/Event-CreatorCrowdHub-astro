@@ -57,7 +57,7 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
   it('checkin_staff can only check in by ticket code, and only confirmed guests', async () => {
     const ev = await createEvent(admin);
     const made = await new Browser(eventsApp, '203.0.113.20').post(`/site-api/rsvp/events/${ev.slug}`, rsvpBody('guest1@example.test'));
-    expect(made.status).toBe(201);
+    expect(made.status).toBe(202);
     const row = await db.rsvp.findFirstOrThrow({where: {email: 'guest1@example.test'}});
     const code = row.ticketCode;
     const door = '/site-api/checkin';
@@ -84,8 +84,17 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
     const ev = await createEvent(admin, {capacity: 1});
     await new Browser(eventsApp, '203.0.113.21').post(`/site-api/rsvp/events/${ev.slug}`, rsvpBody('a@example.test'));
     const w = await new Browser(eventsApp, '203.0.113.22').post(`/site-api/rsvp/events/${ev.slug}`, rsvpBody('b@example.test'));
-    expect(w.json.status).toBe('waitlisted');
+    expect(w.status).toBe(202);
+    expect((await db.rsvp.findFirstOrThrow({where: {email: 'b@example.test'}})).status).toBe('waitlisted');
     const row = await db.rsvp.findFirstOrThrow({where: {email: 'b@example.test'}});
+    expect((await staff.post(`/site-api/checkin/codes/${row.ticketCode}`, {checkedIn: true})).status).toBe(409);
+  });
+
+  it('refuses a check-in for a maybe guest', async () => {
+    const ev = await createEvent(admin, {capacity: 5});
+    await new Browser(eventsApp, '203.0.113.31').post(`/site-api/rsvp/events/${ev.slug}`, {...rsvpBody('m@example.test'), response: 'maybe'});
+    const row = await db.rsvp.findFirstOrThrow({where: {email: 'm@example.test'}});
+    expect(row.response).toBe('maybe');
     expect((await staff.post(`/site-api/checkin/codes/${row.ticketCode}`, {checkedIn: true})).status).toBe(409);
   });
 

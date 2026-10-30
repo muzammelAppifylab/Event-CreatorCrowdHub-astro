@@ -160,12 +160,12 @@ export function isValidTimeZone(tz: string): boolean {
   }
 }
 
-/** An http(s) URL only: `javascript:` and `data:` links never get stored. */
+/** An https URL only: `http:`, `javascript:` and `data:` links never get stored. */
 export function isHttpUrl(value: string): boolean {
-  if (!/^https?:\/\//i.test(value)) return false;
+  if (!/^https:\/\//i.test(value)) return false;
   try {
     const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    return url.protocol === 'https:';
   } catch {
     return false;
   }

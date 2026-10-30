@@ -128,3 +128,19 @@ describe('deliverWebhookJob', () => {
     await expect(deliverWebhookJob(job(), undefined, {db: null})).rejects.not.toBeInstanceOf(DontRetry);
   });
 });
+
+describe('delivery hardening', () => {
+  it('treats a 3xx as a failed, non-retryable delivery (redirect not followed)', async () => {
+    const r = await attemptDelivery(ENDPOINT, 'e', 'd', '{}', {fetch: async () => new Response(null, {status: 302, headers: {location: 'https://169.254.169.254/'}})});
+    expect(r.ok).toBe(false);
+    expect(r.retryable).toBe(false);
+  });
+  it('refuses a stored URL that no longer validates, without fetching', async () => {
+    let called = false;
+    for (const url of ['http://example.com/x', 'https://example.com:8443/x', 'https://u:p@example.com/', 'https://svc.internal/x']) {
+      const r = await attemptDelivery({url, secret: 'x'}, 'e', 'd', '{}', {fetch: async () => ((called = true), new Response(null, {status: 200}))});
+      expect(r.ok).toBe(false);
+    }
+    expect(called).toBe(false);
+  });
+});

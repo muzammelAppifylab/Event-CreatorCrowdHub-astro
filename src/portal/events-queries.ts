@@ -1,13 +1,15 @@
-import {infiniteQueryOptions, queryOptions} from '@tanstack/react-query';
+import {infiniteQueryOptions, queryOptions, useMutation, useQueryClient} from '@tanstack/react-query';
 import {useNavigate} from '@tanstack/react-router';
 
 import type {
   AdminEventDetail,
   AdminEventsPage,
+  CancelPreview,
   AdminTicketType,
   EventListTab,
   EventSettingsDto,
 } from '../lib/event-schemas';
+import {siteFetch} from '../platform/browser';
 import {api, read} from './api';
 
 /**
@@ -66,4 +68,44 @@ export const fieldAria = (id: string, error?: string, hint?: boolean) => ({
 /** After errors render, move focus to the first invalid control of a form. */
 export function focusFirstInvalid(root: ParentNode | null | undefined) {
   window.setTimeout(() => root?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(), 0);
+}
+
+// ------------------------------------------------------------ lifecycle --
+
+/** Who a cancellation affects (guests to email, orders to refund); fetched when the dialog opens. */
+export const cancelPreviewQuery = (id: string) =>
+  queryOptions({
+    queryKey: ['events', 'cancel-preview', id],
+    queryFn: () => read<CancelPreview>(siteFetch(`/site-api/admin-events/${encodeURIComponent(id)}/cancel-preview`)),
+    gcTime: 0,
+    retry: false,
+  });
+
+const lifecycle = (id: string, action: 'publish' | 'unpublish' | 'cancel') =>
+  read<{event: AdminEventDetail}>(siteFetch(`/site-api/admin-events/${encodeURIComponent(id)}/${action}`, {method: 'POST'}));
+
+/** publish / unpublish / cancel / duplicate / delete: each invalidates every `['events', …]` read. */
+export function useEventLifecycle() {
+  const queryClient = useQueryClient();
+  const onSuccess = () => queryClient.invalidateQueries({queryKey: ['events']});
+  return {
+    publish: useMutation({mutationFn: (id: string) => lifecycle(id, 'publish'), onSuccess}),
+    unpublish: useMutation({mutationFn: (id: string) => lifecycle(id, 'unpublish'), onSuccess}),
+    cancel: useMutation({mutationFn: (id: string) => lifecycle(id, 'cancel'), onSuccess}),
+    duplicate: useMutation({
+      mutationFn: ({id, ...body}: {id: string; startAt: string; endAt: string; title: string}) =>
+        read<{event: AdminEventDetail}>(
+          siteFetch(`/site-api/admin-events/${encodeURIComponent(id)}/duplicate`, {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify(body),
+          })
+        ),
+      onSuccess,
+    }),
+    remove: useMutation({
+      mutationFn: (id: string) => read<unknown>(siteFetch(`/site-api/admin-events/${encodeURIComponent(id)}`, {method: 'DELETE'})),
+      onSuccess,
+    }),
+  };
 }

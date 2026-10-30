@@ -1,5 +1,5 @@
 import {Link} from '@tanstack/react-router';
-import type {ReactNode} from 'react';
+import {type ReactNode, useId} from 'react';
 
 import {Icon, type IconName} from './icon';
 
@@ -152,9 +152,11 @@ export function Stat({
 // ---------------------------------------------------------------- badges --
 
 export type Tone = 'neutral' | 'brand' | 'success' | 'warning' | 'danger' | 'info';
+/** Badge-only looks from the design system: a solid ink pill, an outlined pill, an uppercase tracked label. */
+export type BadgeTone = Tone | 'solid' | 'outline' | 'label';
 
 /** A short label: a role, a tag, a count. Never a button. */
-export function Badge({tone = 'neutral', icon, children}: {tone?: Tone; icon?: IconName; children: ReactNode}) {
+export function Badge({tone = 'neutral', icon, children}: {tone?: BadgeTone; icon?: IconName; children: ReactNode}) {
   return (
     <span className={`badge badge-${tone}`}>
       {icon && <Icon name={icon} size={14} />}
@@ -379,15 +381,34 @@ export function ProgressBar({value, max = 100, label}: {value: number; max?: num
   return (
     <svg
       className="progress"
-      viewBox="0 0 100 6"
+      viewBox="0 0 100 8"
       preserveAspectRatio="none"
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}
       aria-valuemax={max}
       aria-valuenow={value}>
-      <rect className="progress-track" width="100" height="6" rx="3" />
-      <rect className="progress-fill" width={pct} height="6" rx="3" />
+      <rect className="progress-track" width="100" height="8" rx="4" />
+      <rect className="progress-fill" width={pct} height="8" rx="4" />
     </svg>
+  );
+}
+
+// --------------------------------------------------------------- tooltip --
+
+/**
+ * An ink bubble over its child on hover and keyboard focus (the design
+ * system's Tooltip). The text is wired with `aria-describedby`.
+ * Do not put essential information only in a tooltip.
+ */
+export function Tooltip({label, children}: {label: ReactNode; children: ReactNode}) {
+  const id = useId();
+  return (
+    <span className="tooltip" aria-describedby={id}>
+      {children}
+      <span className="tooltip-content" role="tooltip" id={id}>
+        {label}
+      </span>
+    </span>
   );
 }

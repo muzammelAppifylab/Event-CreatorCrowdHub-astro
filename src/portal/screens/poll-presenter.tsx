@@ -4,7 +4,7 @@ import {useCallback, useEffect} from 'react';
 
 import {nextPollToOpen} from '../../domain/polls';
 import {type AdminPoll, closePoll, openPoll, presenterPollsQuery} from '../polls-queries';
-import {BarChart, Button, Card, EmptyState, ErrorNote, LoadingBlock, PageHeader, StatusBadge, Stat, useToast} from '../ui';
+import {BarChart, Button, EmptyState, ErrorNote, LoadingBlock, StatusBadge, Stat, useToast} from '../ui';
 
 /** The poll on screen: the open one, else the last opened (its final results), else the first. */
 function displayed(polls: AdminPoll[]): AdminPoll | null {
@@ -66,6 +66,9 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
     const current = polls.find(p => p.status === 'open');
     if (current && !busy) close.mutate(current.id);
   }, [polls, busy, close]);
+  const openShown = useCallback(() => {
+    if (shown && shown.status !== 'open' && !busy) open.mutate(shown.id);
+  }, [shown, busy, open]);
   const fullscreen = useCallback(() => {
     if (document.fullscreenElement) void document.exitFullscreen();
     else void document.documentElement.requestFullscreen?.();
@@ -75,6 +78,7 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
     const onKey = (event: KeyboardEvent) => {
       if (isTyping(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === 'ArrowRight') openNext();
+      else if (event.key.toLowerCase() === 'o') openShown();
       else if (event.key.toLowerCase() === 'c') closeOpen();
       else if (event.key.toLowerCase() === 'f') fullscreen();
       else return;
@@ -82,7 +86,7 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openNext, closeOpen, fullscreen]);
+  }, [openNext, openShown, closeOpen, fullscreen]);
 
   if (list.isPending) return <div className="app-page"><LoadingBlock rows={4} /></div>;
   if (list.error) return <div className="app-page"><ErrorNote error={list.error} /></div>;
@@ -92,42 +96,56 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
 
   return (
     <div className="app-page screen-poll-present">
-      <PageHeader
-        title={event.title}
-        description={
-          <>
-            Join at <strong className="poll-present-url">{voteUrl}</strong>
-          </>
-        }
-        actions={
-          <>
-            <StatusBadge tone={list.isError ? 'warning' : 'success'}>
-              {list.isError ? 'Paused: connection lost, retrying' : 'Live: updates every 2 seconds'}
+      <header className="poll-present-top">
+        <div className="toolbar-group">
+          {shown && (
+            <StatusBadge tone={shown.status === 'open' ? 'success' : 'neutral'}>
+              {shown.status === 'open' ? 'Open' : shown.status === 'closed' ? 'Closed' : 'Draft'}
             </StatusBadge>
-            <Button variant="secondary" onClick={fullscreen}>Full screen (F)</Button>
-            <Button variant="secondary" onClick={closeOpen} disabled={busy || !polls.some(p => p.status === 'open')}>Close poll (C)</Button>
-            <Button onClick={openNext} pending={open.isPending} disabled={busy}>Next poll (→)</Button>
-          </>
-        }
-      />
-      {(open.error ?? close.error) && <ErrorNote error={(open.error ?? close.error)!} />}
-      {!shown ? (
-        <EmptyState icon="zap" title="No polls yet">Add polls to this event, then come back to present them.</EmptyState>
-      ) : (
-        <Card>
-          <div className="poll-present-head">
-            <h2 className="poll-present-question">{shown.question}</h2>
-            <StatusBadge tone={shown.status === 'open' ? 'success' : shown.status === 'closed' ? 'warning' : 'neutral'}>
-              {shown.status === 'open' ? 'Voting open' : shown.status === 'closed' ? 'Closed' : 'Not opened'}
-            </StatusBadge>
-          </div>
-          {shown.status === 'draft' || !results ? (
-            <p className="muted poll-present-note">Press Next poll to open this question to the room.</p>
-          ) : (
-            <PresenterResults poll={shown} />
           )}
-        </Card>
-      )}
+          <p className="muted">
+            {event.title}
+            {shown && polls.length > 1 && ` · ${polls.indexOf(shown) + 1} / ${polls.length}`}
+          </p>
+        </div>
+        {results && <p><strong>{results.totalVoters} {results.totalVoters === 1 ? 'voter' : 'voters'}</strong></p>}
+      </header>
+      {(open.error ?? close.error) && <ErrorNote error={(open.error ?? close.error)!} />}
+      <div className="poll-present-layout">
+        <section aria-label="Poll" className="poll-present-main">
+          {!shown ? (
+            <EmptyState icon="zap" title="No polls yet">Add polls to this event, then come back to present them.</EmptyState>
+          ) : (
+            <>
+              <h2 className="poll-present-question">{shown.question}</h2>
+              {shown.status === 'draft' || !results ? (
+                <p className="muted poll-present-note">Press Next poll to open this question to the room.</p>
+              ) : (
+                <PresenterResults poll={shown} />
+              )}
+            </>
+          )}
+        </section>
+        <aside aria-label="How to join" className="poll-present-join">
+          <span className="muted">Join at {window.location.host}</span>
+          <strong className="poll-present-code">{event.pollJoinCode}</strong>
+          <span className="muted poll-present-url">{voteUrl}</span>
+        </aside>
+      </div>
+      <div className="poll-present-controls toolbar-group" role="group" aria-label="Presenter controls">
+        <Button variant="secondary" onClick={openNext} pending={open.isPending} disabled={busy}>
+          <kbd>→</kbd> Next
+        </Button>
+        <Button variant="secondary" onClick={() => openShown()} disabled={busy || !shown || shown.status === 'open'}>
+          <kbd>O</kbd> Open
+        </Button>
+        <Button variant="secondary" onClick={closeOpen} disabled={busy || !polls.some(p => p.status === 'open')}>
+          <kbd>C</kbd> Close
+        </Button>
+        <Button variant="ghost" onClick={fullscreen}>
+          <kbd>F</kbd> Full screen
+        </Button>
+      </div>
     </div>
   );
 }

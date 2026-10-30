@@ -28,9 +28,9 @@ export function EventAnalytics({eventId}: {eventId: string}) {
   ];
 
   return (
-    <div className="screen-analytics">
+    <div className="app-page screen-analytics">
       <div className="stat-grid">
-        <Stat label="Page views" value={data ? data.views : null} icon="globe" hint="Unique visitors per day, added up">
+        <Stat label="Views" value={data ? data.views : null} icon="globe" hint={data && data.views === 0 ? 'No visits yet' : 'Unique per day'}>
           {views.length > 1 && <Sparkline values={views} label={`Page views per day, ${views.length} days`} />}
         </Stat>
         <Stat label="RSVPs" value={data ? data.rsvps.total : null} icon="users" hint={data ? `${data.rsvps.going} going` : undefined} />
@@ -38,7 +38,7 @@ export function EventAnalytics({eventId}: {eventId: string}) {
         <Stat label="Show rate" value={data ? percent(data.showRate) : null} icon="check-circle" hint={data?.showRate.reason ?? 'Checked in or attended, of going'} />
       </div>
 
-      <Card title="Page views over time" description={data ? `${days.length} day${days.length === 1 ? '' : 's'}` : undefined}>
+      <Card title="Page views" description={data ? `${days.length} day${days.length === 1 ? '' : 's'}` : undefined}>
         {data && days.length > 0 ? (
           <BarChart label="Page views per day" data={days.map(d => ({label: dayLabel(d.date), value: d.views}))} />
         ) : data ? (
@@ -50,7 +50,7 @@ export function EventAnalytics({eventId}: {eventId: string}) {
         )}
       </Card>
 
-      <Card flush title="Where visitors come from" description="By the utm_source of the link they used.">
+      <Card flush title="Top sources" description="By the utm_source of the link they used.">
         <DataTable
           caption="Page views and RSVPs by source"
           columns={sourceColumns}
@@ -65,6 +65,12 @@ export function EventAnalytics({eventId}: {eventId: string}) {
           }
         />
       </Card>
+
+      {data && (
+        <p className="muted">
+          Updated <time dateTime={data.generatedAt}>{new Date(data.generatedAt).toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'})}</time>. Days are counted in UTC.
+        </p>
+      )}
     </div>
   );
 }

@@ -86,6 +86,10 @@ export type RsvpAgg = {response: string; status: string; count: number; showedUp
 export const goingCount = (rows: RsvpAgg[]) =>
   rows.reduce((n, r) => (r.status === 'confirmed' && r.response === 'going' ? n + r.count : n), 0);
 
+/** Confirmed guests who answered Maybe (they hold no seat). */
+export const maybeCount = (rows: RsvpAgg[]) =>
+  rows.reduce((n, r) => (r.status === 'confirmed' && r.response === 'maybe' ? n + r.count : n), 0);
+
 /** Checked in or marked attended ÷ going, once the event is over (before that, check-ins still arrive). */
 export function showRate(rows: RsvpAgg[], ended: boolean): Ratio {
   const going = goingCount(rows);
@@ -156,7 +160,7 @@ export const adminAnalyticsRoutes = new Hono().get(
       generatedAt: now.toISOString(),
       ended,
       views,
-      rsvps: {total, going: goingCount(rsvpRows), checkedIn},
+      rsvps: {total, going: goingCount(rsvpRows), maybe: maybeCount(rsvpRows), checkedIn},
       conversion: conversion(total, views),
       showRate: showRate(rsvpRows, ended),
       viewsByDay: zeroFillDays(range, daily),

@@ -269,16 +269,6 @@ export function GuestsTab({eventId}: {eventId: string}) {
   const counts = first?.statusCounts ?? {};
   return (
     <div className="app-page screen-guests">
-      <PageHeader
-        title="Guests"
-        description="Everyone who has RSVP’d, with their answers."
-        actions={
-          <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
-            Export CSV
-          </Button>
-        }
-      />
-
       <div className="grid-3">
         <Stat label="Confirmed" value={first ? String(counts.confirmed ?? 0) : null} icon="check-circle" />
         <Stat label="Pending approval" value={first ? String(counts.pending ?? 0) : null} icon="clock" />
@@ -324,6 +314,9 @@ export function GuestsTab({eventId}: {eventId: string}) {
               Clear filters
             </Button>
           )}
+          <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
+            Export CSV
+          </Button>
         </div>
       </div>
 

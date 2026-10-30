@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { canSeeJoinLink, joinUrlFor, mergeContextFor } from "./context"
 import {
   approvalPendingEmail,
   broadcastEmail,
@@ -102,6 +103,16 @@ describe("confirmation email (US-17)", () => {
     const email = confirmationEmail(data(), { subject: "Seat saved, {{guest.first_name}}", body: "See you there." })
     expect(email.subject).toBe("Seat saved, Sam")
     expect(email.text).toContain("See you there.")
+  })
+})
+
+describe("join link gating", () => {
+  it("withholds the join link from maybe guests", () => {
+    const maybe = data({ guest: { response: "maybe", status: "confirmed" } })
+    expect(canSeeJoinLink(maybe.guest)).toBe(false)
+    expect(joinUrlFor(maybe)).toBeNull()
+    expect(joinUrlFor(data())).toContain("zoom.example")
+    expect(mergeContextFor(maybe).rsvp?.status).not.toBe("confirmed")
   })
 })
 

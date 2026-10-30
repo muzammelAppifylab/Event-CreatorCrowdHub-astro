@@ -171,10 +171,9 @@ export function InvitesTab({eventId}: {eventId: string}) {
 
   return (
     <div className="app-page screen-invites">
-      <PageHeader
-        title="Invites"
-        description="Send each person a personal RSVP link."
-        actions={
+      <div className="toolbar">
+        <p className="muted">Send each person a personal RSVP link.</p>
+        <div className="toolbar-group">
           <>
             <Button
               variant="secondary"
@@ -189,9 +188,11 @@ export function InvitesTab({eventId}: {eventId: string}) {
               Invite people
             </Button>
           </>
-        }
-      />
+        </div>
+      </div>
 
+      <div className="grid-main-side">
+      <div className="app-page">
       <Card flush>
         <DataTable
           caption="Invites"
@@ -209,8 +210,10 @@ export function InvitesTab({eventId}: {eventId: string}) {
         />
       </Card>
       <LoadMore query={invites} />
+      </div>
 
       <ShareKit eventId={eventId} />
+      </div>
 
       <Modal
         open={inviting}

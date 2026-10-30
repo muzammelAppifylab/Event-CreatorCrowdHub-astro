@@ -10,17 +10,20 @@ import {Icon, type IconName} from './icon';
  * | ----------- | ---------------------------------------------------------- |
  * | `primary`   | THE action of the screen or dialog. One per view.          |
  * | `secondary` | every other action (Cancel, Export, Load more)            |
+ * | `outline`   | a bordered secondary action (ink border, fills on hover)  |
  * | `ghost`     | quiet actions in toolbars, rows and cards                 |
  * | `link`      | an action that reads as a link inside text                |
  * | `danger`    | the confirm button of a destructive action (after a confirm) |
  */
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'link' | 'danger';
-export type ButtonSize = 'sm' | 'md' | 'lg';
+export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'ghost' | 'link' | 'danger';
+export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
 /** The classes of a button, for a `<Link>` or `<a>` that must look like one. */
 export function buttonClass({variant = 'primary', size = 'md', block = false}: {variant?: ButtonVariant; size?: ButtonSize; block?: boolean} = {}) {
   return ['button', `button-${variant}`, size === 'md' ? '' : `button-${size}`, block ? 'button-block' : ''].filter(Boolean).join(' ');
 }
+
+const ICON_SIZE: Record<ButtonSize, 14 | 16 | 20> = {xs: 14, sm: 14, md: 16, lg: 16, xl: 20};
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;
@@ -56,7 +59,7 @@ export function Button({
   children,
   ...rest
 }: ButtonProps) {
-  const iconSize = size === 'sm' ? 16 : 18;
+  const iconSize = ICON_SIZE[size];
   return (
     <button
       {...rest}
@@ -102,7 +105,7 @@ export function IconButton({
       title={label}
       disabled={disabled || pending}
       aria-busy={pending || undefined}>
-      {pending ? <span className="spinner" aria-hidden="true" /> : <Icon name={icon} size={size === 'sm' ? 16 : 18} />}
+      {pending ? <span className="spinner" aria-hidden="true" /> : <Icon name={icon} size={ICON_SIZE[size]} />}
     </button>
   );
 }

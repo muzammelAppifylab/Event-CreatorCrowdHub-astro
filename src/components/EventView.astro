@@ -1,0 +1,430 @@
+---
+/**
+ * The public event page body, shared by `/events/<slug>/` and the invite landing `/i/<token>/`
+ * (port of CreatorCrowdHub `features/event-page`: EventPage, HeroSection, the fact and block
+ * sections, RsvpCallToAction and the RsvpSheet). Mobile first: one column with a sticky RSVP bar;
+ * from `lg` the content sits left and a sticky RSVP card right. The RSVP form opens in a `<dialog>`
+ * (a bottom sheet under 768px, a centred dialog above). Renders inside `<main>`, a landmark of its own.
+ * Rendered on the server; the script below ticks the countdown and shows times in the guest's zone.
+ */
+import {initials} from '../lib/format';
+import {
+  availabilityOf,
+  canRsvp,
+  countdownParts,
+  ctaLabel,
+  ctaNote,
+  formatDay,
+  formatRange,
+  formatShortWhen,
+  guestCopy,
+  paragraphsOf,
+  priceSummary,
+} from '../lib/guest-format';
+import {posterTextFor, type CoverStyle} from '../lib/posters';
+import type {RsvpEventView} from '../lib/rsvp-types';
+import type {Site} from '../lib/types';
+import GIcon from './GIcon.astro';
+import Poster from './Poster.astro';
+import ManageLinkForm from './rsvp/ManageLinkForm.astro';
+import RsvpForm from './rsvp/RsvpForm.astro';
+
+interface Props {
+  event: {
+    slug: string;
+    title: string;
+    description: string;
+    startAt: string;
+    endAt: string;
+    timezone: string;
+    format?: 'in_person' | 'online' | 'hybrid';
+    venueName: string | null;
+    venueAddress?: string | null;
+    mapUrl?: string | null;
+    coverImageUrl?: string | null;
+    coverPoster?: string | null;
+    coverStyle?: CoverStyle | null;
+    visibility?: 'public' | 'unlisted' | 'private';
+  };
+  rsvp: RsvpEventView | null;
+  site: Site | null;
+  /** The invite landing: the form is pre-filled with the invitee and the token travels with the RSVP. */
+  invite?: {name: string | null; email: string; token: string; alreadyResponded: boolean};
+}
+
+const {event, rsvp, site, invite} = Astro.props;
+const hostName = site?.name ?? 'Your host';
+const format = event.format ?? (event.venueName ? 'in_person' : 'online');
+const inPerson = format !== 'online';
+const online = format !== 'in_person';
+const now = new Date();
+const availability = rsvp ? availabilityOf(rsvp, event.endAt, now) : null;
+const enabled = !!availability && canRsvp(availability) && !invite?.alreadyResponded;
+const label = availability && rsvp ? ctaLabel(availability, {approvalRequired: rsvp.approvalRequired, hasTickets: rsvp.ticketTypes.length > 0, capacityLimited: rsvp.seatsLeft !== null}) : '';
+const note = invite?.alreadyResponded
+  ? 'You have already answered this invitation. Open the link in your confirmation email to view or change your RSVP.'
+  : availability && rsvp
+    ? ctaNote(availability, rsvp.approvalRequired)
+    : '';
+const price = rsvp ? priceSummary(rsvp.ticketTypes) : '';
+const coverLabel = `Cover art for ${event.title}`;
+const posterText = posterTextFor(event, event.coverStyle);
+const paragraphs = paragraphsOf(event.description);
+const start = new Date(event.startAt).getTime();
+const end = new Date(event.endAt).getTime();
+const phase = cancelledPhase();
+function cancelledPhase() {
+  const t = now.getTime();
+  return t < start ? 'before' : t < end ? 'live' : 'ended';
+}
+const cancelled = rsvp?.status === 'cancelled';
+const startsIn = countdownParts(Math.max(0, start - now.getTime()), false);
+const titleId = 'rsvp-sheet-title';
+---
+
+<article class="g-event" data-event-view data-start={event.startAt} data-end={event.endAt} data-zone={event.timezone}>
+  {
+    cancelled && (
+      <div class="g-cancelled">
+        <div class="page-container">
+          <GIcon name="circle-slash" class="g-icon-5" />
+          <p class="g-body-sm">
+            <span class="g-strong-inherit">{guestCopy.cancelledBanner.title}.</span> {guestCopy.cancelledBanner.body}
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  <div class="page-container g-event-grid">
+    <div class="g-event-main">
+      <header class="g-hero">
+        <div class="g-cover-well">
+          {
+            event.coverImageUrl ? (
+              <img class="g-cover-img" src={event.coverImageUrl} alt={coverLabel} fetchpriority="high" width="288" height="384" />
+            ) : (
+              <Poster design={event.coverPoster} seed={event.slug} text={posterText} palette={event.coverStyle?.palette} label={coverLabel} />
+            )
+          }
+        </div>
+
+        {invite && (
+          <p class="g-hero-by">
+            <span class="g-strong">{invite.name ? `${invite.name}, you’re invited` : 'You’re invited'}</span>
+          </p>
+        )}
+
+        <ul aria-label="Event type" class="g-chips">
+          <li>
+            <span class="g-badge">
+              <GIcon name={online && !inPerson ? 'monitor-play' : 'map-pin'} />
+              {guestCopy.format[format]}
+            </span>
+          </li>
+          {
+            event.visibility && event.visibility !== 'public' && (
+              <li>
+                <span class="g-badge">
+                  <GIcon name={event.visibility === 'private' ? 'lock' : 'link'} />
+                  {guestCopy.visibility[event.visibility]}
+                </span>
+              </li>
+            )
+          }
+          {
+            rsvp && (
+              <li>
+                <span class="g-badge">
+                  <GIcon name="ticket" />
+                  {price}
+                </span>
+              </li>
+            )
+          }
+        </ul>
+
+        <h1 class="type-display g-display">{event.title}</h1>
+        <p class="g-hero-by">{guestCopy.hero.hostedBy} <span class="g-strong">{hostName}</span></p>
+      </header>
+
+      <section class="g-fact" aria-labelledby="event-when">
+        <span class="g-fact-well" aria-hidden="true"><GIcon name="calendar-days" class="g-icon-5" stroke={1.75} /></span>
+        <div class="g-fact-body">
+          <h2 id="event-when">{guestCopy.sections.when}</h2>
+          <time class="g-when" datetime={event.startAt} data-numeric data-when>
+            <span class="g-strong" data-when-day>{formatDay(event.startAt, event.timezone)}</span>
+            <span data-when-range>{formatRange(event.startAt, event.endAt, event.timezone)}</span>
+            <span class="g-when-zone" data-when-event hidden></span>
+          </time>
+        </div>
+      </section>
+
+      {
+        !cancelled && (
+          <section class="g-fact" aria-labelledby="event-countdown" data-countdown data-phase={phase}>
+            <span class="g-fact-well" aria-hidden="true"><GIcon name="timer" class="g-icon-5" stroke={1.75} /></span>
+            <div class="g-fact-body">
+              <h2 id="event-countdown">{guestCopy.sections.countdown}</h2>
+              <div data-countdown-body>
+                {phase === 'before' && (
+                  <>
+                    <p class="sr-only">{guestCopy.countdown.startsAt(formatShortWhen(event.startAt, event.timezone))}</p>
+                    <p aria-hidden="true" class="g-count">
+                      <span class="g-count-label">{guestCopy.countdown.startsIn}</span>
+                      {startsIn.map(([value, unit]) => (
+                        <span class="g-count-unit" data-numeric>
+                          <span class="g-count-n">{value}</span>
+                          <span class="g-count-label">{guestCopy.countdown.units[unit][value === 1 ? 0 : 1]}</span>
+                        </span>
+                      ))}
+                    </p>
+                  </>
+                )}
+                {phase === 'live' && (
+                  <p class="g-count">
+                    <span class="g-live"><span class="g-live-dot" aria-hidden="true"></span>{guestCopy.countdown.live}</span>
+                    <span class="g-count-label">{guestCopy.countdown.liveUntil(formatShortWhen(event.endAt, event.timezone).split(', ').pop() ?? '')}</span>
+                  </p>
+                )}
+                {phase === 'ended' && (
+                  <p class="g-when">
+                    <span class="g-title-sm">{guestCopy.countdown.ended}</span>
+                    <span class="g-count-label">{guestCopy.countdown.endedOn(formatShortWhen(event.endAt, event.timezone))}</span>
+                  </p>
+                )}
+              </div>
+              <p aria-live="polite" aria-atomic="true" class="sr-only" data-countdown-live></p>
+            </div>
+          </section>
+        )
+      }
+
+      <section class="g-fact" aria-labelledby="event-where">
+        <span class="g-fact-well" aria-hidden="true">
+          <GIcon name={inPerson ? 'map-pin' : 'monitor-play'} class="g-icon-5" stroke={1.75} />
+        </span>
+        <div class="g-fact-body">
+          <h2 id="event-where">{guestCopy.sections.where}</h2>
+          {
+            inPerson && (event.venueName || event.venueAddress) && (
+              <address class="g-address">
+                {event.venueName && <span class="g-strong-inherit">{event.venueName}</span>}
+                {event.venueAddress && <span class="g-muted">{event.venueAddress}</span>}
+              </address>
+            )
+          }
+          {
+            online && (
+              <p>
+                <span class="g-strong-inherit">{guestCopy.location.onlineTitle}</span>
+                <span class="g-muted">. {guestCopy.location.onlineNote}</span>
+              </p>
+            )
+          }
+          {
+            inPerson && event.mapUrl && (
+              <a class="g-btn g-btn-outline g-btn-lg g-fit" href={event.mapUrl} target="_blank" rel="noopener noreferrer">
+                {guestCopy.location.openMap}
+                <GIcon name="arrow-up-right" />
+                <span class="sr-only">{guestCopy.location.opensNewTab}</span>
+              </a>
+            )
+          }
+        </div>
+      </section>
+
+      {
+        paragraphs.length > 0 && (
+          <section class="g-block" aria-labelledby="event-about">
+            <h2 id="event-about">{guestCopy.sections.about}</h2>
+            <div class="g-rich">{paragraphs.map(p => <p>{p}</p>)}</div>
+          </section>
+        )
+      }
+
+      <section class="g-block" aria-labelledby="event-host">
+        <h2 id="event-host">{guestCopy.sections.host}</h2>
+        <div class="g-host">
+          <span class="g-avatar">
+            {site?.logo ? <img src={site.logo} alt="" /> : initials(hostName)}
+          </span>
+          <div class="g-host-text">
+            <p class="g-strong-inherit">{hostName}</p>
+          </div>
+        </div>
+        <a class="g-btn g-btn-ghost g-btn-lg g-more" href="/host/" data-astro-prefetch>
+          {guestCopy.host.moreEvents(hostName)}
+          <GIcon name="arrow-right" />
+        </a>
+      </section>
+    </div>
+
+    {
+      rsvp && (
+        <aside aria-label="RSVP" class="g-event-aside">
+          <div class="g-card g-card-sticky">
+            <div class="g-cta">
+              <div class="g-cta-top">
+                <span class="g-cta-price" data-numeric>{price}</span>
+              </div>
+              <button type="button" class="g-btn g-btn-lg" disabled={!enabled} data-rsvp-open aria-haspopup="dialog" aria-describedby="rsvp-cta-note-card">
+                {label}
+              </button>
+              <p id="rsvp-cta-note-card" class="g-cta-note">{note}</p>
+            </div>
+          </div>
+        </aside>
+      )
+    }
+  </div>
+
+  {
+    rsvp && (
+      <div class="g-bar">
+        <div class="page-container">
+          <div class="g-bar-row">
+            <div class="g-bar-text">
+              <span class="g-bar-price" data-numeric>{price}</span>
+              <span id="rsvp-cta-note-bar" class="g-bar-note">{note}</span>
+            </div>
+            <button type="button" class="g-btn g-btn-lg" disabled={!enabled} data-rsvp-open aria-haspopup="dialog" aria-describedby="rsvp-cta-note-bar">
+              {label}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+</article>
+
+{
+  rsvp && enabled && (
+    <dialog class="g-sheet" id="rsvp-sheet" aria-labelledby={titleId} data-rsvp-sheet>
+      <div class="g-sheet-head">
+        <h2 id={titleId}>{guestCopy.form.title(event.title)}</h2>
+        <p>{guestCopy.form.description}</p>
+      </div>
+      <button type="button" class="g-btn g-btn-ghost g-btn-icon g-sheet-close" data-rsvp-close>
+        <GIcon name="x" class="g-icon-5" />
+        <span class="sr-only">Close</span>
+      </button>
+      <div class="g-sheet-body">
+        <RsvpForm
+          view={rsvp}
+          mode="create"
+          inviteToken={invite?.token}
+          hostName={hostName}
+          values={invite ? {name: invite.name ?? '', email: invite.email} : {}}
+        />
+        {!invite && (
+          <div class="g-form-sep g-sheet-manage">
+            <ManageLinkForm slug={rsvp.slug} />
+          </div>
+        )}
+      </div>
+    </dialog>
+  )
+}
+
+<script>
+  import {countdownParts, formatClock, formatDay, formatRange, formatShortWhen, guestCopy} from '../lib/guest-format';
+
+  const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  };
+
+  // Each page, first load and every client navigation (ClientRouter).
+  document.addEventListener('astro:page-load', () => {
+    const root = document.querySelector<HTMLElement>('[data-event-view]');
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = '1';
+    const startAt = root.dataset.start ?? '';
+    const endAt = root.dataset.end ?? '';
+    const zone = root.dataset.zone ?? undefined;
+    const start = Date.parse(startAt);
+    const end = Date.parse(endAt);
+
+    // US-15: the guest's local time first, and the event's own zone underneath when it differs.
+    const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (local && zone && local !== zone) {
+      const day = root.querySelector('[data-when-day]');
+      const range = root.querySelector('[data-when-range]');
+      const event = root.querySelector<HTMLElement>('[data-when-event]');
+      if (day && range && event) {
+        day.textContent = formatDay(startAt, local);
+        range.textContent = formatRange(startAt, endAt, local);
+        event.textContent = `${formatRange(startAt, endAt, zone)} event time (${zone.replace(/_/g, ' ')})`;
+        event.hidden = false;
+      }
+    }
+
+    // The RSVP sheet: a native <dialog> (focus trap, Escape, backdrop) opened by both CTA buttons.
+    const sheet = root.ownerDocument.querySelector<HTMLDialogElement>('[data-rsvp-sheet]');
+    if (sheet) {
+      for (const button of root.querySelectorAll<HTMLButtonElement>('[data-rsvp-open]')) {
+        button.addEventListener('click', () => {
+          if (!sheet.open) sheet.showModal();
+        });
+      }
+      sheet.querySelector('[data-rsvp-close]')?.addEventListener('click', () => sheet.close());
+      sheet.addEventListener('click', event => {
+        if (event.target === sheet) sheet.close();
+      });
+    }
+
+    // The countdown: coarse ticks far out, per second only in the last hour (never with reduced motion).
+    const box = root.querySelector<HTMLElement>('[data-countdown]');
+    const body = box?.querySelector<HTMLElement>('[data-countdown-body]');
+    const live = box?.querySelector<HTMLElement>('[data-countdown-live]');
+    if (!box || !body) return;
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let last = box.dataset.phase ?? '';
+    let timer: number | undefined;
+
+    const draw = () => {
+      if (!root.isConnected) return;
+      const now = Date.now();
+      const phase = now < start ? 'before' : now < end ? 'live' : 'ended';
+      const seconds = !reduced && phase === 'before' && start - now < 61 * 60 * 1000;
+      const nodes: HTMLElement[] = [];
+      if (phase === 'before') {
+        const hidden = el('p', 'sr-only', guestCopy.countdown.startsAt(formatShortWhen(startAt, zone)));
+        const row = el('p', 'g-count');
+        row.setAttribute('aria-hidden', 'true');
+        row.append(el('span', 'g-count-label', guestCopy.countdown.startsIn));
+        for (const [value, unit] of countdownParts(start - now, seconds)) {
+          const part = el('span', 'g-count-unit');
+          part.setAttribute('data-numeric', '');
+          part.append(el('span', 'g-count-n', String(value)), el('span', 'g-count-label', guestCopy.countdown.units[unit][value === 1 ? 0 : 1]));
+          row.append(part);
+        }
+        nodes.push(hidden, row);
+      } else if (phase === 'live') {
+        const row = el('p', 'g-count');
+        const badge = el('span', 'g-live');
+        const dot = el('span', 'g-live-dot');
+        dot.setAttribute('aria-hidden', 'true');
+        badge.append(dot, document.createTextNode(guestCopy.countdown.live));
+        row.append(badge, el('span', 'g-count-label', guestCopy.countdown.liveUntil(formatClock(endAt, zone))));
+        nodes.push(row);
+      } else {
+        const row = el('p', 'g-when');
+        row.append(el('span', 'g-title-sm', guestCopy.countdown.ended), el('span', 'g-count-label', guestCopy.countdown.endedOn(formatShortWhen(endAt, zone))));
+        nodes.push(row);
+      }
+      body.replaceChildren(...nodes);
+      // A polite live region speaks only when the phase changes, never per tick (PRD §16).
+      if (phase !== last) {
+        last = phase;
+        if (live) live.textContent = phase === 'live' ? guestCopy.countdown.live : phase === 'ended' ? guestCopy.countdown.ended : '';
+      }
+      if (phase !== 'ended') timer = window.setTimeout(draw, seconds ? 1000 : 15000);
+    };
+    draw();
+    document.addEventListener('astro:before-swap', () => window.clearTimeout(timer), {once: true});
+  });
+</script>

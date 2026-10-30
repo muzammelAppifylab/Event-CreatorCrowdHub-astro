@@ -9,15 +9,14 @@
  * In `npm run dev` and the editor Preview you see Astro's error overlay
  * instead, with the stack trace.
  */
+import ErrorScreen from '../components/ErrorScreen.astro';
+import {copy} from '../config/copy';
 import Base from '../layouts/Base.astro';
 import {GUEST} from '../platform/auth';
+
+const c = copy.errors.crash;
 ---
 
-<Base site={null} viewer={GUEST} title="Something went wrong" noindex>
-  <main id="main" tabindex="-1" class="wrap narrow section center">
-    <p class="eyebrow">500</p>
-    <h1>Something went wrong</h1>
-    <p class="lede">This page could not be shown just now. Try again in a minute.</p>
-    <p><a class="button" href="/" data-astro-prefetch>Back to home</a></p>
-  </main>
+<Base site={null} viewer={GUEST} title="Something went wrong" noindex guest>
+  <ErrorScreen poster={c.poster} description={c.body} action={{href: '/', label: 'Back to home', reload: true}} />
 </Base>

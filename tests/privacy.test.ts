@@ -148,3 +148,34 @@ describe('retention helpers', () => {
     expect(exportFilename('a/../b c', now)).toBe('guest-data-abc-2026-10-20.json');
   });
 });
+
+describe('inProcessHeaders', () => {
+  it('forwards the real client ip, never x-forwarded-for', async () => {
+    const {inProcessHeaders} = await import('../src/server/privacy');
+    const req = new Request('https://x.test/', {headers: {'cf-connecting-ip': '203.0.113.9', 'x-forwarded-for': '1.1.1.1', cookie: 'a=b'}});
+    const h = inProcessHeaders(req);
+    expect(h.get('cf-connecting-ip')).toBe('203.0.113.9');
+    expect(h.get('x-forwarded-for')).toBeNull();
+    expect(h.get('cookie')).toBeNull();
+    expect(inProcessHeaders(req, ['cookie']).get('cookie')).toBe('a=b');
+  });
+});
+
+describe('retention job', () => {
+  it('does nothing when nobody is expired, and stays bounded', async () => {
+    const {runRetention, RETENTION_BATCH_SIZE, RETENTION_MAX_BATCHES} = await import('../src/server/jobs/retention');
+    const take: number[] = [];
+    const db = {rsvp: {findMany: async (args: Row) => (take.push(args.take), [])}} as unknown as PrismaClient;
+    expect(await runRetention(db, now)).toEqual({erased: 0, skipped: 0});
+    expect(take).toEqual([RETENTION_BATCH_SIZE]);
+    expect(RETENTION_BATCH_SIZE * RETENTION_MAX_BATCHES).toBeLessThanOrEqual(1000);
+  });
+  it('selects only events past the cutoff that are not yet anonymised', async () => {
+    const {expiredGuestIds} = await import('../src/server/privacy');
+    let where: Row = {};
+    const db = {rsvp: {findMany: async (args: Row) => ((where = args.where), [{id: 'a'}])}} as unknown as PrismaClient;
+    expect(await expiredGuestIds(db, now, 9999)).toEqual(['a']);
+    expect(where.event.endAt.lt).toEqual(retentionCutoff(now));
+    expect(where.NOT.email.endsWith).toBe('@invalid');
+  });
+});

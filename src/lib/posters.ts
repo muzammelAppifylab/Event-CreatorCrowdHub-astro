@@ -1,0 +1,157 @@
+/**
+ * Event poster logic, ported from CreatorCrowdHub `src/lib/posters.ts` and the pure parts of
+ * `components/shared/InvitePoster.tsx`. Dependency-free and browser-safe: the artwork itself is
+ * `src/components/Poster.astro` + `src/styles/public.css` (classes `.poster*`).
+ */
+import {POSTER_DESIGNS, POSTER_PALETTES, type CoverStyle, type PosterDesign, type PosterPalette} from './event-schemas';
+
+export type {CoverStyle, PosterDesign, PosterPalette};
+export {POSTER_DESIGNS as posterDesigns, POSTER_PALETTES as posterPalettes};
+
+export interface PosterText {
+  headline: string;
+  /** Small line above the headline (date, "Invite only"...). Empty hides it. */
+  eyebrow: string;
+  /** Small line under the headline (venue, tagline...). Empty hides it. */
+  footer: string;
+}
+
+export const paletteLabel: Record<PosterPalette, string> = {
+  butter: 'Butter',
+  cobalt: 'Cobalt',
+  night: 'Night',
+  plum: 'Plum',
+  tomato: 'Tomato',
+  mint: 'Mint',
+  cream: 'Cream',
+  teal: 'Teal',
+  pink: 'Pink',
+};
+
+/** The palette each design was drawn in; used when the creator has not picked one. */
+export const defaultPalette: Record<PosterDesign, PosterPalette> = {
+  breakfast: 'butter',
+  launch: 'cobalt',
+  ama: 'night',
+  mastermind: 'plum',
+  workshop: 'tomato',
+  kickoff: 'mint',
+};
+
+export const sampleText: Record<PosterDesign, PosterText> = {
+  breakfast: {eyebrow: 'Sat 09:00', headline: 'Founders Breakfast', footer: 'Ground Floor Café'},
+  launch: {eyebrow: 'Course v2', headline: 'Launch night', footer: 'Doors 7pm'},
+  ama: {eyebrow: 'Live on Zoom', headline: 'Ask me anything', footer: 'Pricing · Funnels · Burnout'},
+  mastermind: {eyebrow: 'Invite only', headline: 'The Monthly Mastermind', footer: '12 seats · Thursday'},
+  workshop: {eyebrow: '$49 · Saturday', headline: 'Pricing Workshop', footer: '30 seats · In person'},
+  kickoff: {eyebrow: 'Cohort 07', headline: 'Kickoff party', footer: 'Bring a goal. Leave with a crew.'},
+};
+
+export function isPosterDesign(value: unknown): value is PosterDesign {
+  return typeof value === 'string' && (POSTER_DESIGNS as readonly string[]).includes(value);
+}
+
+/**
+ * Fallback cover for an event with no chosen poster or image: a stable authored poster derived
+ * from its id (or title while unsaved).
+ */
+export function posterFor(seed: string): PosterDesign {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  return POSTER_DESIGNS[Math.abs(hash) % POSTER_DESIGNS.length]!;
+}
+
+export interface PosterEventInfo {
+  title: string;
+  startAt?: string | null;
+  timezone?: string | null;
+  format?: 'in_person' | 'online' | 'hybrid' | null;
+  venueName?: string | null;
+}
+
+/** "Sat 14 Nov · 7:00 PM" in the event's zone; "" when the date or zone is unusable. */
+export function posterDate(startAt: string | null | undefined, timeZone: string | null | undefined): string {
+  if (!startAt || Number.isNaN(Date.parse(startAt))) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timeZone || undefined,
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(new Date(startAt));
+    const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? '';
+    const time = `${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`.trim();
+    return `${get('weekday')} ${get('day')} ${get('month')} · ${time}`;
+  } catch {
+    return '';
+  }
+}
+
+const filled = (v: string | null | undefined) => (v?.trim() ? v.trim() : undefined);
+
+/** What a poster says for this event: the creator's overrides, else title / date / place. */
+export function posterTextFor(event: PosterEventInfo, style?: CoverStyle | null): PosterText {
+  const place = event.format === 'online' ? 'Online' : (filled(event.venueName) ?? '');
+  return {
+    headline: filled(style?.headline) ?? event.title.trim(),
+    eyebrow: filled(style?.eyebrow) ?? posterDate(event.startAt, event.timezone),
+    footer: filled(style?.footer) ?? place,
+  };
+}
+
+interface FitBox {
+  /** Authored size in cqw; the headline never grows past it. */
+  base: number;
+  /** Usable width / height for the headline, in cqw. */
+  width: number;
+  height: number;
+  lineHeight: number;
+  /** Average glyph advance as a share of the font size (Anton is narrow, Young Serif wide). */
+  glyph: number;
+}
+
+/**
+ * Largest size (cqw) at which `text` wraps inside the box without breaking a word. Estimated from
+ * glyph width rather than measured, so it is pure and the same in a 40px thumbnail and the hero.
+ */
+export function fitHeadline(text: string, box: FitBox): number {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return box.base;
+  const min = box.base * 0.3;
+  for (let size = box.base; size > min; size -= box.base / 40) {
+    const perLine = Math.floor(box.width / (size * box.glyph));
+    if (words.some(w => w.length > perLine)) continue;
+    let lines = 1;
+    let used = 0;
+    for (const w of words) {
+      const need = used === 0 ? w.length : used + 1 + w.length;
+      if (need > perLine) {
+        lines++;
+        used = w.length;
+      } else used = need;
+    }
+    if (lines * size * box.lineHeight <= box.height) return size;
+  }
+  return min;
+}
+
+/** Each design's headline box (the authored values of the source's InvitePoster). */
+export const headlineBox: Record<PosterDesign, FitBox> = {
+  breakfast: {base: 25, width: 84, height: 82, lineHeight: 0.9, glyph: 0.47},
+  launch: {base: 22, width: 84, height: 50, lineHeight: 0.86, glyph: 0.56},
+  ama: {base: 27, width: 84, height: 80, lineHeight: 0.9, glyph: 0.47},
+  mastermind: {base: 14, width: 82, height: 62, lineHeight: 1.02, glyph: 0.7},
+  workshop: {base: 17, width: 84, height: 48, lineHeight: 0.9, glyph: 0.47},
+  kickoff: {base: 19, width: 84, height: 70, lineHeight: 0.9, glyph: 0.52},
+};
+
+/**
+ * The headline size as a whole number of cqw (`.poster-fs-N` in public.css, 4 to 27): the CSP
+ * forbids a style attribute, so the fitted size is rounded DOWN to the nearest class.
+ */
+export function headlineStep(design: PosterDesign, text: string): number {
+  return Math.max(4, Math.min(27, Math.floor(fitHeadline(text, headlineBox[design]))));
+}

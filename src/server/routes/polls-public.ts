@@ -6,6 +6,7 @@ import {CODE_ALPHABET, POLL_JOIN_CODE_LENGTH} from '../../domain/codes';
 import type {PrismaClient} from '../../generated/prisma/client';
 import {attempt, keysFor, type Ctx} from '../../platform/auth/kit';
 import {RATE_LIMITS, type AttemptKind, type KindPolicy} from '../../platform/auth/rate-limit';
+import {config} from '../../platform/config';
 import {problem, withAuthCore, withDb} from '../../platform/guards';
 
 /**
@@ -37,9 +38,26 @@ const VOTE_KIND = 'vote' as AttemptKind;
   ip: {windowSeconds: 10 * 60, free: 600, baseDelaySeconds: 10, maxDelaySeconds: 10 * 60, counts: 'all'},
 };
 
+const LOOKUP_KIND = 'poll_lookup' as AttemptKind;
+(RATE_LIMITS as Record<string, KindPolicy>)['poll_lookup'] ??= {
+  // Counts only MISSES (unknown, draft or malformed codes): 30 per 10 min per IP, then 10s, 20s... Live pages that hit pay nothing.
+  ip: {windowSeconds: 10 * 60, free: 30, baseDelaySeconds: 10, maxDelaySeconds: 10 * 60, counts: 'all'},
+};
+
 /* ── helpers shared with the admin routes ───────────────────────────────── */
 
 export const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
+
+const UNSAFE_IN_SCRIPT = new RegExp('[<>&' + String.fromCharCode(0x2028, 0x2029) + ']', 'g');
+/**
+ * JSON that is safe inside a <script type="application/json"> block: `<`, `>`, `&` and the JS
+ * line separators become unicode escapes (still valid JSON), so no value can close the tag.
+ * (The type is non-executable, so the CSP needs no allowance for it.)
+ */
+export function jsonForScript(value: unknown): string {
+  return (JSON.stringify(value) ?? 'null')
+    .replace(UNSAFE_IN_SCRIPT, ch => String.fromCharCode(92) + 'u' + ch.charCodeAt(0).toString(16).padStart(4, '0'));
+}
 
 /** Codes are typed by guests: accept "k7q 42x" or "K7Q-42X". Null when it can't be a code. */
 export function normalizeJoinCode(raw: string): string | null {
@@ -213,10 +231,24 @@ const myVoteOf = (v: {optionIds: unknown; ratingValue: number | null; textValue:
   textValue: v.textValue,
 });
 
-async function eventByCode(db: PrismaClient, raw: string) {
+/** Only PUBLISHED events resolve (not draft, cancelled or deleted): a draft's code is as good as missing. */
+export async function eventByCode(db: PrismaClient, raw: string) {
   const code = normalizeJoinCode(raw);
   if (!code) return null;
-  return db.event.findFirst({where: {pollJoinCode: code, deletedAt: null}, select: {id: true, title: true, pollJoinCode: true}});
+  return db.event.findFirst({
+    where: {pollJoinCode: code, deletedAt: null, status: 'published'},
+    select: {id: true, title: true, pollJoinCode: true},
+  });
+}
+
+/** Per-IP throttle for code lookups that MISS (stops code enumeration without a write per poll). Returns the 429 or null. */
+async function lookupLimited(c: Context): Promise<Response | null> {
+  const secret = config.jwtSecret;
+  if (!secret) return null; // no limiter key without the secret; the vote route 503s anyway
+  const ctx = c as unknown as Ctx;
+  ctx.set('secret', secret);
+  const {stop} = await attempt(ctx, LOOKUP_KIND, await keysFor(ctx, null));
+  return stop;
 }
 
 const NOT_FOUND = problem('not_found', "We couldn't find a poll with that code.");
@@ -231,7 +263,7 @@ export const pollPublicRoutes = new Hono()
   .get('/:code/active', withDb, async c => {
     const db = c.var.db;
     const event = await eventByCode(db, c.req.param('code'));
-    if (!event) return c.json(NOT_FOUND, 404);
+    if (!event) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
     const poll = await currentPollOf(db, event.id);
     const token = readVoterToken(c);
     const [options, mine] = poll
@@ -262,7 +294,7 @@ export const pollPublicRoutes = new Hono()
     const db = c.var.db;
     // Cheapest check first: the rate limit writes a row, so it comes after the code check.
     const event = await eventByCode(db, c.req.param('code'));
-    if (!event) return c.json(NOT_FOUND, 404);
+    if (!event) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
     const limited = await attempt(ctx, VOTE_KIND, await keysFor(ctx, null));
     if (limited.stop) return limited.stop;
 
@@ -315,7 +347,7 @@ export const pollPublicRoutes = new Hono()
   .get('/:code/results', withDb, async c => {
     const db = c.var.db;
     const event = await eventByCode(db, c.req.param('code'));
-    if (!event) return c.json(NOT_FOUND, 404);
+    if (!event) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
     const poll = await currentPollOf(db, event.id);
     // Drafts are the host's prep work: invisible to guests.
     if (!poll) return c.json(problem('not_found', 'No poll has been opened yet.'), 404);

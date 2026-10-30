@@ -285,7 +285,7 @@ export function emailsFromCsv(text: string): string[] {
 }
 
 /** Hosts only: who attended an online or hybrid event, by hand or from an attendee export. */
-function OnlineAttendance({eventId}: {eventId: string}) {
+export function OnlineAttendance({eventId}: {eventId: string}) {
   const queryClient = useQueryClient();
   const toast = useToast();
   const attendees = useInfiniteQuery(attendeesQuery(eventId));

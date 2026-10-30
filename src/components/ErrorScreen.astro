@@ -1,0 +1,43 @@
+---
+/**
+ * One component for every guest dead end (port of CreatorCrowdHub `features/errors/ErrorScreen`,
+ * guest tone): a stacked poster headline, one sentence that names the problem and the way out, one
+ * pill action. No colour carries meaning here, the words do. The copy lives in `src/config/copy.ts`.
+ */
+interface Props {
+  /** The stacked poster lines, e.g. ["Sold", "out"]. */
+  poster: readonly string[];
+  /** Plain copy that names the problem and the way out. */
+  description: string;
+  action?: {href: string; label: string; prefetch?: boolean; reload?: boolean};
+  secondary?: {href: string; label: string};
+  /** `main` renders its own landmark (default); off when the page already has one. */
+  landmark?: boolean;
+}
+
+const {poster, description, action, secondary, landmark = true} = Astro.props;
+const Tag = landmark ? 'main' : 'div';
+---
+
+<Tag id={landmark ? 'main' : undefined} tabindex={landmark ? -1 : undefined} class="g-main">
+  <section class="g-error" aria-labelledby="error-title" aria-describedby="error-description">
+    <div class="g-error-in">
+      <h1 id="error-title" class="type-poster">
+        {poster.map((line, i) => <span>{line}{i < poster.length - 1 && ' '}</span>)}
+      </h1>
+      <p id="error-description" class="g-lead">{description}</p>
+      {
+        (action || secondary) && (
+          <div class="g-error-actions">
+            {action && (
+              <a class="g-btn g-btn-lg" href={action.href} data-astro-prefetch={action.prefetch === false ? undefined : ''} data-astro-reload={action.reload ? '' : undefined}>
+                {action.label}
+              </a>
+            )}
+            {secondary && <a class="g-btn g-btn-ghost g-btn-lg" href={secondary.href}>{secondary.label}</a>}
+          </div>
+        )
+      }
+    </div>
+  </section>
+</Tag>

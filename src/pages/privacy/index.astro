@@ -8,8 +8,8 @@ export const prerender = true;
 const {site, viewer} = await staticContext(Astro.request);
 ---
 
-<Base site={site} viewer={viewer} isStatic title="Privacy" description="What we keep when you RSVP to an event, why, for how long, and how to download, correct or erase it.">
-  <main id="main" tabindex="-1" class="wrap narrow section">
+<Base site={site} viewer={viewer} isStatic guest title="Privacy" description="What we keep when you RSVP to an event, why, for how long, and how to download, correct or erase it.">
+  <main id="main" tabindex="-1" class="g-main"><div class="page-container g-doc">
     <h1>Privacy</h1>
     <div class="prose">
       <h2>What we keep</h2>
@@ -44,5 +44,5 @@ const {site, viewer} = await staticContext(Astro.request);
         day to the next. We do not store your IP address.
       </p>
     </div>
-  </main>
+  </div></main>
 </Base>

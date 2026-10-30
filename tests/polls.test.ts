@@ -98,3 +98,31 @@ describe('resultsFor (per-isolate cache)', () => {
     await expect(resultsFor(db, {id: 'bad', type: 'rating', status: 'open'}, 5001)).resolves.toMatchObject({totalVoters: 0});
   });
 });
+
+describe('jsonForScript', () => {
+  it('cannot close the script tag and still parses back to the same value', async () => {
+    const {jsonForScript} = await import('../src/server/routes/polls-public');
+    const value = {q: '</script><img src=x onerror=1>', amp: 'a&b', sep: String.fromCharCode(0x2028, 0x2029)};
+    const out = jsonForScript(value);
+    expect(out).not.toMatch(/[<>&]/);
+    expect(out).not.toContain(String.fromCharCode(0x2028));
+    expect(out).toContain(String.fromCharCode(92) + 'u003c');
+    expect(JSON.parse(out)).toEqual(value);
+    expect(jsonForScript(undefined)).toBe('null');
+  });
+});
+
+describe('poll code lookup', () => {
+  it('only resolves published, live events and skips the query for malformed codes', async () => {
+    const {eventByCode} = await import('../src/server/routes/polls-public');
+    const findFirst = vi.fn(async (_args: unknown) => null);
+    const db = {event: {findFirst}} as never;
+    expect(await eventByCode(db, 'nope')).toBeNull();
+    expect(findFirst).not.toHaveBeenCalled();
+    await eventByCode(db, 'K7Q42X');
+    expect(findFirst.mock.calls[0][0]).toMatchObject({where: {pollJoinCode: 'K7Q42X', deletedAt: null, status: 'published'}});
+  });
+  it('registers a miss throttle', () => {
+    expect((RATE_LIMITS as Record<string, unknown>)['poll_lookup']).toBeDefined();
+  });
+});

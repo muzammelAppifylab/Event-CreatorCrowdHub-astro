@@ -13,7 +13,6 @@ export const HUB_TABS = [
   {id: 'polls', label: 'Polls', file: 'polls'},
   {id: 'checkin', label: 'Check-in', file: 'checkin-tab'},
   {id: 'analytics', label: 'Analytics', file: 'event-analytics'},
-  {id: 'settings', label: 'Settings', file: 'event-settings'},
 ] as const;
 export type HubTabId = (typeof HUB_TABS)[number]['id'];
 export type TabProps = {eventId: string};

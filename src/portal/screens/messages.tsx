@@ -106,9 +106,8 @@ function PreviewModal({preview, onClose}: {preview: EmailPreview | null; onClose
 export function MessagesTab({eventId}: {eventId: string}) {
   return (
     <div className="app-page screen-messages">
-      <PageHeader title="Messages" description="Email your guests, and set up the emails that go out by themselves." />
-      <Broadcast eventId={eventId} />
       <AutomaticEmails eventId={eventId} />
+      <Broadcast eventId={eventId} />
       <MessageLog eventId={eventId} />
     </div>
   );

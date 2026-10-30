@@ -173,7 +173,7 @@ export const adminCheckinRoutes = new Hono()
     const [rows, counts] = await Promise.all([
       c.var.db.rsvp.findMany({
         select: guestSelect,
-        where: {eventId, AND: [{OR: [{status: 'confirmed'}, {checkedInAt: {not: null}}]}, ...(search.length ? [{OR: search}] : [])]},
+        where: {eventId, AND: [{OR: [{status: 'confirmed', response: 'going'}, {checkedInAt: {not: null}}]}, ...(search.length ? [{OR: search}] : [])]},
         orderBy: [{name: 'asc'}, {id: 'asc'}],
         take: DOOR_LIST_LIMIT,
       }),
@@ -197,14 +197,14 @@ export const adminCheckinRoutes = new Hono()
     const db = c.var.db;
     const rsvp = await db.rsvp.findUnique({
       where: {ticketCode: code},
-      select: {id: true, eventId: true, status: true, checkedInAt: true, event: {select: {status: true, deletedAt: true}}},
+      select: {id: true, eventId: true, status: true, response: true, checkedInAt: true, event: {select: {status: true, deletedAt: true}}},
     });
     if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt) {
       return c.json(problem('not_found', 'No guest has that ticket code.'), 404);
     }
     // Only a confirmed guest has a place to check into; the door can still undo any check-in.
-    if (checkedIn && rsvp.status !== 'confirmed') {
-      return c.json(problem('not_confirmed', 'That guest is not confirmed, so they cannot be checked in.'), 409);
+    if (checkedIn && (rsvp.status !== 'confirmed' || rsvp.response !== 'going')) {
+      return c.json(problem('not_confirmed', 'Only confirmed (going) guests can be checked in; this RSVP is waitlisted, unpaid, pending, maybe, declined or cancelled.'), 409);
     }
     // Conditional writes: re-checking keeps the FIRST timestamp, two scanners never race it.
     const changed = await db.rsvp.updateMany({

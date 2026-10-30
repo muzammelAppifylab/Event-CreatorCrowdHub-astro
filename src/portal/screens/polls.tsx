@@ -159,9 +159,8 @@ export function Polls({eventId}: {eventId: string}) {
 
   return (
     <div className="app-page screen-polls">
-      <PageHeader
-        title="Live polls"
-        description={
+      <div className="toolbar">
+        <p className="muted">{
           event ? (
             <>
               Guests vote at{' '}
@@ -174,7 +173,8 @@ export function Polls({eventId}: {eventId: string}) {
             'Ask the room a question and watch the answers arrive.'
           )
         }
-        actions={
+        </p>
+        <div className="toolbar-group">
           <>
             {event && (
               <Link to={`/polls/${event.pollJoinCode}/present` as never} className={buttonClass({variant: 'secondary'})}>
@@ -185,8 +185,8 @@ export function Polls({eventId}: {eventId: string}) {
               New poll
             </Button>
           </>
-        }
-      />
+        </div>
+      </div>
       {act.error && <ErrorNote error={act.error} />}
       {remove.error && <ErrorNote error={remove.error} />}
       <Card flush>

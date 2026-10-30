@@ -1,4 +1,5 @@
 import {useInfiniteQuery} from '@tanstack/react-query';
+import {Link} from '@tanstack/react-router';
 import {type FormEvent, useState} from 'react';
 
 import {type ContactFilter, type ContactRow, contactsExportUrl, contactsQuery, downloadExport} from '../guests-queries';
@@ -68,7 +69,9 @@ export function Contacts() {
       hideOnMobile: true,
       cell: c => (
         <div>
-          <span className="cell-title">{c.lastEvent.title}</span>
+          <span className="cell-title">
+            <Link to={`/events/${c.lastEvent.id}` as never}>{c.lastEvent.title}</Link>
+          </span>
           <span className="cell-sub">{when(c.lastEvent.startAt)}</span>
         </div>
       ),
@@ -85,7 +88,7 @@ export function Contacts() {
     <div className="app-page screen-contacts">
       <PageHeader
         title="Contacts"
-        description="Everyone who has RSVP’d to any of your events, once per email."
+        description="Every guest across your events, once per email."
         actions={
           <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
             Export CSV
@@ -125,7 +128,7 @@ export function Contacts() {
             <EmptyState icon="users" title={filter.q || filter.consent ? 'No contacts match' : 'No contacts yet'}>
               {filter.q || filter.consent
                 ? 'Try another search, or show everyone instead of only people who opted in.'
-                : 'People show here once they RSVP to an event.'}
+                : 'Guests appear here once they RSVP to one of your events.'}
             </EmptyState>
           }
         />

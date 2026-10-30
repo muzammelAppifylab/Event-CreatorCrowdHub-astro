@@ -1,10 +1,19 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {createEvent, eventsApp, resetEvents, rsvpBody, userWith} from './support/events-fixtures';
+import {hashToken, newToken} from '../../src/domain/secureToken';
+import {setPaidCheckoutHook} from '../../src/server/routes/rsvp';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 const R = '/site-api/rsvp/events';
 let n = 30;
+
+/** The manage token is stored hashed and mailed, never returned: tests install a known one. */
+async function tokenFor(email: string) {
+  const token = newToken();
+  await db.rsvp.update({where: {eventId_email: {eventId: (await db.rsvp.findFirstOrThrow({where: {email}})).eventId, email}}, data: {manageToken: hashToken(token)}});
+  return token;
+}
 const guest = () => new Browser(eventsApp, `203.0.113.${n++}`);
 
 describe.skipIf(!DATABASE_URL)('events guest flows (integration, real Postgres)', () => {
@@ -24,13 +33,12 @@ describe.skipIf(!DATABASE_URL)('events guest flows (integration, real Postgres)'
     const a = await guest().post(`${R}/${ev.slug}`, rsvpBody('a@example.test'));
     const b = await guest().post(`${R}/${ev.slug}`, rsvpBody('b@example.test'));
     const c = await guest().post(`${R}/${ev.slug}`, rsvpBody('c@example.test'));
-    expect([a.status, b.status, c.status]).toEqual([201, 201, 201]);
-    expect(a.json.status).toBe('confirmed');
-    expect(b.json.status).toBe('confirmed');
-    expect(c.json.status).toBe('waitlisted');
-    expect(c.json.waitlistPosition).toBe(1);
+    expect([a.status, b.status, c.status]).toEqual([202, 202, 202]);
+    // Same answer for everyone, and no manage link in it: no way to tell a new email from an existing one.
+    for (const r of [a, b, c]) expect(r.json).toEqual({status: 'check_email', checkoutUrl: null, message: expect.any(String)});
+    expect((await db.rsvp.findFirstOrThrow({where: {email: 'c@example.test'}})).status).toBe('waitlisted');
 
-    const token = (a.json.managePath as string).split('/')[2]!;
+    const token = await tokenFor('a@example.test');
     const cancel = await guest().post(`/site-api/rsvp/manage/${token}/cancel`);
     expect(cancel.status).toBe(200);
     const promoted = await db.rsvp.findFirstOrThrow({where: {email: 'c@example.test'}});
@@ -39,7 +47,7 @@ describe.skipIf(!DATABASE_URL)('events guest flows (integration, real Postgres)'
 
   it('without a waitlist a full event refuses, and a duplicate email creates no second RSVP', async () => {
     const ev = await createEvent(admin, {capacity: 1, waitlistEnabled: false});
-    expect((await guest().post(`${R}/${ev.slug}`, rsvpBody('a@example.test'))).status).toBe(201);
+    expect((await guest().post(`${R}/${ev.slug}`, rsvpBody('a@example.test'))).status).toBe(202);
     const full = await guest().post(`${R}/${ev.slug}`, rsvpBody('b@example.test'));
     expect(full.status).toBeGreaterThanOrEqual(400);
     expect(await db.rsvp.count({where: {email: 'b@example.test'}})).toBe(0);
@@ -91,8 +99,9 @@ describe.skipIf(!DATABASE_URL)('events guest flows (integration, real Postgres)'
   it('privacy: manage token reads, exports and erases; a bad token is a 404; unsubscribe works', async () => {
     const ev = await createEvent(admin);
     const made = await guest().post(`${R}/${ev.slug}`, rsvpBody('p@example.test', {marketingConsent: true}));
-    expect(made.status).toBe(201);
-    const token = (made.json.managePath as string).split('/')[2]!;
+    expect(made.status).toBe(202);
+    expect(made.json.managePath).toBeUndefined();
+    const token = await tokenFor('p@example.test');
     const g = guest();
     const PR = '/site-api/privacy';
     expect((await g.get(`${PR}/guest/${'x'.repeat(40)}`)).status).toBe(404);
@@ -108,5 +117,60 @@ describe.skipIf(!DATABASE_URL)('events guest flows (integration, real Postgres)'
     // Erasure anonymises the row (kept for counts): the address and the token no longer match.
     expect(await db.rsvp.count({where: {email: 'p@example.test'}})).toBe(0);
     expect((await g.get(`${PR}/guest/${token}`)).status).toBe(404);
+  });
+
+  describe('paid tickets and Maybe', () => {
+    afterAll(() => setPaidCheckoutHook(null));
+    const paidEvent = async () => {
+      setPaidCheckoutHook(async ({rsvp}) => ({checkoutUrl: `/pay/${rsvp.id}`}));
+      const ev = await createEvent(admin, {capacity: 5, allowMaybe: true});
+      const ticket = await db.ticketType.create({data: {eventId: ev.id, name: 'VIP', priceCents: 5000, currency: 'USD'}});
+      return {ev, ticket};
+    };
+
+    it('H1: Maybe then Going on a paid ticket does NOT skip payment', async () => {
+      const {ev, ticket} = await paidEvent();
+      const maybe = await guest().post(`${R}/${ev.slug}`, rsvpBody('m@example.test', {response: 'maybe', ticketTypeId: ticket.id}));
+      expect(maybe.status).toBe(202);
+      expect(maybe.json.checkoutUrl).toBeNull();
+      const token = await tokenFor('m@example.test');
+      const row = () => db.rsvp.findFirstOrThrow({where: {email: 'm@example.test'}});
+      expect((await row()).ticketTypeId).toBeNull(); // a Maybe implies no ticket
+
+      const g = guest();
+      // No ticket chosen: refused, still a Maybe.
+      const noTicket = await g.request('PATCH', `/site-api/rsvp/manage/${token}`, rsvpBody('m@example.test', {response: 'going'}));
+      expect(noTicket.status).toBe(422);
+      expect((await row()).response).toBe('maybe');
+
+      const going = await g.request('PATCH', `/site-api/rsvp/manage/${token}`, rsvpBody('m@example.test', {response: 'going', ticketTypeId: ticket.id}));
+      expect(going.status).toBe(200);
+      expect(going.json.status).toBe('awaiting_payment');
+      expect(going.json.checkoutUrl).toMatch(/^[/]pay[/]/);
+      expect((await row()).status).toBe('awaiting_payment');
+    });
+
+    it('H1: if checkout cannot start, the edit is reverted to the Maybe', async () => {
+      const {ev, ticket} = await paidEvent();
+      await guest().post(`${R}/${ev.slug}`, rsvpBody('r@example.test', {response: 'maybe'}));
+      const token = await tokenFor('r@example.test');
+      setPaidCheckoutHook(async () => null);
+      const res = await guest().request('PATCH', `/site-api/rsvp/manage/${token}`, rsvpBody('r@example.test', {response: 'going', ticketTypeId: ticket.id}));
+      expect(res.status).toBe(409);
+      const row = await db.rsvp.findFirstOrThrow({where: {email: 'r@example.test'}});
+      expect([row.response, row.status, row.ticketTypeId]).toEqual(['maybe', 'confirmed', null]);
+    });
+
+    it('a Maybe sees no ticket code and no join link in the manage view', async () => {
+      const ev = await createEvent(admin, {allowMaybe: true, format: 'online', joinUrl: 'https://meet.example.test/x'});
+      await guest().post(`${R}/${ev.slug}`, rsvpBody('v@example.test', {response: 'maybe'}));
+      const token = await tokenFor('v@example.test');
+      const view = await guest().get(`/site-api/rsvp/manage/${token}`);
+      expect((view.json.rsvp as {ticketCode: unknown}).ticketCode).toBeNull();
+      expect((view.json.event as {joinUrl: unknown}).joinUrl).toBeNull();
+      await guest().request('PATCH', `/site-api/rsvp/manage/${token}`, rsvpBody('v@example.test', {response: 'going'}));
+      const going = await guest().get(`/site-api/rsvp/manage/${token}`);
+      expect((going.json.rsvp as {ticketCode: unknown}).ticketCode).toEqual(expect.any(String));
+    });
   });
 });

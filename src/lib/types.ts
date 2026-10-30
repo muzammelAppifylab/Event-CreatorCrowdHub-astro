@@ -61,7 +61,6 @@ export interface EventSummary {
 export interface EventDetail extends EventSummary {
   venueAddress: string | null;
   mapUrl: string | null;
-  joinUrl: string | null;
   visibility: 'public' | 'unlisted' | 'private';
   waitlistEnabled: boolean;
 }

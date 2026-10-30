@@ -1,5 +1,7 @@
 import {useState} from 'react';
 
+import {Foundations} from './design-system/foundations';
+
 import {
   Badge,
   BarChart,
@@ -12,8 +14,6 @@ import {
   Drawer,
   EmptyState,
   Field,
-  Icon,
-  ICON_NAMES,
   IconButton,
   LoadingBlock,
   Menu,
@@ -33,6 +33,7 @@ import {
   StatusBadge,
   Switch,
   Tabs,
+  Tooltip,
   useConfirm,
   useForm,
   useToast,
@@ -57,7 +58,7 @@ const STATUS_TONES = {active: 'success', trial: 'info', overdue: 'warning'} as c
 export function Components() {
   const toast = useToast();
   const confirm = useConfirm();
-  const [tab, setTab] = useState<'buttons' | 'forms' | 'data' | 'feedback' | 'icons'>('buttons');
+  const [tab, setTab] = useState<'buttons' | 'forms' | 'data' | 'feedback' | 'foundations'>('buttons');
 
   return (
     <div className="app-page">
@@ -81,13 +82,13 @@ export function Components() {
           {value: 'forms', label: 'Forms'},
           {value: 'data', label: 'Data'},
           {value: 'feedback', label: 'States'},
-          {value: 'icons', label: 'Icons & colours', count: ICON_NAMES.length},
+          {value: 'foundations', label: 'Foundations'},
         ]}>
         {tab === 'buttons' && <ButtonsDemo onToast={toast.success} confirm={confirm} />}
         {tab === 'forms' && <FormsDemo onSaved={() => toast.success('Saved.')} />}
         {tab === 'data' && <DataDemo />}
         {tab === 'feedback' && <FeedbackDemo />}
-        {tab === 'icons' && <IconsDemo />}
+        {tab === 'foundations' && <Foundations />}
       </Tabs>
     </div>
   );
@@ -103,6 +104,7 @@ function ButtonsDemo({onToast, confirm}: {onToast: (message: string) => void; co
         <div className="kit-row">
           <Button>Primary</Button>
           <Button variant="secondary">Secondary</Button>
+          <Button variant="outline">Outline</Button>
           <Button variant="ghost">Ghost</Button>
           <Button variant="link">Link</Button>
           <Button variant="danger">Delete</Button>
@@ -122,11 +124,16 @@ function ButtonsDemo({onToast, confirm}: {onToast: (message: string) => void; co
           </Button>
         </div>
         <div className="kit-row">
+          <Button size="xs" variant="outline">Extra small</Button>
           <Button size="sm">Small</Button>
           <Button size="sm" variant="secondary">
             Small
           </Button>
           <Button size="lg">Large</Button>
+          <Button size="xl">Extra large</Button>
+          <Tooltip label="Edit the item">
+            <IconButton icon="pencil" label="Edit" variant="outline" />
+          </Tooltip>
           <IconButton icon="pencil" label="Edit" />
           <IconButton icon="trash" label="Delete" variant="secondary" />
           <Menu
@@ -381,38 +388,13 @@ function FeedbackDemo() {
           <Badge tone="warning">Warning</Badge>
           <Badge tone="danger">Danger</Badge>
           <Badge tone="info">Info</Badge>
+          <Badge tone="solid">Solid</Badge>
+          <Badge tone="outline">Outline</Badge>
+          <Badge tone="label">Label</Badge>
           <StatusBadge tone="success">Active</StatusBadge>
           <StatusBadge tone="warning">Pending</StatusBadge>
           <StatusBadge tone="danger">Suspended</StatusBadge>
           <StatusBadge tone="neutral">Closed</StatusBadge>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function IconsDemo() {
-  const swatches = ['accent', 'accent-soft', 'surface', 'card', 'ink', 'muted', 'line', 'success', 'warning', 'danger', 'info'];
-  return (
-    <div className="kit-section">
-      <Card title="Colour tokens" description="Defined once in src/styles/global.css, light and dark. Change --accent to rebrand.">
-        <div className="kit-swatches">
-          {swatches.map(name => (
-            <div key={name} className="kit-swatch">
-              <span className={`swatch-${name}`} />
-              <span>--{name}</span>
-            </div>
-          ))}
-        </div>
-      </Card>
-      <Card title="Icons" description={`<Icon name="…" />, ${ICON_NAMES.length} of them. Add more from lucide.dev in ui/icon.tsx.`}>
-        <div className="kit-icons">
-          {ICON_NAMES.map(name => (
-            <div key={name} className="kit-icon">
-              <Icon name={name} size={20} />
-              {name}
-            </div>
-          ))}
         </div>
       </Card>
     </div>

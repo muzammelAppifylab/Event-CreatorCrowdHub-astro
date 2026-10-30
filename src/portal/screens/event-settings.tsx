@@ -19,7 +19,8 @@ import {
 } from '../../lib/event-schemas';
 import {api, ApiError, read} from '../api';
 import {eventSettingsQuery, fieldAria, focusFirstInvalid} from '../events-queries';
-import {Button, Card, Checkbox, ErrorNote, Field, IconButton, LoadingBlock, PageHeader, RadioCards, Select, useToast} from '../ui';
+import {useState as useTabState} from 'react';
+import {Button, Card, Checkbox, ErrorNote, Field, IconButton, LoadingBlock, PageHeader, RadioCards, Select, Tabs, useToast} from '../ui';
 
 const FONT_INFO: Record<FontPreset, {title: string; description: string}> = {
   inter: {title: 'Sans', description: 'Clean and neutral (Inter).'},
@@ -66,18 +67,31 @@ function useSave(onFields: (fields: FieldErrors) => void) {
 export function EventSettings() {
   const query = useQuery(eventSettingsQuery);
   const settings = query.data?.settings;
+  const [tab, setTab] = useTabState<'branding' | 'defaults'>('branding');
   return (
     <div className="app-page screen-event-settings">
-      <PageHeader title="Event settings" description="How your events look, what new events start with, and the emails every event sends." />
+      <PageHeader title="Settings" description="How your events look and what new events start with." />
       {query.error && <ErrorNote error={query.error} />}
       {!settings ? (
         !query.error && <LoadingBlock rows={4} />
       ) : (
-        <>
-          <BrandingCard key={`b-${settings.updatedAt}`} settings={settings} />
-          <DefaultsCard key={`d-${settings.updatedAt}`} settings={settings} />
-          <EmailsCard key={`e-${settings.updatedAt}`} settings={settings} />
-        </>
+        <Tabs
+          label="Settings sections"
+          value={tab}
+          onChange={setTab}
+          items={[
+            {value: 'branding', label: 'Branding'},
+            {value: 'defaults', label: 'Defaults'},
+          ]}>
+          {/* Both stay mounted so unsaved input survives switching tabs. */}
+          <div className="app-page" hidden={tab !== 'branding'}>
+            <BrandingCard key={`b-${settings.updatedAt}`} settings={settings} />
+          </div>
+          <div className="app-page" hidden={tab !== 'defaults'}>
+            <DefaultsCard key={`d-${settings.updatedAt}`} settings={settings} />
+            <EmailsCard key={`e-${settings.updatedAt}`} settings={settings} />
+          </div>
+        </Tabs>
       )}
     </div>
   );

@@ -19,6 +19,7 @@
  * `Organization`; a page passes its own in `jsonLd` (a post, a job).
  */
 import '../styles/global.css';
+import '../styles/public.css';
 
 import {ClientRouter} from 'astro:transitions';
 
@@ -57,6 +58,12 @@ interface Props {
   secretInUrl?: boolean;
   /** The page's own structured data (src/lib/seo.ts): `postJsonLd(…)`, `jobJsonLd(…)`. */
   jsonLd?: JsonLd;
+  /**
+   * A guest-facing page (event, RSVP, invite, poll, privacy, errors): like the original app's
+   * PublicLayout it has no site header, only a skip link, the page and a thin "Powered by" footer.
+   * `?embed=1` drops that chrome too (the iframe embed).
+   */
+  guest?: boolean;
 }
 
 const {
@@ -73,7 +80,9 @@ const {
   noindex = false,
   secretInUrl = false,
   jsonLd,
+  guest = false,
 } = Astro.props;
+const embed = guest && Astro.url.searchParams.get('embed') === '1';
 const name = site?.name ?? 'My site';
 const fullTitle = title ? `${title} · ${name}` : name;
 const description = pageDescription ?? withName(SITE.description, name);
@@ -128,8 +137,9 @@ const structured = indexable
         portal has no router, so a link to it is a normal page load. Page scripts run on `astro:page-load`. */}
     <ClientRouter />
   </head>
-  <body data-viewer={viewer.state} data-static={hydrate ? '1' : undefined}>
-    <a class="skip-link" href="#main">Skip to content</a>
+  <body class:list={['pub', {'pub-guest': guest}]} data-viewer={viewer.state} data-static={hydrate ? '1' : undefined}>
+    {!embed && <a class={guest ? 'g-skip' : 'skip-link'} href="#main">Skip to content</a>}
+    {!guest && (
     <header class="site-header">
       <div class="wrap site-header-inner">
         <a href="/" class="brand" data-astro-prefetch>
@@ -178,9 +188,19 @@ const structured = indexable
         </div>
       </div>
     </header>
+    )}
 
     <slot />
 
+    {guest && !embed && (
+      <footer class="g-footer">
+        <div class="page-container g-footer-in">
+          <span>Powered by <a href="/" data-astro-prefetch>{name}</a></span>
+          <a href="/privacy/" data-astro-prefetch>Privacy</a>
+        </div>
+      </footer>
+    )}
+    {!guest && (
     <footer class="site-footer">
       <div class="wrap site-footer-inner">
         <div class="footer-brand">
@@ -227,6 +247,7 @@ const structured = indexable
         <span data-brand-text="© {year} {name}">© {new Date().getUTCFullYear()} {name}</span>
       </div>
     </footer>
+    )}
 
     <script>
       import {logout, refreshSession} from '../platform/browser';

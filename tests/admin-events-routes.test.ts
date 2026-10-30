@@ -28,6 +28,7 @@ vi.mock('../src/platform/guards', async () => {
 });
 vi.mock('../src/platform/auth', () => ({audit: vi.fn(async () => undefined)}));
 
+import {audit} from '../src/platform/auth';
 import {adminEventRoutes} from '../src/server/routes/admin-events';
 import {eventSettingsRoutes} from '../src/server/routes/event-settings';
 
@@ -75,6 +76,7 @@ beforeEach(() => {
         return {count: 1};
       }),
     },
+    ticketOrder: {updateMany: vi.fn(async (args: Record<string, unknown>) => { calls.event.push({orders: args}); return {count: 2}; })},
     eventSettings: {
       findUnique: vi.fn(async () => null),
       upsert: vi.fn(async (args: {update: Record<string, unknown>}) => {
@@ -181,6 +183,23 @@ describe('/:id', () => {
     stored = row({status: 'cancelled'});
     expect((await json(`/admin-events/${ID}/publish`, 'POST')).status).toBe(409);
     expect((await json(`/admin-events/${ID}/unpublish`, 'POST')).status).toBe(409);
+  });
+
+  it('cancel marks paid orders refund_due and audits the count', async () => {
+    stored = row({status: 'published'});
+    const res = await json(`/admin-events/${ID}/cancel`, 'POST');
+    expect(res.status).toBe(200);
+    expect(calls.event).toContainEqual({orders: {where: {status: 'paid', rsvp: {eventId: ID}}, data: {status: 'refund_due'}}});
+    expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'event_cancelled', meta: {refundDue: 2}}));
+  });
+
+  it('refuses http: and javascript: links', async () => {
+    for (const field of ['coverImageUrl', 'mapUrl', 'thankYouLink']) {
+      for (const bad of ['http://example.com/a', 'javascript:alert(1)', 'data:text/html,x']) {
+        const res = await json(`/admin-events/${ID}`, 'PATCH', {[field]: bad});
+        expect(res.status, `${field} ${bad}`).toBe(422);
+      }
+    }
   });
 
   it('duplicate needs valid new dates', async () => {

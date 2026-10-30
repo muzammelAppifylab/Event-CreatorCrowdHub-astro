@@ -1,0 +1,136 @@
+/*
+ * Marquee — primitive tokens.
+ *
+ * Raw values only. Components never read these directly; they read the
+ * semantic layer in theme.css (exposed to Tailwind in globals.css).
+ *
+ * Lineage:
+ *   ink / paper / greys ........ DICE (monochrome chrome, black bands)
+ *   washes / invite palettes ... Partiful (celebration lives in surfaces + artwork)
+ *   rsvp semantics ............. Partiful (going / maybe / can't go)
+ *   signal mint ................ DICE (the one "you're in" confirmation colour)
+ */
+
+:root {
+  /* ── Ink & paper ─────────────────────────────────────────────── */
+  --ink-1000: #000000; /* pitch black: primary text, filled pills, bands */
+  --ink-900: #111111; /* raised surface on black */
+  --ink-850: #1a1a1a; /* card on black */
+  --ink-800: #262626;
+  --ink-700: #333333; /* graphite: secondary text, charcoal fills */
+  --ink-600: #595959; /* slate: muted text (7.0:1 on white) */
+  --ink-500: #737373; /* minimum grey for text on white (4.7:1) */
+  --ink-400: #a3a3a3; /* muted text on black (8.6:1) */
+  --ink-300: #cccccc; /* silver: disabled fills */
+  --ink-200: #d9d9d9; /* concrete: hairlines, input outlines */
+  --ink-150: #e6e6e6;
+  --ink-100: #eeeeee; /* ash: poster backing, soft fills */
+  --ink-50: #f6f6f6; /* lightest tint: hover, table zebra */
+  --paper: #ffffff;
+
+  /* ── Signal (confirmation only) ──────────────────────────────── */
+  --mint-400: #7ffeb1; /* "you're in" ticket screen — never in chrome */
+  --mint-900: #003d1c;
+
+  /* ── RSVP semantics ──────────────────────────────────────────── */
+  --leaf-500: #31c431; /* going */
+  --leaf-100: #dcf6dc;
+  --leaf-800: #11650f;
+  --amber-500: #ffae00; /* maybe / pending */
+  --amber-100: #fff1cc;
+  --amber-800: #7a4a00;
+  --ember-500: #e5341f; /* can't go / declined / destructive */
+  --ember-600: #c42a17; /* white text on this passes AA (5.4:1) */
+  --ember-100: #fde2de;
+  --ember-800: #8a1a0c;
+  --periwinkle-400: #96c4ff; /* waitlisted / info */
+  --periwinkle-100: #e3eeff;
+  --midnight-900: #001666;
+
+  /* ── Party washes (surfaces only, never on controls or text) ── */
+  --wash-pink-from: #f8c4ff;
+  --wash-pink-to: #f0b6e0;
+  --wash-lilac: #e9e1ff;
+  --wash-periwinkle: #d7e6ff;
+  --wash-spearmint-from: #85dadc;
+  --wash-spearmint-to: #c0e2e2;
+
+  /* ── Invite / poster palette (artwork only) ──────────────────── */
+  --poster-tomato: #ff5a36;
+  --poster-pink: #ff8fd8;
+  --poster-lime: #d4ff3f;
+  --poster-cobalt: #2b44ff;
+  --poster-teal: #0f8b7d;
+  --poster-butter: #ffe27a;
+  --poster-plum: #4b1d52;
+  --poster-cream: #fff4e0;
+
+  /* ── Type families ───────────────────────────────────────────── */
+  --font-family-poster: "Anton", "Bebas Neue", "Oswald", Impact, sans-serif;
+  --font-family-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-family-ui: "Hanken Grotesk Variable", "Hanken Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-family-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-family-serif: "Young Serif", Georgia, "Times New Roman", serif;
+  --font-family-rounded: "Nunito Variable", "Nunito", ui-rounded, system-ui, sans-serif;
+
+  /* ── Type scale (size / line-height / tracking) ──────────────── */
+  --fs-micro: 0.6875rem; /* 11 */
+  --fs-caption: 0.75rem; /* 12 */
+  --fs-body-sm: 0.875rem; /* 14 */
+  --fs-body: 1rem; /* 16 */
+  --fs-lead: 1.125rem; /* 18 */
+  --fs-title-sm: 1.25rem; /* 20 */
+  --fs-title: 1.5rem; /* 24 */
+  --fs-heading: 2rem; /* 32 */
+  --fs-display-sm: 2.5rem; /* 40 */
+  --fs-display: 3rem; /* 48 */
+  --fs-display-lg: 4rem; /* 64 */
+  --fs-poster: clamp(3.5rem, 2rem + 7.5vw, 6.625rem); /* 56 → 106 */
+  --fs-poster-xl: clamp(4.5rem, 1rem + 14vw, 11rem); /* presenter/projector */
+
+  --lh-poster: 0.92;
+  --lh-display: 1;
+  --lh-heading: 1.12;
+  --lh-title: 1.25;
+  --lh-body: 1.5;
+  --lh-tight: 1.2;
+
+  --tracking-poster: 0.005em;
+  --tracking-display: -0.03em;
+  --tracking-heading: -0.02em;
+  --tracking-body: 0;
+  --tracking-label: 0.06em; /* DICE's open tracking: uppercase labels + buttons */
+
+  /* ── Radius ──────────────────────────────────────────────────── */
+  --r-xs: 4px; /* nav underline pills, tiny chips */
+  --r-sm: 8px; /* thumbnails, poster art in lists (DICE) */
+  --r-md: 12px; /* inputs, cards, images (Partiful) */
+  --r-lg: 16px; /* dialogs, sheets, popovers */
+  --r-xl: 24px; /* feature panels, ticket stub */
+  --r-2xl: 40px; /* phone frame, presenter panels */
+  --r-pill: 999px; /* every button, badge, tab, toggle */
+
+  /* ── Elevation (only things that float) ──────────────────────── */
+  --shadow-color: 0 0% 0%;
+  --elev-1: 0 1px 2px hsl(var(--shadow-color) / 0.06), 0 2px 8px -2px hsl(var(--shadow-color) / 0.08);
+  --elev-2: 0 1px 2px hsl(var(--shadow-color) / 0.05), 0 4px 12px -2px hsl(var(--shadow-color) / 0.08), 0 12px 32px -8px hsl(var(--shadow-color) / 0.1);
+  --elev-3: 0 0.8px 2.4px -0.6px hsl(var(--shadow-color) / 0.05), 0 2.4px 7.2px -1.25px hsl(var(--shadow-color) / 0.05),
+    0 6.4px 19.1px -1.9px hsl(var(--shadow-color) / 0.05), 0 20px 60px -2.5px hsl(var(--shadow-color) / 0.12);
+
+  /* ── Motion ──────────────────────────────────────────────────── */
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* expo out: default for everything */
+  --motion-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --motion-ease-snap: cubic-bezier(0.22, 1, 0.36, 1); /* quint out: RSVP choice, vote tap */
+  --dur-instant: 90ms;
+  --dur-fast: 160ms;
+  --dur-base: 240ms;
+  --dur-slow: 420ms;
+  --dur-deal: 700ms; /* invite-card fan */
+
+  /* ── Layout ──────────────────────────────────────────────────── */
+  --page-max: 1200px;
+  --prose-max: 68ch;
+  --gutter: clamp(1rem, 0.5rem + 2.5vw, 2.5rem);
+  --section-gap: clamp(3.5rem, 2rem + 5vw, 5rem);
+  --nav-height: 4rem;
+}

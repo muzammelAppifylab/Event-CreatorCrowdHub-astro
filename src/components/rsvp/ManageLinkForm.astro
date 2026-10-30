@@ -6,13 +6,13 @@ interface Props {
 const {slug} = Astro.props;
 ---
 
-<form id="manage-link-form" class="auth-form" novalidate data-slug={slug}>
+<form id="manage-link-form" class="g-form" novalidate data-slug={slug}>
   <div class="field">
     <label for="manage-link-email">Already RSVP’d? Email me my link</label>
     <input id="manage-link-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" />
   </div>
   <p class="notice" data-form-status hidden></p>
-  <button class="button ghost" type="submit">Send my link</button>
+  <div class="g-form-end"><button class="g-btn g-btn-outline g-btn-lg" type="submit">Send my link</button></div>
 </form>
 
 <script>

@@ -7,6 +7,7 @@
 import Base from '../../../layouts/Base.astro';
 import type {ConsentState} from '../../../lib/privacy-types';
 import {app} from '../../../server/app';
+import {inProcessHeaders} from '../../../server/privacy';
 import {pageContext} from '../../../server/page';
 
 export const prerender = false;
@@ -14,7 +15,7 @@ export const prerender = false;
 const token = Astro.params.token ?? '';
 const [{site, viewer}, res] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  Promise.resolve(app.request(`/site-api/privacy/unsubscribe/${encodeURIComponent(token)}`)).catch(() => null),
+  Promise.resolve(app.request(`/site-api/privacy/unsubscribe/${encodeURIComponent(token)}`, {headers: inProcessHeaders(Astro.request)})).catch(() => null),
 ]);
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
@@ -24,9 +25,9 @@ const invalid = !info;
 if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
 ---
 
-<Base site={site} viewer={viewer} title="Unsubscribe" noindex>
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+<Base site={site} viewer={viewer} title="Unsubscribe" noindex guest secretInUrl>
+  <main id="main" tabindex="-1" class="g-main">
+    <div class="page-container g-doc">
       {
         invalid ? (
           <>
@@ -42,14 +43,14 @@ if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
           <>
             <h1>Unsubscribe from updates</h1>
             <p class="muted">Stop marketing updates from the host of {info.event.title}. Emails about your RSVP itself still arrive.</p>
-            <form id="unsubscribe-form" class="auth-form" novalidate data-token={token}>
+            <form id="unsubscribe-form" class="g-form" novalidate data-token={token}>
               <p class="notice" data-form-status hidden />
-              <button class="button" type="submit">Unsubscribe</button>
+              <button class="g-btn g-btn-lg" type="submit">Unsubscribe</button>
             </form>
           </>
         )
       }
-      <p class="auth-links"><a href="/privacy/">How we handle your data</a></p>
+      <p class="g-body-sm g-doc-link"><a href="/privacy/">How we handle your data</a></p>
     </div>
   </main>
 </Base>

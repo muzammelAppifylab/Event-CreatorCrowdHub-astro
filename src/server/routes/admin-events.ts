@@ -35,6 +35,7 @@ import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import type {Viewer} from '../../platform/types';
 import {PERMISSIONS} from '../permissions';
+import {markEventOrdersRefundDue} from '../ticket-checkout';
 
 /**
  * Events, admin side. Everything here needs `site:event:manage` (`EVENT_MANAGE`);
@@ -576,7 +577,14 @@ export const adminEventRoutes = new Hono<Env>()
     if (!row) return notFound(c);
     if (row.status === 'cancelled') return c.json(problem('conflict', 'This event is already cancelled.'), 409);
     await db.event.updateMany({where: {id, status: {not: 'cancelled'}}, data: {status: 'cancelled'}});
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'event_cancelled', target: ['event', id]});
+    // Paid tickets become `refund_due` so the owner sees what to refund; the cancel itself already committed.
+    let refundDue = 0;
+    try {
+      refundDue = await markEventOrdersRefundDue(db, id);
+    } catch (err) {
+      console.error(`event cancel: refund_due marking failed: ${(err as Error).message}`.slice(0, 200));
+    }
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'event_cancelled', target: ['event', id], meta: {refundDue}});
     for (const hook of eventCancelHooks) await hook(db, id);
     return c.json({event: await loadDetail(db, id)});
   })

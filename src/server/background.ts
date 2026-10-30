@@ -2,6 +2,7 @@ import {DontRetry, defineBackground} from '../platform/background';
 import {deliverWebhookJob} from './webhook-delivery';
 import {getDb} from '../platform/db';
 import {GUEST_EMAIL_LIST, type GuestEmailKind, sendGuestEmail} from './jobs/guest-emails';
+import {runRetention} from './jobs/retention';
 import {runScheduler} from './jobs/run';
 
 /**
@@ -9,6 +10,7 @@ import {runScheduler} from './jobs/run';
  *
  *   event-scheduler  every 5 minutes (background.json): reminders, "we're live", thank-yous,
  *                    lapsed waitlist claims, expired payment holds. Bounded and idempotent.
+ *   guest-retention  daily (background.json): anonymises RSVPs of events that ended over RETENTION_DAYS ago.
  *   rsvp-emails      one transactional email to one guest (confirmation after payment, a
  *                    waitlist offer, hold expired). Sent with `queueGuestEmail()`.
  *
@@ -30,6 +32,13 @@ export const background = defineBackground({
     );
     // A step that threw is retried by the next tick; fail the run so the owner sees it in the Jobs tab.
     if (summary.errors.length > 0) throw new Error(summary.errors.slice(0, 3).join(' | ').slice(0, 400));
+  },
+
+  'guest-retention': async () => {
+    const db = getDb();
+    if (!db) throw new Error('The Site Database is off.');
+    const {erased, skipped} = await runRetention(db, new Date());
+    console.info(`[retention] erased=${erased} skipped=${skipped}`);
   },
 
   [GUEST_EMAIL_LIST]: async (data: {kind?: unknown; rsvpId?: unknown}) => {

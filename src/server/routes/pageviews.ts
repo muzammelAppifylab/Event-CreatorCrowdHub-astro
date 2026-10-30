@@ -16,6 +16,13 @@ import {normaliseSource} from './admin-analytics';
  * limiter; neither is stored or logged. The hash is salted with an HMAC of the UTC date, so it
  * rotates at midnight and yesterday's hashes cannot be linked to today's. One row per
  * (event, visitor, day): `page_views_event_visitor_day_uq` + `ON CONFLICT DO NOTHING`.
+ *
+ * ABUSE LIMITS ARE BEST EFFORT: the counters live in this isolate's memory (bounded to MAX_TRACKED keys,
+ * oldest windows evicted, then cleared), so N isolates allow roughly N x the limit. A database-backed
+ * limiter would cost a write per beacon (more than the beacon itself), so it is deliberately not used.
+ * The real bounds are the unique index (one row per visitor hash per day) and the per-event cap; a
+ * spammer rotating user agents can only add analytics noise, never reach other data. Listed in the
+ * security audit follow-ups.
  */
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,99}$/;

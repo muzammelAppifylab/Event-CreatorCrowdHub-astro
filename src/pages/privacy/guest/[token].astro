@@ -9,6 +9,7 @@ import Base from '../../../layouts/Base.astro';
 import {formatDate} from '../../../lib/format';
 import type {GuestPrivacySummary} from '../../../lib/privacy-types';
 import {app} from '../../../server/app';
+import {inProcessHeaders} from '../../../server/privacy';
 import {pageContext} from '../../../server/page';
 
 export const prerender = false;
@@ -16,7 +17,7 @@ export const prerender = false;
 const token = Astro.params.token ?? '';
 const [{site, viewer}, res] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  Promise.resolve(app.request(`/site-api/privacy/guest/${encodeURIComponent(token)}`)).catch(() => null),
+  Promise.resolve(app.request(`/site-api/privacy/guest/${encodeURIComponent(token)}`, {headers: inProcessHeaders(Astro.request)})).catch(() => null),
 ]);
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
@@ -28,19 +29,19 @@ const exportHref = `/site-api/privacy/guest/${encodeURIComponent(token)}/export`
 const exportOpen = info ? new Date(info.exportUntil).getTime() > Date.now() : false;
 ---
 
-<Base site={site} viewer={viewer} title="Your data" noindex>
-  <main id="main" tabindex="-1" class="wrap narrow section">
+<Base site={site} viewer={viewer} title="Your data" noindex guest secretInUrl>
+  <main id="main" tabindex="-1" class="g-main"><div class="page-container g-doc">
     {
       invalid ? (
-        <div class="card auth-card">
+        <div class="g-card g-card-pad">
           <h1>This link is not valid</h1>
           <p class="muted">It may have been replaced, or the data was already erased. Use the link in your latest email from the host.</p>
         </div>
       ) : (
         <>
-          <p class="eyebrow">{info.event.title}</p>
+          <p class="g-body-sm g-muted">{info.event.title}</p>
           <h1>Your data</h1>
-          <section class="card">
+          <section class="g-card g-card-pad">
             <h2>What we hold</h2>
             <p>
               {info.name} · {info.email}
@@ -55,12 +56,12 @@ const exportOpen = info ? new Date(info.exportUntil).getTime() > Date.now() : fa
               </p>
             )}
           </section>
-          <section class="card">
+          <section class="g-card g-card-pad">
             <h2>Download your data</h2>
             <p class="muted">Everything we keep about you for this event, as one JSON file.</p>
             {
               exportOpen ? (
-                <a class="button" href={exportHref} download>
+                <a class="g-btn g-btn-lg g-fit" href={exportHref} download>
                   Download JSON
                 </a>
               ) : (
@@ -68,31 +69,31 @@ const exportOpen = info ? new Date(info.exportUntil).getTime() > Date.now() : fa
               )
             }
           </section>
-          <section class="card">
+          <section class="g-card g-card-pad">
             <h2>Erase your data</h2>
             <p class="muted">
               Removes your name, email and answers and frees your seat. Payment records stay without your name. This cannot be undone.
             </p>
             {
               info.canErase ? (
-                <form id="erase-form" class="auth-form" novalidate data-token={token}>
+                <form id="erase-form" class="g-form" novalidate data-token={token}>
                   <div class="field">
                     <label for="erase-confirm">Type erase to confirm</label>
                     <input id="erase-confirm" name="confirm" type="text" autocomplete="off" placeholder="erase" />
                   </div>
                   <p class="notice" data-form-status hidden />
-                  <button class="button danger" type="submit">Erase my data</button>
+                  <button class="g-btn g-btn-lg g-btn-destructive" type="submit">Erase my data</button>
                 </form>
               ) : (
-                <p class="notice">Your payment is still being completed. Come back once it has finished or expired.</p>
+                <p class="g-notice">Your payment is still being completed. Come back once it has finished or expired.</p>
               )
             }
           </section>
         </>
       )
     }
-    <p class="auth-links"><a href="/privacy/">How we handle your data</a></p>
-  </main>
+    <p class="g-body-sm g-doc-link"><a href="/privacy/">How we handle your data</a></p>
+  </div></main>
 </Base>
 
 <script>

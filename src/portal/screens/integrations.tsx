@@ -212,7 +212,7 @@ export function Integrations() {
                   Add webhook
                 </Button>
               }>
-              Add a receiver URL to be told when someone RSVPs, pays or checks in.
+              Add an endpoint to start receiving events when someone RSVPs, pays or checks in.
             </EmptyState>
           }
         />

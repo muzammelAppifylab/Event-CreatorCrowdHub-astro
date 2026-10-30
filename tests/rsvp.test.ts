@@ -134,3 +134,42 @@ describe('manageTokenAllows', () => {
     expect(manageTokenAllows(end, 'read', new Date('2027-06-15T00:00:00Z'))).toBe(false);
   });
 });
+
+describe('place: Maybe and paid tickets (audit H1)', () => {
+  const PAID = {id: TICKET, priceCents: 5000, quantity: null, salesEndAt: null};
+  const maybe = {
+    id: 'r1',
+    response: 'maybe',
+    status: 'confirmed',
+    seats: 1,
+    ticketTypeId: null,
+    waitlistPosition: null,
+    confirmedAt: new Date('2026-10-01T00:00:00Z'),
+    claimExpiresAt: null,
+  };
+
+  it('Maybe -> Going on a paid ticket is held for payment, never confirmed', () => {
+    const p = place(base({current: maybe, response: 'going', ticket: PAID, anyPaidTicket: true, paymentsEnabled: true}));
+    expect(p.status).toBe('awaiting_payment');
+    expect(p.confirmedAt).toBeNull();
+  });
+
+  it('Maybe -> Going on a paid ticket with payments off is refused', () => {
+    expect(reason(() => place(base({current: maybe, response: 'going', ticket: PAID, anyPaidTicket: true})))).toBe('payments_unavailable');
+  });
+
+  it('Maybe -> Going without choosing a ticket on a paid event is refused', () => {
+    expect(reason(() => place(base({current: maybe, response: 'going', ticket: null, anyPaidTicket: true, paymentsEnabled: true})))).toBe('validation_failed');
+  });
+
+  it('a Maybe on a paid ticket takes no seat and no payment', () => {
+    const p = place(base({response: 'maybe', ticket: PAID, anyPaidTicket: true, paymentsEnabled: true, seatsTaken: 10}));
+    expect(p.status).toBe('confirmed');
+  });
+
+  it('a settled paid Going guest keeps their seat on an unchanged edit', () => {
+    const going = {...maybe, response: 'going', ticketTypeId: TICKET};
+    const p = place(base({current: going, response: 'going', ticket: PAID, anyPaidTicket: true, paymentsEnabled: true}));
+    expect(p.status).toBe('confirmed');
+  });
+});

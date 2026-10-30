@@ -76,7 +76,7 @@ export const eventRoutes = new Hono()
 
   .get('/:slug', withDb, async c => {
     const event = await c.var.db.event.findFirst({
-      select: {...summarySelect, venueAddress: true, mapUrl: true, joinUrl: true, visibility: true, waitlistEnabled: true},
+      select: {...summarySelect, venueAddress: true, mapUrl: true, visibility: true, waitlistEnabled: true},
       where: {slug: c.req.param('slug'), status: 'published', visibility: {in: ['public', 'unlisted']}, deletedAt: null},
     });
     if (!event) return c.json(problem('not_found', 'No such event.'), 404);

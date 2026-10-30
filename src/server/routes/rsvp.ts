@@ -41,7 +41,10 @@ import {emitPromoted, emitWebhook, rsvpPayload} from '../webhook-emit';
  * always the same 404.
  *
  *   GET   /events/:slug?invite=        the RSVP form's rules, tickets, seats left
- *   POST  /events/:slug                submit (free tickets; paid: `setPaidCheckoutHook`)
+ *   POST  /events/:slug                submit: ALWAYS 202 `check_email` for a new or an existing email (no
+ *                                      existence oracle); the manage link is emailed; a paid ticket adds `checkoutUrl`
+ *                                      (`setPaidCheckoutHook`). Residual: a full/closed event still answers 409 to a
+ *                                      NEW email only (the repeat check runs first).
  *   POST  /events/:slug/manage-link    "lost my link": always 202, emails a fresh link
  *   GET   /invite/:token               invite landing (private events included)
  *   GET   /manage/:token               the guest's RSVP (confirmation + manage page)
@@ -54,7 +57,10 @@ import {emitPromoted, emitWebhook, rsvpPayload} from '../webhook-emit';
  * Emails go out after commit, in the background: a failed email never undoes a seat.
  *
  * Index: rsvps(event_id, status), unique (event_id, email), unique manage_token / ticket_code.
- * Rate limits are per Worker isolate (best effort), like the source app.
+ * Rate limits are per Worker isolate (best effort): `AttemptKind` in the managed platform/auth/rate-limit.ts is
+ * a closed union with no RSVP kind, so the DB-backed limiter can't be used without editing managed files.
+ * Manage-link requests rotate the token (only a hash is stored, so the old link cannot be re-sent); capped at 3
+ * per (event, email) per hour. See docs/porting/SECURITY-AUDIT.md "Follow-ups".
  */
 
 // ---------------------------------------------------------------- paid-ticket hook (payments agent)
@@ -382,7 +388,9 @@ export function place(i: PlaceInput): Placement {
       throw conflict(decision.reason === 'closed' ? 'rsvps_closed' : 'event_full');
   }
   // A seat on a paid ticket is not confirmed until the payment lands.
-  if (paid && placement.status === 'confirmed' && current?.status !== 'confirmed') return AWAITING;
+  // Keyed on HOLDING a settled seat, not on `status`: a Maybe is `confirmed` without a seat or a payment,
+  // so Maybe -> Going on a paid ticket must pay like a fresh RSVP (audit H1).
+  if (paid && placement.status === 'confirmed' && !(holder && current?.status === 'confirmed')) return AWAITING;
   return placement;
 }
 
@@ -530,7 +538,7 @@ async function submitRsvp(
       data: {
         eventId,
         inviteId,
-        ticketTypeId: input.ticketTypeId ?? null,
+        ticketTypeId: input.response === 'maybe' ? null : (input.ticketTypeId ?? null),
         name: input.name,
         email: input.email,
         response: input.response,
@@ -568,7 +576,8 @@ async function updateRsvp(db: PrismaClient, rsvpId: string, input: RsvpFormInput
         plusOnes: input.plusOnes,
         seats: seatsFor(input.plusOnes),
         marketingConsent: input.marketingConsent,
-        ticketTypeId: input.ticketTypeId ?? current.ticketTypeId,
+        // A Maybe holds no seat and implies no ticket: it is dropped, so Going must choose (and pay for) one.
+        ticketTypeId: input.response === 'maybe' ? null : (input.ticketTypeId ?? current.ticketTypeId),
         ...placement,
       },
       select: rsvpSelect,
@@ -582,7 +591,7 @@ async function updateRsvp(db: PrismaClient, rsvpId: string, input: RsvpFormInput
 async function transition(
   db: PrismaClient,
   rsvpId: string,
-  apply: (current: RsvpRow, event: EventRow, now: Date) => Prisma.RsvpUpdateInput | null
+  apply: (current: RsvpRow, event: EventRow, now: Date) => Prisma.RsvpUncheckedUpdateInput | null
 ) {
   const now = new Date();
   return db.$transaction(async tx => {
@@ -631,6 +640,39 @@ export async function confirmRsvpPayment(
   return {seated};
 }
 
+/** A payment could not start for an EDIT: put the RSVP back exactly as it was (a Maybe stays a Maybe). */
+async function revertEdit(db: PrismaClient, previous: RsvpRow, origin: string): Promise<void> {
+  const out = await transition(db, previous.id, current =>
+    current.status === 'awaiting_payment'
+      ? {
+          response: previous.response,
+          status: previous.status,
+          plusOnes: previous.plusOnes,
+          seats: previous.seats,
+          ticketTypeId: previous.ticketTypeId,
+          waitlistPosition: previous.waitlistPosition,
+          confirmedAt: previous.confirmedAt,
+          claimExpiresAt: previous.claimExpiresAt,
+        }
+      : null
+  );
+  await sendPromotions(db, origin, out.event, out.promoted);
+}
+
+/** Runs the paid-checkout hook for an `awaiting_payment` RSVP; `null` when checkout could not start. */
+async function startPayment(origin: string, event: EventRow, rsvp: RsvpRow, token: string): Promise<string | null> {
+  const ticket = event.ticketTypes.find(t => t.id === rsvp.ticketTypeId);
+  if (!paidCheckout || !ticket || !rsvp.ticketTypeId) return null;
+  const started = await paidCheckout({
+    origin,
+    event: {id: event.id, slug: event.slug, title: event.title},
+    rsvp: {id: rsvp.id, name: rsvp.name, email: rsvp.email, seats: rsvp.seats, ticketTypeId: rsvp.ticketTypeId},
+    ticket: {id: ticket.id, name: ticket.name, priceCents: ticket.priceCents, currency: ticket.currency},
+    manageToken: token,
+  }).catch(() => null);
+  return started?.checkoutUrl ?? null;
+}
+
 /** HOOK for payments: checkout expired or abandoned; the held seats go back to the waitlist. */
 export async function releaseRsvpHold(db: PrismaClient, rsvpId: string, origin: string): Promise<void> {
   const out = await transition(db, rsvpId, current =>
@@ -677,7 +719,8 @@ async function emailDataFor(db: PrismaClient, origin: string, event: EventRow, r
       name: rsvp.name,
       response: rsvp.response,
       status: rsvp.status,
-      ticketCode: rsvp.ticketCode,
+      // Only a confirmed Going guest holds a ticket: a Maybe, waitlisted or unpaid guest gets none.
+      ticketCode: rsvp.response === 'going' && rsvp.status === 'confirmed' ? rsvp.ticketCode : null,
       manageUrl: `${origin}/r/${token}/`,
       waitlistPosition: rsvp.waitlistPosition,
       consentUrl: null,
@@ -775,6 +818,7 @@ const emailBody = validator('json', (value, c) => {
 
 const CHECK_EMAIL: RsvpSubmitResult = {
   status: 'check_email',
+  checkoutUrl: null,
   message: 'If that email can RSVP, we have sent it a link to view or change the RSVP.',
 };
 
@@ -826,22 +870,11 @@ export const rsvpRoutes = new Hono()
 
     if (rsvp.status === 'awaiting_payment') {
       // HOOK: paid ticket. The seat is held; the payments agent starts the checkout, and a failure frees the seat.
-      const ticket = event.ticketTypes.find(t => t.id === rsvp.ticketTypeId);
-      const started =
-        paidCheckout && ticket && rsvp.ticketTypeId
-          ? await paidCheckout({
-              origin,
-              event: {id: event.id, slug: event.slug, title: event.title},
-              rsvp: {id: rsvp.id, name: rsvp.name, email: rsvp.email, seats: rsvp.seats, ticketTypeId: rsvp.ticketTypeId},
-              ticket: {id: ticket.id, name: ticket.name, priceCents: ticket.priceCents, currency: ticket.currency},
-              manageToken: token,
-            }).catch(() => null)
-          : null;
-      if (!started) {
+      checkoutUrl = await startPayment(origin, event, rsvp, token);
+      if (!checkoutUrl) {
         await releaseRsvpHold(db, rsvp.id, origin).catch(() => undefined);
         return c.json(problem('payments_unavailable', RSVP_CONFLICTS.payments_unavailable!), 409);
       }
-      checkoutUrl = started.checkoutUrl;
     }
 
     hit(`mail:${event.id}:${rsvp.email}`, EMAIL_CAP.limit, EMAIL_CAP.windowMs);
@@ -851,14 +884,11 @@ export const rsvpRoutes = new Hono()
     background(c, sendPromotions(db, origin, event, out.promoted));
     emitWebhook(c, db, 'rsvp.created', rsvpPayload(rsvp));
     emitPromoted(c, db, out.promoted);
-    const body: RsvpSubmitResult = {
-      status: rsvp.status,
-      managePath: `/r/${token}/`,
-      waitlistPosition: rsvp.status === 'waitlisted' ? rsvp.waitlistPosition : null,
-      checkoutUrl,
-    };
+    // Same status and shape as a repeat RSVP (no existence oracle): the manage link, the only way to the
+    // guest's page, goes to their inbox and never into this response. Only a paid RSVP adds the pay link.
+    const body: RsvpSubmitResult = {...CHECK_EMAIL, checkoutUrl};
     privateHeaders(c);
-    return c.json(body, 201);
+    return c.json(body, 202);
   })
 
   // "Lost my link": always 202, so it can't tell anyone whether an email has RSVP'd.
@@ -928,7 +958,7 @@ export const rsvpRoutes = new Hono()
         status: rsvp.status,
         plusOnes: rsvp.plusOnes,
         seats: rsvp.seats,
-        ticketCode: rsvp.ticketCode,
+        ticketCode: confirmed && rsvp.response === 'going' ? rsvp.ticketCode : null,
         ticketTypeId: rsvp.ticketTypeId,
         marketingConsent: rsvp.marketingConsent,
         waitlistPosition: rsvp.status === 'waitlisted' ? rsvp.waitlistPosition : null,
@@ -963,14 +993,23 @@ export const rsvpRoutes = new Hono()
     if (!parsed.ok) return c.json({...problem('validation_failed', 'Some fields need attention.'), fields: parsed.fields}, 422);
     try {
       const out = await updateRsvp(db, found.rsvp.id, parsed.value, new Date());
+      let checkoutUrl: string | null = null;
+      if (out.rsvp.status === 'awaiting_payment') {
+        // A move to a seat on a paid ticket (e.g. Maybe -> Going) pays exactly like a fresh RSVP.
+        checkoutUrl = await startPayment(originOf(c), found.event, out.rsvp, c.req.valid('param').token);
+        if (!checkoutUrl) {
+          await revertEdit(db, out.previous, originOf(c)).catch(() => undefined);
+          return c.json(problem('payments_unavailable', RSVP_CONFLICTS.payments_unavailable!), 409);
+        }
+      }
       background(c, sendPromotions(db, originOf(c), found.event, out.promoted));
       emitWebhook(c, db, out.rsvp.status === 'cancelled' ? 'rsvp.cancelled' : 'rsvp.updated', rsvpPayload(out.rsvp));
       emitPromoted(c, db, out.promoted);
       // Tell the guest when their status changed (a new seat, the waitlist, awaiting approval). Same link.
-      if (out.rsvp.status !== out.previous.status) {
+      if (out.rsvp.status !== out.previous.status && out.rsvp.status !== 'awaiting_payment') {
         background(c, sendGuestEmail(db, originOf(c), found.event, out.rsvp, c.req.valid('param').token, confirmationEmail));
       }
-      return c.json({ok: true, status: out.rsvp.status});
+      return c.json({ok: true, status: out.rsvp.status, checkoutUrl});
     } catch (err) {
       return fail(c, err);
     }

@@ -1,10 +1,11 @@
 import {useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
 
-import {firstAuditQuery, firstJobsQuery, firstUsersQuery, healthQuery, siteQuery, twoFactorQuery} from '../queries';
-import {overviewQuery} from '../overview-queries';
-import {ago, pageCount, useMe, when} from '../shared';
-import {Badge, buttonClass, Card, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
+import {firstJobsQuery, firstUsersQuery, healthQuery, siteQuery, twoFactorQuery} from '../queries';
+import {formatInZone} from '../../domain/time';
+import {type OverviewData, overviewQuery} from '../overview-queries';
+import {ago, useMe, when} from '../shared';
+import {Badge, buttonClass, Card, type Column, DataTable, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
 
 /**
  * `/` of the dashboard: a greeting, what needs attention, stat tiles, a
@@ -14,8 +15,6 @@ import {Badge, buttonClass, Card, EmptyState, ErrorNote, Icon, type IconName, Lo
  * Make it YOURS: swap the tiles for the numbers your app is about (bookings
  * today, open orders), each from a first page or a counter kept on write.
  */
-const capitalise = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
-
 export function Overview() {
   const me = useMe();
   const viewer = me.data?.viewer;
@@ -26,8 +25,6 @@ export function Overview() {
   // Under the screens' own query keys, so a save there refreshes these too.
   const users = useQuery({...firstUsersQuery, enabled: Boolean(abilities?.manageUsers)});
   const jobs = useQuery({...firstJobsQuery, enabled: Boolean(abilities?.manageJobs)});
-  const activity = useQuery({...firstAuditQuery, enabled: Boolean(abilities?.readAudit)});
-  const recent = activity.data?.events.slice(0, 6) ?? [];
   const events = useQuery({...overviewQuery, enabled: Boolean(me.data)});
   const ev = events.data;
   const firstName = viewer?.name?.split(/\s+/)[0];
@@ -67,23 +64,68 @@ export function Overview() {
   const done = steps.filter(step => step.done).length;
   const setupLeft = steps.some(step => step.done === false);
 
+  const upcoming = ev?.events ?? [];
+  const noEvents = Boolean(ev) && upcoming.length === 0 && ev!.recent.length === 0;
+
+  const checklist = setupLeft ? (
+    <Card
+      title="Finish setting up"
+      actions={
+        <span className="muted">
+          {done} of {steps.length} done
+        </span>
+      }
+      flush
+      className="checklist-card">
+      <div className="card-body checklist-progress">
+        <ProgressBar value={done} max={steps.length} label="Setup progress" />
+      </div>
+      <ul className="list">
+        {steps.map(step => {
+          const body = (
+            <>
+              <span className="checklist-mark" data-done={step.done ? '' : undefined}>
+                <Icon name="check" size={14} />
+              </span>
+              <span className="list-row-text">
+                <span className="list-row-title">{step.label}</span>
+                <span className="list-row-sub">{step.detail}</span>
+              </span>
+              <span className="list-row-end">{step.done ? 'Done' : 'To do'}</span>
+              {step.to && !step.done && <Icon name="chevron-right" size={16} className="muted" />}
+            </>
+          );
+          return (
+            <li key={step.label} className="list-row checklist-row" data-done={step.done ? '' : undefined}>
+              {step.to && !step.done ? (
+                <Link className="checklist-link" to={step.to}>
+                  {body}
+                </Link>
+              ) : (
+                body
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
+  ) : null;
+
   return (
     <div className="app-page screen-overview">
       <PageHeader
-        title={firstName ? `Welcome back, ${firstName}` : 'Welcome back'}
-        description={`Here is what is happening on ${site.data?.site?.name ?? 'your site'}.`}
+        title="Dashboard"
+        description={`Here is what is happening on ${site.data?.site?.name ?? 'your site'}${firstName ? `, ${firstName}` : ''}.`}
         actions={
           <>
             <a className={buttonClass({variant: 'secondary'})} href="/">
               <Icon name="globe" size={18} />
               View the website
             </a>
-            {abilities?.manageJobs && (
-              <Link className={buttonClass()} to="/jobs">
-                <Icon name="plus" size={18} />
-                Post a job
-              </Link>
-            )}
+            <Link className={buttonClass()} to={'/events/new' as never}>
+              <Icon name="plus" size={18} />
+              Create event
+            </Link>
           </>
         }
       />
@@ -101,15 +143,51 @@ export function Overview() {
         </Notice>
       )}
 
+      {checklist}
+
       {events.error && <ErrorNote error={events.error} />}
       {events.isPending && events.fetchStatus !== 'idle' && <LoadingBlock rows={2} />}
-      {ev && (
+      {noEvents && (
+        <EmptyState
+          icon="clock"
+          title="Create your first event"
+          action={
+            <Link className={buttonClass()} to={'/events/new' as never}>
+              <Icon name="plus" size={18} />
+              Create your first event
+            </Link>
+          }>
+          Set it up in a few minutes and share the link. Every guest lands in your Guests list.
+        </EmptyState>
+      )}
+      {ev && !noEvents && (
         <>
-          <div className="stat-grid">
-            <Stat label="Upcoming events" icon="clock" value={String(ev.totals.upcomingEvents) + (ev.totals.hasMore ? '+' : '')} hint="Published, not yet ended" to="/events" />
-            <Stat label="RSVPs in next events" icon="users" value={String(ev.totals.going)} hint="Confirmed seats" />
-            <Stat label="Waitlisted" icon="clock" value={String(ev.totals.waitlisted)} hint="Across upcoming events" />
-            <Stat label="Awaiting approval" icon="inbox" value={String(ev.totals.pending)} hint="Pending RSVPs" />
+          <div className="grid-main-side screen-overview-split">
+            <Card
+              title="Upcoming events"
+              flush
+              actions={
+                <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to={'/events' as never}>
+                  All events
+                  <Icon name="arrow-right" size={16} />
+                </Link>
+              }>
+              {upcoming.length ? (
+                <DataTable caption="Upcoming events" columns={upcomingColumns} rows={upcoming} rowKey={e => e.id} />
+              ) : (
+                <div className="card-body">
+                  <p className="muted">
+                    Nothing scheduled. <Link to={'/events/new' as never}>Create an event</Link>
+                  </p>
+                </div>
+              )}
+            </Card>
+            <div className="stat-stack">
+              <Stat label="Upcoming events" icon="clock" value={String(ev.totals.upcomingEvents) + (ev.totals.hasMore ? '+' : '')} hint="Published, not yet ended" to="/events" />
+              <Stat label="Going" icon="users" value={String(ev.totals.going)} hint="Confirmed seats" />
+              <Stat label="Waitlisted" icon="clock" value={String(ev.totals.waitlisted)} hint="Across upcoming events" />
+              <Stat label="Awaiting approval" icon="inbox" value={String(ev.totals.pending)} hint="Pending RSVPs" />
+            </div>
           </div>
           <Card
             title="Recent RSVPs"
@@ -141,146 +219,40 @@ export function Overview() {
                 ))}
               </ul>
             ) : (
-              <EmptyState
-                icon="users"
-                title="No RSVPs yet"
-                action={
-                  <Link className={buttonClass({variant: 'secondary'})} to={'/events' as never}>
-                    View events
-                  </Link>
-                }>
+              <EmptyState icon="users" title="No RSVPs yet">
                 Responses to your upcoming events will show here.
               </EmptyState>
             )}
           </Card>
         </>
       )}
-
-      <div className="stat-grid">
-        {abilities?.manageUsers && (
-          <Stat
-            label="Users"
-            icon="users"
-            value={pageCount(users.data?.users, Boolean(users.data?.nextBefore))}
-            hint="Accounts on this site"
-            to="/users"
-          />
-        )}
-        {abilities?.manageJobs && (
-          <Stat
-            label="Open jobs"
-            icon="briefcase"
-            value={jobs.data ? String(jobs.data.jobs.filter(job => job.status === 'open').length) + (jobs.data.nextBefore ? '+' : '') : null}
-            hint="On the public job board"
-            to="/jobs"
-          />
-        )}
-        <Stat
-          label="Your access"
-          icon="shield"
-          value={me.data ? capitalise(me.data.roles.find(role => role !== 'member') ?? 'member') : null}
-          hint={me.data ? `${me.data.roles.length} role${me.data.roles.length === 1 ? '' : 's'}` : undefined}
-          to="/account"
-        />
-        <Stat
-          label="Sign-in"
-          icon="lock"
-          value={health.data ? (health.data.auth ? 'Ready' : 'Not set up') : null}
-          hint={twoFactor.data ? (twoFactor.data.enabled ? 'Two-step sign-in is on' : 'Two-step sign-in is off') : undefined}
-        />
-      </div>
-
-      <div className="grid-main-side">
-        {abilities?.readAudit ? (
-          <Card
-            title="Recent activity"
-            description="Sign-ups, sign-ins and changes, newest first."
-            flush
-            actions={
-              <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to="/activity">
-                View all
-                <Icon name="arrow-right" size={16} />
-              </Link>
-            }>
-            {activity.error ? (
-              <div className="card-body">
-                <ErrorNote error={activity.error} />
-              </div>
-            ) : activity.isPending ? (
-              <div className="card-body">
-                <LoadingBlock rows={3} />
-              </div>
-            ) : recent.length ? (
-              <ul className="list">
-                {recent.map(event => (
-                  <li key={event.id} className="list-row">
-                    <span className="list-row-icon">
-                      <Icon name="activity" size={16} />
-                    </span>
-                    <div className="list-row-text">
-                      <p className="list-row-title">
-                        {event.actor?.name ?? 'System'} <span className="muted">· {event.action.replaceAll('_', ' ')}</span>
-                      </p>
-                      {event.targetName && event.targetName !== event.actor?.name && <p className="list-row-sub">{event.targetName}</p>}
-                    </div>
-                    <time className="list-row-end" dateTime={event.createdAt} title={when(event.createdAt)}>
-                      {ago(event.createdAt)}
-                    </time>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState icon="activity" title="Nothing yet">
-                Sign-ups and changes will show here as they happen.
-              </EmptyState>
-            )}
-          </Card>
-        ) : (
-          <Card title="Your account" description="Your name, email, password and devices.">
-            <Link className={buttonClass({variant: 'secondary'})} to="/account">
-              Open your account
-            </Link>
-          </Card>
-        )}
-
-        <Card
-          title={setupLeft ? 'Get started' : 'All set'}
-          description={`${done} of ${steps.length} done`}
-          actions={!setupLeft && <Badge tone="success" icon="check">Done</Badge>}
-          flush
-          className="checklist-card">
-          <div className="card-body checklist-progress">
-            <ProgressBar value={done} max={steps.length} label="Setup progress" />
-          </div>
-          <ul className="list">
-            {steps.map(step => {
-              const body = (
-                <>
-                  <span className="checklist-mark" data-done={step.done ? '' : undefined}>
-                    <Icon name="check" size={14} />
-                  </span>
-                  <span className="list-row-text">
-                    <span className="list-row-title">{step.label}</span>
-                    <span className="list-row-sub">{step.detail}</span>
-                  </span>
-                  {step.to && !step.done && <Icon name="chevron-right" size={16} className="muted" />}
-                </>
-              );
-              return (
-                <li key={step.label} className="list-row checklist-row" data-done={step.done ? '' : undefined}>
-                  {step.to && !step.done ? (
-                    <Link className="checklist-link" to={step.to}>
-                      {body}
-                    </Link>
-                  ) : (
-                    body
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </Card>
-      </div>
     </div>
   );
 }
+
+type UpcomingRow = OverviewData['events'][number];
+
+const upcomingColumns: Column<UpcomingRow>[] = [
+  {
+    key: 'event',
+    header: 'Event',
+    cell: e => (
+      <span className="cell-title">
+        <Link to={`/events/${e.id}` as never}>{e.title}</Link>
+      </span>
+    ),
+  },
+  {key: 'when', header: 'When', width: 'shrink', cell: e => <time dateTime={e.startAt}>{formatInZone(new Date(e.startAt), e.timezone)}</time>},
+  {
+    key: 'going',
+    header: 'Going',
+    width: 'shrink',
+    cell: e => (
+      <span>
+        {e.capacity !== null && e.going >= e.capacity && <Badge tone="warning">Full</Badge>}{' '}
+        <strong>{e.going}</strong>
+        <span className="muted"> / {e.capacity === null ? 'no limit' : e.capacity}</span>
+      </span>
+    ),
+  },
+];

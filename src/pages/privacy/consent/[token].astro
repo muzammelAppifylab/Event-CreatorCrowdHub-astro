@@ -7,6 +7,7 @@
 import Base from '../../../layouts/Base.astro';
 import type {ConsentState} from '../../../lib/privacy-types';
 import {app} from '../../../server/app';
+import {inProcessHeaders} from '../../../server/privacy';
 import {pageContext} from '../../../server/page';
 
 export const prerender = false;
@@ -14,7 +15,7 @@ export const prerender = false;
 const token = Astro.params.token ?? '';
 const [{site, viewer}, res] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  Promise.resolve(app.request(`/site-api/privacy/consent/${encodeURIComponent(token)}`)).catch(() => null),
+  Promise.resolve(app.request(`/site-api/privacy/consent/${encodeURIComponent(token)}`, {headers: inProcessHeaders(Astro.request)})).catch(() => null),
 ]);
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
@@ -24,9 +25,9 @@ const invalid = !info;
 if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
 ---
 
-<Base site={site} viewer={viewer} title="Confirm your updates" noindex>
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+<Base site={site} viewer={viewer} title="Confirm your updates" noindex guest secretInUrl>
+  <main id="main" tabindex="-1" class="g-main">
+    <div class="page-container g-doc">
       {
         invalid ? (
           <>
@@ -37,9 +38,9 @@ if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
           <>
             <h1>Send me updates?</h1>
             <p class="muted">Confirm that you want occasional updates from the host of {info.event.title}. You can unsubscribe at any time.</p>
-            <form id="consent-form" class="auth-form" novalidate data-token={token}>
+            <form id="consent-form" class="g-form" novalidate data-token={token}>
               <p class="notice" data-form-status hidden />
-              <button class="button" type="submit">Yes, send me updates</button>
+              <button class="g-btn g-btn-lg" type="submit">Yes, send me updates</button>
             </form>
           </>
         ) : info.state === 'confirmed' ? (
@@ -54,7 +55,7 @@ if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
           </>
         )
       }
-      <p class="auth-links"><a href="/privacy/">How we handle your data</a></p>
+      <p class="g-body-sm g-doc-link"><a href="/privacy/">How we handle your data</a></p>
     </div>
   </main>
 </Base>

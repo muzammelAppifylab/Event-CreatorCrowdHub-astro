@@ -40,6 +40,10 @@ export type StartTicketCheckout =
 
 const refuse = (status: 404 | 409 | 422 | 502 | 503, code: string, message: string): StartTicketCheckout => ({ok: false, status, code, message});
 
+/** A same-site path that carries no secret; anything else (or a `/r/` manage link) is dropped. */
+const safeCancelPath = (path: string | undefined): string | undefined =>
+  path && /^\/(?!\/)[\w\-./]*$/.test(path) && !path.startsWith('/r/') ? path : undefined;
+
 const checkoutPage = (id: string) => `${CHECKOUT_PAGE}?id=${encodeURIComponent(id)}`;
 
 /**
@@ -112,7 +116,8 @@ export async function startTicketCheckout(
     email: rsvp.email,
     name: rsvp.name,
     successPath: options.successPath ?? THANKS_PATH,
-    cancelPath: options.cancelPath ?? `/e/${rsvp.event.slug}/`,
+    // Never a path with the guest's manage token (`/r/<token>/`): this URL is sent to the payment platform.
+    cancelPath: safeCancelPath(options.cancelPath) ?? `/events/${rsvp.event.slug}/`,
     metadata: {rsvpId: rsvp.id, ticketTypeId: ticket.id, eventId: rsvp.eventId},
   });
   if (!started.ok) {

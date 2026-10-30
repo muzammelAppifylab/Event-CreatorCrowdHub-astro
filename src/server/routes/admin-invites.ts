@@ -5,6 +5,7 @@ import {formatInZone} from '../../domain/time';
 import {signToken} from '../../domain/tokens';
 import {button, details, esc, paragraph, renderLayout, renderText} from '../../emails/layout';
 import type {EmailBrand, EmailContent} from '../../emails/types';
+import {audit} from '../../platform/auth';
 import {config} from '../../platform/config';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import type {PrismaClient} from '../../generated/prisma/client';
@@ -301,6 +302,7 @@ export const adminInviteRoutes = new Hono()
     if (accepted.length) {
       await db.invite.updateMany({where: {id: {in: accepted}}, data: {status: 'sent', sentAt: now}});
     }
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'invites_sent', target: ['event', event.id], meta: {queued: created.length, sent: accepted.length}});
     return c.json({queued: created.length, sent: accepted.length, skippedInvalid: parsed.invalid, skippedDuplicate}, 201);
   })
 
@@ -328,6 +330,7 @@ export const adminInviteRoutes = new Hono()
     if (accepted.length) {
       await db.invite.updateMany({where: {id: {in: accepted}}, data: {status: 'sent', lastResentAt: now}});
     }
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'invites_resent', target: ['event', event.id], meta: {resent: accepted.length}});
     return c.json({resent: accepted.length, remaining: all.length - targets.length});
   })
 
@@ -355,6 +358,7 @@ export const adminInviteRoutes = new Hono()
       data: {status: 'sent', sentAt: invite.sentAt ?? now, lastResentAt: now},
       select: {id: true},
     });
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'invite_resent', target: ['invite', invite.id]});
     return c.json({ok: true});
   })
 

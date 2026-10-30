@@ -1,12 +1,16 @@
 ---
 /**
  * Public host page: every upcoming public event of this site as one branded page
- * (port of CreatorCrowdHub `features/host-page`). SSR from `GET /site-api/events` (in-process) plus
+ * (port of CreatorCrowdHub `features/host-page`: avatar, "Events by …", a poster-first tile grid, an
+ * empty state). SSR from `GET /site-api/events` (in-process) plus
  * the public brand (`GET /site-api/event-settings/brand`: colour and font preset only).
  * "Later events" follows the keyset cursor (`?before=`).
  */
+import EventCard from '../../components/EventCard.astro';
+import GIcon from '../../components/GIcon.astro';
 import Base from '../../layouts/Base.astro';
-import {formatEventTime} from '../../lib/format';
+import {initials} from '../../lib/format';
+import {guestCopy} from '../../lib/guest-format';
 import type {EventsPage} from '../../lib/types';
 import {backend, read} from '../../server/backend';
 import {pageContext} from '../../server/page';
@@ -21,52 +25,61 @@ const [{site, viewer}, result, brand] = await Promise.all([
 const events = result?.events ?? [];
 if (!result) Astro.response.status = 503;
 const color = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : null;
-const format = (f: string) => f.replace('_', ' ').replace(/^\w/, c => c.toUpperCase());
 const name = site?.name ?? 'Our events';
 ---
 
-<Base site={site} viewer={viewer} title={`Events by ${name}`} description={`Upcoming events hosted by ${name}. RSVP in a minute.`}>
-  <main id="main" tabindex="-1" class="wrap section" data-brand={color ?? undefined} data-font={brand?.fontPreset}>
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">Hosted by {name}</p>
-        <h1>Upcoming events</h1>
-      </div>
+<Base site={site} viewer={viewer} guest title={guestCopy.hostPage.title(name)} description={`Upcoming events hosted by ${name}. RSVP in a minute.`}>
+  <main id="main" tabindex="-1" class="g-main" data-brand={color ?? undefined} data-font={brand?.fontPreset}>
+    <div class="page-container g-host-page">
+      <header class="g-host-head">
+        <span class="g-avatar g-avatar-16">
+          {site?.logo ? <img src={site.logo} alt="" /> : initials(name)}
+        </span>
+        <h1 class="type-display g-display">{guestCopy.hostPage.title(name)}</h1>
+      </header>
+
+      {
+        !result ? (
+          <p class="g-notice g-notice-error" role="alert">Events are not available right now.</p>
+        ) : events.length === 0 ? (
+          <div class="g-empty">
+            <span class="g-empty-icon"><GIcon name="calendar-x" class="g-icon-5" /></span>
+            <div class="g-empty-text">
+              <p class="g-title-sm">{guestCopy.hostPage.emptyTitle}</p>
+              <p class="g-body-sm g-muted">{guestCopy.hostPage.emptyBody}</p>
+            </div>
+          </div>
+        ) : (
+          <section aria-labelledby="host-upcoming" class="g-list-section">
+            <h2 id="host-upcoming">{guestCopy.hostPage.upcoming}</h2>
+            <ul class="g-grid">
+              {events.map(e => <li><EventCard event={e} /></li>)}
+            </ul>
+          </section>
+        )
+      }
+      {
+        result?.next && (
+          <nav class="g-pager" aria-label="More events">
+            <a class="g-btn g-btn-outline g-btn-lg" href={`/host/?before=${encodeURIComponent(result.next)}`} data-astro-prefetch>
+              Later events
+              <GIcon name="arrow-right" />
+            </a>
+          </nav>
+        )
+      }
     </div>
-    {
-      !result ? (
-        <p class="notice">Events are not available right now.</p>
-      ) : events.length === 0 ? (
-        <p class="lede">No upcoming events. Check back soon.</p>
-      ) : (
-        <ul class="job-list">
-          {events.map(e => (
-            <li>
-              <a class="job-row" href={`/events/${encodeURIComponent(e.slug)}/`}>
-                <div>
-                  <h2 class="job-title">{e.title}</h2>
-                  <p class="muted">{formatEventTime(e.startAt, e.timezone)}</p>
-                </div>
-                <div class="job-tags">
-                  <span class="chip">{format(e.format)}</span>
-                  {e.venueName && <span class="muted small">{e.venueName}</span>}
-                </div>
-              </a>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-    {result?.next && <nav class="pager"><a href={`/host/?before=${encodeURIComponent(result.next)}`}>Later events →</a></nav>}
   </main>
 </Base>
 
 <script>
-  // Brand colour via the CSSOM (the CSP blocks style attributes).
+  // Brand colour via the CSSOM (the CSP blocks style attributes). The source writes --brand on <html>;
+  // theme.css derives --primary from it.
   document.addEventListener('astro:page-load', () => {
     const main = document.querySelector<HTMLElement>('main[data-brand]');
     const color = main?.dataset.brand;
     if (!main || !color || !/^#[0-9a-fA-F]{6}$/.test(color)) return;
+    main.style.setProperty('--brand', color);
     main.style.setProperty('--accent', color);
     main.style.setProperty('--accent-hover', color);
   });

@@ -3,11 +3,14 @@
  * `/p/<code>`: the guest voting page, rendered on the server (the first state is read in-process
  * from `GET /site-api/polls-public/:code/active`) and kept live by `src/lib/poll-client.ts`.
  * A malformed or unknown code is a real 404. Never cached: it shows live data.
+ * Look: the original app's VotePage, "the guest's phone in a dark room": one question per screen, 48px
+ * pill targets, no login (the `.g-poll .poll-*` rules in `src/styles/public.css` dress the client's markup).
  */
-import NotFound from '../../components/NotFound.astro';
+import ErrorScreen from '../../components/ErrorScreen.astro';
 import Base from '../../layouts/Base.astro';
-import {normalizeJoinCode} from '../../server/routes/polls-public';
+import {jsonForScript, normalizeJoinCode} from '../../server/routes/polls-public';
 import {app} from '../../server/app';
+import {inProcessHeaders} from '../../server/privacy';
 import {pageContext} from '../../server/page';
 
 export const prerender = false;
@@ -17,9 +20,7 @@ const {site, viewer} = await pageContext(Astro.request, Astro.response);
 let initial: unknown = null;
 let missing = !code;
 if (code) {
-  const headers = new Headers();
-  const cookie = Astro.request.headers.get('cookie');
-  if (cookie) headers.set('cookie', cookie);
+  const headers = inProcessHeaders(Astro.request, ['cookie']);
   const answer = await Promise.resolve(app.request(new URL(`/site-api/polls-public/${code}/active`, Astro.url.origin).toString(), {headers})).catch(() => null);
   if (answer?.ok) initial = await answer.json();
   else if (answer?.status === 404) missing = true;
@@ -31,25 +32,34 @@ else if (!initial) {
 }
 const title = (initial as {event?: {title?: string}} | null)?.event?.title;
 // JSON inside a <script> block: `<` is escaped so poll text can never close the tag.
-const initialJson = JSON.stringify(initial).replace(/</g, '\u003c');
+const initialJson = jsonForScript(initial);
+const clean = (code ?? '').toUpperCase().replace(/[\s-]/g, '');
+const shownCode = clean.length === 6 ? `${clean.slice(0, 3)}-${clean.slice(3)}` : clean;
 ---
 
 {
   missing ? (
-    <Base site={site} viewer={viewer} title="Poll not found" noindex>
-      <NotFound site={site} />
+    <Base site={site} viewer={viewer} title="Poll not found" noindex guest>
+      <ErrorScreen poster={['No poll', 'with that code']} description="Check the code on the host's screen and try again." action={{href: '/', label: 'Go to the start'}} />
     </Base>
   ) : (
-    <Base site={site} viewer={viewer} title={title ? `Vote: ${title}` : 'Live poll'} noindex>
-      <main id="main" tabindex="-1" class="wrap narrow section">
-        <p class="eyebrow">Live poll{title ? ` · ${title}` : ''}</p>
-        <div id="poll-root" data-code={code} class="card">
-          <noscript>
-            <p>Voting needs JavaScript.</p>
-          </noscript>
+    <Base site={site} viewer={viewer} title={title ? `Vote: ${title}` : 'Live poll'} noindex guest>
+      <main id="main" tabindex="-1" class="g-main">
+        <div class="g-poll">
+          <header class="g-poll-head">
+            <p>{title ?? 'Live poll'}</p>
+            <div class="g-poll-tags">
+              <span class="g-poll-code type-code" aria-label={`Code ${clean.split('').join(' ')}`}>{shownCode}</span>
+            </div>
+          </header>
+          <div id="poll-root" data-code={code}>
+            <noscript>
+              <p>Voting needs JavaScript.</p>
+            </noscript>
+          </div>
+          {initial && <script id="poll-initial" type="application/json" set:html={initialJson} />}
+          {!initial && <p class="g-notice g-notice-error" role="alert">We couldn't load the poll. Try again in a moment.</p>}
         </div>
-        {initial && <script id="poll-initial" type="application/json" set:html={initialJson} />}
-        {!initial && <p class="notice">Polls are not available right now. Try again in a moment.</p>}
       </main>
     </Base>
   )
@@ -66,22 +76,3 @@ const initialJson = JSON.stringify(initial).replace(/</g, '\u003c');
     }
   });
 </script>
-
-<style is:global>
-  .poll-fieldset { border: 0; padding: 0; margin: 0 0 1rem; display: grid; gap: 0.6rem; }
-  .poll-question { font-size: 1.35rem; font-weight: 700; margin: 0 0 0.5rem; padding: 0; }
-  .poll-choice { display: flex; gap: 0.75rem; align-items: center; padding: 0.85rem 1rem; border: 1px solid var(--line); border-radius: var(--radius, 10px); cursor: pointer; }
-  .poll-choice:has(input:checked), .poll-star:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-  .poll-rating { display: flex; gap: 0.5rem; }
-  .poll-star { flex: 1; text-align: center; padding: 0.9rem 0; border: 1px solid var(--line); border-radius: var(--radius, 10px); font-weight: 700; cursor: pointer; }
-  .poll-star input { position: absolute; opacity: 0; }
-  .poll-star:has(input:focus-visible), .poll-choice:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .poll-form textarea { width: 100%; }
-  .poll-results { margin-top: 1.5rem; display: grid; gap: 0.75rem; }
-  .poll-row-head { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: 0.25rem; }
-  .poll-bar { display: block; height: 0.6rem; border-radius: 999px; background: var(--line); overflow: hidden; }
-  .poll-bar-fill { display: block; height: 100%; background: var(--accent); }
-  .poll-average { font-size: 2.5rem; font-weight: 800; margin: 0; }
-  .poll-answers { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
-  .poll-answers li { padding: 0.6rem 0.9rem; border: 1px solid var(--line); border-radius: var(--radius, 10px); }
-</style>

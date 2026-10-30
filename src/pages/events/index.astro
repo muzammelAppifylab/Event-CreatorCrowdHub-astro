@@ -1,10 +1,13 @@
 ---
 /**
  * Upcoming events, rendered on the server from `GET /site-api/events` (in-process).
- * "Later events" follows the keyset cursor (`?before=`).
+ * "Later events" follows the keyset cursor (`?before=`). The poster-first tile grid of the original
+ * app's host page.
  */
+import EventCard from '../../components/EventCard.astro';
+import GIcon from '../../components/GIcon.astro';
 import Base from '../../layouts/Base.astro';
-import {formatEventTime} from '../../lib/format';
+import {guestCopy} from '../../lib/guest-format';
 import type {EventsPage} from '../../lib/types';
 import {backend, read} from '../../server/backend';
 import {pageContext} from '../../server/page';
@@ -16,41 +19,45 @@ const [{site, viewer}, result] = await Promise.all([
 ]);
 const events = result?.events ?? [];
 if (!result) Astro.response.status = 503;
-const format = (f: string) => f.replace('_', ' ').replace(/^\w/, c => c.toUpperCase());
 ---
 
-<Base site={site} viewer={viewer} title="Events" description={`Upcoming events from ${site?.name ?? 'our site'}.`}>
-  <main id="main" tabindex="-1" class="wrap section">
-    <div class="section-head">
-      <div>
-        <p class="eyebrow">Events</p>
-        <h1>Upcoming events</h1>
-      </div>
+<Base site={site} viewer={viewer} guest title="Events" description={`Upcoming events from ${site?.name ?? 'our site'}.`}>
+  <main id="main" tabindex="-1" class="g-main">
+    <div class="page-container g-host-page">
+      <header class="g-host-head">
+        <h1 class="type-display g-display">Upcoming events</h1>
+      </header>
+
+      {
+        !result ? (
+          <p class="g-notice g-notice-error" role="alert">Events are not available right now.</p>
+        ) : events.length === 0 ? (
+          <div class="g-empty">
+            <span class="g-empty-icon"><GIcon name="calendar-x" class="g-icon-5" /></span>
+            <div class="g-empty-text">
+              <p class="g-title-sm">{guestCopy.hostPage.emptyTitle}</p>
+              <p class="g-body-sm g-muted">{guestCopy.hostPage.emptyBody}</p>
+            </div>
+          </div>
+        ) : (
+          <section aria-labelledby="events-upcoming" class="g-list-section">
+            <h2 id="events-upcoming">{guestCopy.hostPage.upcoming}</h2>
+            <ul class="g-grid">
+              {events.map(e => <li><EventCard event={e} /></li>)}
+            </ul>
+          </section>
+        )
+      }
+      {
+        result?.next && (
+          <nav class="g-pager" aria-label="More events">
+            <a class="g-btn g-btn-outline g-btn-lg" href={`/events/?before=${encodeURIComponent(result.next)}`} data-astro-prefetch>
+              Later events
+              <GIcon name="arrow-right" />
+            </a>
+          </nav>
+        )
+      }
     </div>
-    {
-      !result ? (
-        <p class="notice">Events are not available right now.</p>
-      ) : events.length === 0 ? (
-        <p class="lede">No upcoming events. Check back soon.</p>
-      ) : (
-        <ul class="job-list">
-          {events.map(e => (
-            <li>
-              <a class="job-row" href={`/events/${encodeURIComponent(e.slug)}/`}>
-                <div>
-                  <h2 class="job-title">{e.title}</h2>
-                  <p class="muted">{formatEventTime(e.startAt, e.timezone)}</p>
-                </div>
-                <div class="job-tags">
-                  <span class="chip">{format(e.format)}</span>
-                  {e.venueName && <span class="muted small">{e.venueName}</span>}
-                </div>
-              </a>
-            </li>
-          ))}
-        </ul>
-      )
-    }
-    {result?.next && <nav class="pager"><a href={`/events/?before=${encodeURIComponent(result.next)}`}>Later events →</a></nav>}
   </main>
 </Base>

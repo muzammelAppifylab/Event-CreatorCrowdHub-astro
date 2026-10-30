@@ -1,11 +1,15 @@
 ---
 /**
- * The RSVP form (create on the event / invite pages, edit on `/r/<token>`). Server-rendered from the
- * RSVP view; the script below binds it with `bindForm` (in-place errors, pending button, focus on the
- * first wrong field) and talks to `/site-api/rsvp/*`. Honeypot: `website` is hidden and must stay empty.
+ * The RSVP form (create in the event page's sheet and on the invite landing, edit on `/r/<token>`).
+ * Server-rendered from the RSVP view; the script below binds it with `bindForm` (in-place errors,
+ * pending button, focus on the first wrong field) and talks to `/site-api/rsvp/*`. Honeypot:
+ * `website` is hidden and must stay empty. Markup and copy follow the original app's RsvpForm
+ * (response circles, "(required)" marks); the field names and ids are the API contract.
  */
 import {formatMoney} from '../../lib/format';
+import type {GIconName} from '../../lib/guest-format';
 import type {AnswerValue, RsvpEventView} from '../../lib/rsvp-types';
+import GIcon from '../GIcon.astro';
 
 interface Props {
   view: RsvpEventView;
@@ -14,6 +18,8 @@ interface Props {
   token?: string;
   /** From an invite landing: sent with the RSVP so a private event accepts it. */
   inviteToken?: string;
+  /** The host's name, for the marketing-consent line ("Send me news and offers from …"). */
+  hostName?: string;
   values?: {
     name?: string;
     email?: string;
@@ -25,7 +31,7 @@ interface Props {
   };
 }
 
-const {view, mode, token, inviteToken, values = {}} = Astro.props;
+const {view, mode, token, inviteToken, hostName = 'this host', values = {}} = Astro.props;
 const editing = mode === 'edit';
 const id = editing ? 'rsvp-edit' : 'rsvp-create';
 const answers = values.answers ?? {};
@@ -34,11 +40,29 @@ const response = values.response ?? 'going';
 const action = editing ? `/site-api/rsvp/manage/${token}` : `/site-api/rsvp/events/${view.slug}`;
 const questionMeta = view.questions.map(q => ({id: q.id, type: q.type, required: q.required}));
 const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney(cents, currency) : 'Free');
+const choices: {value: string; label: string; icon: GIconName; tone: string}[] = [
+  {value: 'going', label: 'Going', icon: 'check' as GIconName, tone: 'going'},
+  ...(view.allowMaybe ? [{value: 'maybe', label: 'Maybe', icon: 'minus' as GIconName, tone: 'maybe'}] : []),
+  {value: 'not_going', label: 'Can’t go', icon: 'x' as GIconName, tone: 'no'},
+];
+const full = view.seatsLeft === 0;
+const submitLabel = editing
+  ? 'Save changes'
+  : full && view.waitlistEnabled
+    ? 'Join waitlist'
+    : view.approvalRequired
+      ? 'Request to join'
+      : anyPaid
+        ? 'Continue to payment'
+        : 'Save my seat';
+const maxPlus = view.maxPlusOnes;
+const plusCap = view.seatsLeft === null || (full && view.waitlistEnabled) ? maxPlus : Math.max(0, Math.min(maxPlus, view.seatsLeft - 1));
+const optional = (required: boolean) => (required ? 'required' : 'optional');
 ---
 
 <form
   id={id}
-  class="auth-form"
+  class="g-form"
   novalidate
   data-rsvp-form
   data-mode={mode}
@@ -48,33 +72,47 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
   data-any-paid={anyPaid ? '1' : ''}
   data-questions={JSON.stringify(questionMeta)}
 >
+  <fieldset class="g-fieldset g-response">
+    <legend>Are you coming?</legend>
+    <div class="g-choice-row" role="radiogroup" aria-label="Your RSVP">
+      {
+        choices.map(c => (
+          <label class={`g-choice g-choice-${c.tone}`}>
+            <input type="radio" name="response" value={c.value} checked={response === c.value} />
+            <span class="g-choice-dot">
+              <GIcon name={c.icon} />
+            </span>
+            <span class="g-choice-label">{c.label}</span>
+          </label>
+        ))
+      }
+    </div>
+  </fieldset>
+
   <div class="field">
-    <label for={`${id}-name`}>Your name</label>
-    <input id={`${id}-name`} name="name" autocomplete="name" value={values.name ?? ''} maxlength="120" />
+    <label for={`${id}-name`}>Your name <span class="g-optional">(required)</span></label>
+    <input id={`${id}-name`} name="name" autocomplete="name" value={values.name ?? ''} maxlength="120" aria-required="true" />
   </div>
   <div class="field">
-    <label for={`${id}-email`}>Email</label>
+    <label for={`${id}-email`}>Email <span class="g-optional">(required)</span></label>
     <input
       id={`${id}-email`}
       name="email"
       type="email"
       autocomplete="email"
       inputmode="email"
+      autocapitalize="none"
+      spellcheck="false"
       placeholder="name@example.com"
       value={values.email ?? ''}
       readonly={editing}
+      aria-required="true"
       aria-readonly={editing ? 'true' : undefined}
+      aria-describedby={`${id}-email-hint`}
     />
-    {editing && <p class="field-hint" id={`${id}-email-hint`}>Your email identifies this RSVP, so it cannot be changed here.</p>}
-  </div>
-
-  <div class="field">
-    <label for={`${id}-response`}>Will you come?</label>
-    <select id={`${id}-response`} name="response">
-      <option value="going" selected={response === 'going'}>Going</option>
-      {view.allowMaybe && <option value="maybe" selected={response === 'maybe'}>Maybe</option>}
-      <option value="not_going" selected={response === 'not_going'}>Can’t go</option>
-    </select>
+    <p class="field-hint" id={`${id}-email-hint`}>
+      {editing ? 'To use a different email, cancel this RSVP and RSVP again.' : 'Your confirmation and reminders go here.'}
+    </p>
   </div>
 
   {
@@ -88,7 +126,7 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
             return (
               <option value={t.id} disabled={out} selected={values.ticketTypeId === t.id}>
                 {t.name} · {priceLabel(t.priceCents, t.currency)}
-                {t.salesEnded ? ' (sales ended)' : t.remaining === 0 ? ' (sold out)' : ''}
+                {t.salesEnded ? ' (sales ended)' : t.remaining === 0 ? ' (sold out)' : t.remaining !== null && t.remaining <= 10 ? ` (${t.remaining} left)` : ''}
               </option>
             );
           })}
@@ -100,14 +138,19 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
   {
     view.maxPlusOnes > 0 && (
       <div class="field">
-        <label for={`${id}-plus`}>Extra guests you bring</label>
-        <select id={`${id}-plus`} name="plusOnes">
+        <label for={`${id}-plus`}>Bringing anyone?</label>
+        <select id={`${id}-plus`} name="plusOnes" aria-describedby={`${id}-plus-hint`}>
           {Array.from({length: view.maxPlusOnes + 1}, (_, n) => (
-            <option value={String(n)} selected={(values.plusOnes ?? 0) === n}>
-              {n}
+            <option value={String(n)} selected={(values.plusOnes ?? 0) === n} disabled={n > plusCap && (values.plusOnes ?? 0) !== n}>
+              {n === 0 ? 'Just me' : `Me + ${n}`}
             </option>
           ))}
         </select>
+        <p class="field-hint" id={`${id}-plus-hint`}>
+          {plusCap < maxPlus
+            ? `Only ${view.seatsLeft} ${view.seatsLeft === 1 ? 'seat' : 'seats'} left, so the list is shorter.`
+            : `Up to ${maxPlus}. Each guest takes a seat.`}
+        </p>
       </div>
     )
   }
@@ -117,18 +160,16 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
       const qid = `${id}-q-${q.id}`;
       const value = answers[q.id];
       return q.type === 'checkbox' ? (
-        <div>
-          <label class="check" for={qid}>
-            <input id={qid} name={`q_${q.id}`} type="checkbox" checked={value === true} class="check-input" />
-            {q.label}
-            {q.required ? '' : ' (optional)'}
+        <div class="g-check">
+          <input id={qid} name={`q_${q.id}`} type="checkbox" checked={value === true} />
+          <label for={qid}>
+            {q.label} <span class="g-optional">({optional(q.required)})</span>
           </label>
         </div>
       ) : (
         <div class="field">
           <label for={qid}>
-            {q.label}
-            {q.required ? '' : ' (optional)'}
+            {q.label} <span class="g-optional">({optional(q.required)})</span>
           </label>
           {q.type === 'long_text' ? (
             <textarea id={qid} name={`q_${q.id}`} rows="3" maxlength="2000">{typeof value === 'string' ? value : ''}</textarea>
@@ -152,11 +193,12 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
     })
   }
 
-  <div>
-    <label class="check" for={`${id}-consent`}>
-      <input id={`${id}-consent`} name="marketingConsent" type="checkbox" checked={values.marketingConsent === true} class="check-input" />
-      Email me about future events from this host
-    </label>
+  <div class="g-check">
+    <input id={`${id}-consent`} name="marketingConsent" type="checkbox" checked={values.marketingConsent === true} aria-describedby={`${id}-consent-hint`} />
+    <div class="g-check-text">
+      <label for={`${id}-consent`}>Send me news and offers from {hostName}</label>
+      <p class="g-check-hint" id={`${id}-consent-hint`}>Optional. Unsubscribe any time.</p>
+    </div>
   </div>
 
   <div hidden aria-hidden="true">
@@ -165,7 +207,9 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
   </div>
 
   <p class="notice" data-form-status hidden></p>
-  <button class="button" type="submit">{editing ? 'Save changes' : 'Send RSVP'}</button>
+  <div class="g-form-end">
+    <button class="g-btn g-btn-lg" type="submit">{submitLabel}</button>
+  </div>
 </form>
 
 <script>
@@ -241,7 +285,11 @@ const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney
           }
           const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
           if (res.ok) {
-            if (editing) return {ok: true, redirect: `${location.pathname}?saved=1`};
+            if (editing) {
+              // Maybe -> Going on a paid ticket: pay first, like a new RSVP.
+              if (typeof data?.checkoutUrl === 'string' && data.checkoutUrl) return {ok: true, redirect: data.checkoutUrl};
+              return {ok: true, redirect: `${location.pathname}?saved=1`};
+            }
             if (data?.status === 'check_email') return {ok: true, message: String(data.message ?? 'Check your inbox.')};
             const next = (typeof data?.checkoutUrl === 'string' && data.checkoutUrl) || (typeof data?.managePath === 'string' && data.managePath);
             return next ? {ok: true, redirect: next} : {ok: true, message: 'Thanks, your RSVP is in.'};

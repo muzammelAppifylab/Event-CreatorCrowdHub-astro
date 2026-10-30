@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 
 import type {PollType} from '../../domain/polls';
 import type {PrismaClient} from '../../generated/prisma/client';
+import {audit} from '../../platform/auth/audit';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {PERMISSIONS} from '../permissions';
 import {emitWebhook, pollClosedPayload} from '../webhook-emit';
@@ -183,6 +184,7 @@ export const adminPollRoutes = new Hono()
     if (poll.status !== 'draft') return c.json(problem('not_draft', 'Only draft polls can be deleted. This one has already been opened.'), 409);
     await c.var.db.poll.deleteMany({where: {id: poll.id, status: 'draft'}});
     invalidateResults(poll.id);
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'poll_deleted', target: ['poll', poll.id]});
     return c.json({ok: true});
   })
 
@@ -207,6 +209,7 @@ export const adminPollRoutes = new Hono()
         throw error;
       }
       invalidateResults(poll.id);
+      await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_opened', target: ['poll', poll.id]});
     }
     return c.json({ok: true});
   })
@@ -220,7 +223,10 @@ export const adminPollRoutes = new Hono()
     if (poll.status === 'open') {
       const closed = await db.poll.updateMany({where: {id: poll.id, status: 'open'}, data: {status: 'closed', closedAt: new Date()}});
       invalidateResults(poll.id);
-      if (closed.count === 1) emitWebhook(c, db, 'poll.closed', pollClosedPayload(poll));
+      if (closed.count === 1) {
+        emitWebhook(c, db, 'poll.closed', pollClosedPayload(poll));
+        await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_closed', target: ['poll', poll.id]});
+      }
     }
     return c.json({ok: true});
   })

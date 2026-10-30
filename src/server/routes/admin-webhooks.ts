@@ -1,6 +1,7 @@
 import {Hono} from 'hono';
 
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {audit} from '../../platform/auth';
 import {PERMISSIONS} from '../permissions';
 import {attemptDelivery, envelope, isWebhookEvent, newSecret, webhookUrlProblem, WEBHOOK_EVENTS, type WebhookEventName} from '../webhook-delivery';
 import {eventsOf, MAX_ENDPOINTS} from '../webhooks';
@@ -75,6 +76,7 @@ export const adminWebhookRoutes = new Hono()
     }
     const secret = newSecret();
     const row = await c.var.db.webhookEndpoint.create({data: {url: parsed.url!, events: parsed.events!, secret, active: true}, select});
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_created', target: ['webhook', row.id]});
     return c.json({endpoint: toEndpoint(row), secret}, 201);
   })
 
@@ -86,6 +88,7 @@ export const adminWebhookRoutes = new Hono()
     if (Object.keys(parsed).length === 0) return c.json(invalid('url', 'Nothing to change.'), 422);
     const res = await c.var.db.webhookEndpoint.updateMany({where: {id}, data: parsed});
     if (res.count === 0) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_updated', target: ['webhook', id], meta: {fields: Object.keys(parsed)}});
     const row = await c.var.db.webhookEndpoint.findUnique({where: {id}, select});
     return row ? c.json({endpoint: toEndpoint(row)}) : c.json(problem('not_found', 'Webhook not found.'), 404);
   })
@@ -94,7 +97,9 @@ export const adminWebhookRoutes = new Hono()
     const id = c.req.param('id');
     if (!UUID.test(id)) return c.json(problem('not_found', 'Webhook not found.'), 404);
     const res = await c.var.db.webhookEndpoint.deleteMany({where: {id}});
-    return res.count === 0 ? c.json(problem('not_found', 'Webhook not found.'), 404) : c.body(null, 204);
+    if (res.count === 0) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_deleted', target: ['webhook', id]});
+    return c.body(null, 204);
   })
 
   .post('/:id/test', async c => {
@@ -104,5 +109,6 @@ export const adminWebhookRoutes = new Hono()
     if (!endpoint) return c.json(problem('not_found', 'Webhook not found.'), 404);
     const {id: deliveryId, body: payload} = envelope('webhook.test', {message: 'Test event from Ezy Events. Your endpoint is connected.'});
     const r = await attemptDelivery(endpoint, 'webhook.test', deliveryId, payload);
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_tested', target: ['webhook', id], meta: {ok: r.ok}});
     return c.json({ok: r.ok, status: r.status, durationMs: r.durationMs, error: r.error});
   });
