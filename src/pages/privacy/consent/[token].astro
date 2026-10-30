@@ -1,0 +1,81 @@
+---
+/**
+ * `/privacy/consent/<token>`: the "yes, send me updates" link from the confirmation email
+ * (double opt-in). Rendered on request, never indexed, never cached. Opening the page changes
+ * NOTHING (mail scanners open every link); the button POSTs to `/site-api/privacy/consent/:token`.
+ */
+import Base from '../../../layouts/Base.astro';
+import type {ConsentState} from '../../../lib/privacy-types';
+import {app} from '../../../server/app';
+import {pageContext} from '../../../server/page';
+
+export const prerender = false;
+
+const token = Astro.params.token ?? '';
+const [{site, viewer}, res] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  Promise.resolve(app.request(`/site-api/privacy/consent/${encodeURIComponent(token)}`)).catch(() => null),
+]);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+const info = res?.ok ? ((await res.json().catch(() => null)) as ConsentState | null) : null;
+const invalid = !info;
+if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
+---
+
+<Base site={site} viewer={viewer} title="Confirm your updates" noindex>
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      {
+        invalid ? (
+          <>
+            <h1>This link is not valid</h1>
+            <p class="muted">It may have expired. Ask the host to send your confirmation again, or tick the updates box next time you RSVP.</p>
+          </>
+        ) : info.state === 'pending' ? (
+          <>
+            <h1>Send me updates?</h1>
+            <p class="muted">Confirm that you want occasional updates from the host of {info.event.title}. You can unsubscribe at any time.</p>
+            <form id="consent-form" class="auth-form" novalidate data-token={token}>
+              <p class="notice" data-form-status hidden />
+              <button class="button" type="submit">Yes, send me updates</button>
+            </form>
+          </>
+        ) : info.state === 'confirmed' ? (
+          <>
+            <h1>You are on the list</h1>
+            <p class="muted">You will get updates from the host. You can unsubscribe from any of them.</p>
+          </>
+        ) : (
+          <>
+            <h1>No updates are set up</h1>
+            <p class="muted">You are not subscribed to updates, so there is nothing to confirm.</p>
+          </>
+        )
+      }
+      <p class="auth-links"><a href="/privacy/">How we handle your data</a></p>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {replaceWithMessage} from '../../../lib/account';
+  import {bindForm, postJson} from '../../../lib/form';
+  import {siteFetch} from '../../../platform/browser';
+
+  document.addEventListener('astro:page-load', () => {
+    const form = document.querySelector<HTMLFormElement>('#consent-form');
+    if (!form) return;
+    const token = form.dataset.token ?? '';
+    bindForm(form, {
+      rules: {},
+      pendingLabel: 'Confirming…',
+      async submit() {
+        const {result} = await postJson(siteFetch, `/site-api/privacy/consent/${encodeURIComponent(token)}`, {});
+        if (result.ok) replaceWithMessage(form, result.message ?? 'Thanks, you are on the list.');
+        return result;
+      },
+    });
+  });
+</script>

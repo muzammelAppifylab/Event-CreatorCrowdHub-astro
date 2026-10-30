@@ -8,7 +8,8 @@ import {backend, read} from '../server/backend';
  * `/sitemap.xml`, rendered ON REQUEST (it lists the open jobs from the Site
  * Database) and cached for an hour: the public pages in `src/pages/` (found
  * automatically), every blog post and the newest open jobs (one bounded,
- * indexed query: `GET /site-api/jobs/sitemap`).
+ * indexed query: `GET /site-api/jobs/sitemap`) and upcoming public events
+ * (`GET /site-api/events/sitemap`).
  *
  * Never listed: sign-in pages, the dashboard, the API, the 404 and 500 pages. A new public
  * dynamic route (`[slug].astro`) is not found automatically: add its URLs
@@ -27,14 +28,16 @@ const pagePaths = Object.keys(import.meta.glob('./**/*.astro'))
   .sort();
 
 export const GET: APIRoute = async ({request}) => {
-  const [posts, jobs] = await Promise.all([
+  const [posts, jobs, events] = await Promise.all([
     publishedPosts(),
     read<{jobs: {slug: string; updatedAt: string}[]}>(backend(request).jobs.sitemap.$get()),
+    read<{events: {slug: string; updatedAt: string}[]}>(backend(request).events.sitemap.$get()),
   ]);
   const entries: {path: string; lastmod?: string}[] = [
     ...pagePaths.map(path => ({path})),
     ...posts.map(post => ({path: postHref(post), lastmod: (post.data.updatedAt ?? post.data.publishedAt).toISOString()})),
     ...(jobs?.jobs ?? []).map(job => ({path: `/jobs/${encodeURIComponent(job.slug)}/`, lastmod: job.updatedAt})),
+    ...(events?.events ?? []).map(event => ({path: `/events/${encodeURIComponent(event.slug)}/`, lastmod: event.updatedAt})),
   ];
   const urls = entries.flatMap(({path, lastmod}) => {
     const loc = absoluteUrl(path);
@@ -46,7 +49,7 @@ export const GET: APIRoute = async ({request}) => {
       'Content-Type': 'application/xml; charset=utf-8',
       // The same for everyone (no cookies read): browsers and caches may keep it an hour,
       // but only a complete one: without the jobs (a database outage) a few minutes.
-      'Cache-Control': jobs ? 'public, max-age=3600' : 'public, max-age=300',
+      'Cache-Control': jobs && events ? 'public, max-age=3600' : 'public, max-age=300',
     },
   });
 };

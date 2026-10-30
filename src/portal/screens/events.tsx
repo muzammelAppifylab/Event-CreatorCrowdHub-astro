@@ -1,0 +1,329 @@
+import {useInfiniteQuery, useMutation, useQueryClient} from '@tanstack/react-query';
+import {useRef, useState} from 'react';
+
+import {formatInZone} from '../../domain/time';
+import {
+  type AdminEventSummary,
+  type CancelPreview,
+  type EventListTab,
+  EVENT_LIST_TABS,
+  fromLocalInput,
+  toLocalInput,
+} from '../../lib/event-schemas';
+import {api, ApiError, read} from '../api';
+import {eventsListQuery, fieldAria, focusFirstInvalid, useEventsNav} from '../events-queries';
+import {
+  Badge,
+  Button,
+  Card,
+  type Column,
+  DataTable,
+  EmptyState,
+  ErrorNote,
+  Field,
+  IconButton,
+  LoadMore,
+  Menu,
+  Modal,
+  PageHeader,
+  StatusBadge,
+  Tabs,
+  useConfirm,
+  useToast,
+} from '../ui';
+
+const TAB_LABELS: Record<EventListTab, string> = {upcoming: 'Upcoming', past: 'Past and cancelled', drafts: 'Drafts'};
+const STATUS_TONES = {draft: 'neutral', published: 'success', cancelled: 'danger'} as const;
+const FORMAT_LABELS = {in_person: 'In person', online: 'Online', hybrid: 'Hybrid'} as const;
+const VISIBILITY_LABELS = {public: 'Public', unlisted: 'Unlisted', private: 'Private'} as const;
+const EMPTY_TEXT: Record<EventListTab, string> = {
+  upcoming: 'Published events that have not ended show here.',
+  past: 'Events that ended or were cancelled show here.',
+  drafts: 'Events you have not published yet show here.',
+};
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+const when = (e: AdminEventSummary) => formatInZone(new Date(e.startAt), e.timezone);
+
+/** `/dashboard/events` for holders of `site:event:manage`: every event, by tab. */
+export function Events() {
+  const queryClient = useQueryClient();
+  const confirm = useConfirm();
+  const toast = useToast();
+  const go = useEventsNav();
+  const [tab, setTab] = useState<EventListTab>('upcoming');
+  const [copying, setCopying] = useState<AdminEventSummary | null>(null);
+  const events = useInfiniteQuery(eventsListQuery(tab));
+  const rows = events.data?.pages.flatMap(page => page.events);
+  const refresh = () => queryClient.invalidateQueries({queryKey: ['events']});
+
+  const publish = useMutation({
+    mutationFn: (e: AdminEventSummary) => read(api['admin-events'][':id'].publish.$post({param: {id: e.id}})),
+    onSuccess: (_d, e) => {
+      toast.success(`Published “${e.title}”.`);
+      return refresh();
+    },
+  });
+  const unpublish = useMutation({
+    mutationFn: (e: AdminEventSummary) => read(api['admin-events'][':id'].unpublish.$post({param: {id: e.id}})),
+    onSuccess: (_d, e) => {
+      toast.success(`“${e.title}” is a draft again.`);
+      return refresh();
+    },
+  });
+  const cancel = useMutation({
+    mutationFn: (e: AdminEventSummary) => read(api['admin-events'][':id'].cancel.$post({param: {id: e.id}})),
+    onSuccess: refresh,
+  });
+  const remove = useMutation({
+    mutationFn: (e: AdminEventSummary) => read(api['admin-events'][':id'].$delete({param: {id: e.id}})),
+    onSuccess: refresh,
+  });
+  const preview = useMutation({
+    mutationFn: (e: AdminEventSummary) => read<CancelPreview>(api['admin-events'][':id']['cancel-preview'].$get({param: {id: e.id}})),
+  });
+
+  const busyKey =
+    (publish.isPending && publish.variables?.id) ||
+    (unpublish.isPending && unpublish.variables?.id) ||
+    (cancel.isPending && cancel.variables?.id) ||
+    (remove.isPending && remove.variables?.id) ||
+    (preview.isPending && preview.variables?.id) ||
+    null;
+  const rowError = publish.error ?? unpublish.error ?? preview.error;
+
+  const askCancel = async (e: AdminEventSummary) => {
+    const p = await preview.mutateAsync(e).catch(() => null);
+    if (!p) return;
+    const money = p.ordersToRefund
+      ? ` ${p.ordersToRefund} paid ${p.ordersToRefund === 1 ? 'order needs' : 'orders need'} a refund (${(p.refundTotalCents / 100).toFixed(2)} ${p.currency ?? ''}).`
+      : '';
+    void confirm({
+      title: `Cancel “${e.title}”?`,
+      body: `The event page shows as cancelled and ${p.guestsToEmail} ${p.guestsToEmail === 1 ? 'guest is' : 'guests are'} affected.${money} This can’t be undone.`,
+      confirmLabel: 'Cancel event',
+      pendingLabel: 'Cancelling…',
+      action: () => cancel.mutateAsync(e),
+    }).then(ok => ok && toast.success(`Cancelled “${e.title}”.`));
+  };
+  const askDelete = (e: AdminEventSummary) =>
+    void confirm({
+      title: `Delete “${e.title}”?`,
+      body: 'The draft is removed. Only drafts can be deleted; cancel a published event instead.',
+      confirmLabel: 'Delete draft',
+      pendingLabel: 'Deleting…',
+      action: () => remove.mutateAsync(e),
+    }).then(ok => ok && toast.success(`Deleted “${e.title}”.`));
+
+  const columns: Column<AdminEventSummary>[] = [
+    {
+      key: 'title',
+      header: 'Event',
+      cell: e => (
+        <div>
+          <span className="cell-title">
+            <a
+              href={`/dashboard/events/${e.id}`}
+              onClick={ev => {
+                if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
+                ev.preventDefault();
+                go(`/events/${e.id}`);
+              }}>
+              {e.title}
+            </a>
+          </span>
+          <span className="cell-sub">
+            {FORMAT_LABELS[e.format]} · {VISIBILITY_LABELS[e.visibility]}
+          </span>
+        </div>
+      ),
+    },
+    {key: 'when', header: 'Starts', width: 'shrink', cell: e => when(e)},
+    {
+      key: 'status',
+      header: 'Status',
+      width: 'shrink',
+      cell: e => <StatusBadge tone={STATUS_TONES[e.status]}>{e.status === 'draft' ? 'Draft' : e.status === 'published' ? 'Published' : 'Cancelled'}</StatusBadge>,
+    },
+    {
+      key: 'guests',
+      header: 'Guests',
+      width: 'shrink',
+      hideOnMobile: true,
+      cell: e => (
+        <span>
+          {e.counts.confirmed}
+          {e.capacity ? ` / ${e.capacity}` : ''}
+          {e.counts.waitlisted > 0 && (
+            <>
+              {' '}
+              <Badge tone="warning">{e.counts.waitlisted} waiting</Badge>
+            </>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      actions: true,
+      cell: e =>
+        busyKey === e.id ? (
+          <IconButton icon="more" label={`Working on “${e.title}”`} size="sm" pending />
+        ) : (
+          <Menu
+            label={`Actions for “${e.title}”`}
+            disabled={busyKey !== null}
+            items={[
+              {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}`)},
+              e.status === 'draft'
+                ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
+                : e.status === 'published'
+                  ? {label: 'Unpublish', icon: 'ban', onSelect: () => unpublish.mutate(e)}
+                  : {label: 'Cancelled', icon: 'ban', disabled: true, onSelect: () => undefined},
+              {label: 'Duplicate', icon: 'copy', onSelect: () => setCopying(e)},
+              {label: 'View public page', icon: 'external', disabled: e.status !== 'published', onSelect: () => void window.open(`/e/${encodeURIComponent(e.slug)}`, '_blank', 'noopener')},
+              'separator',
+              ...(e.status === 'published' ? [{label: 'Cancel event', icon: 'x' as const, danger: true, onSelect: () => void askCancel(e)}] : []),
+              ...(e.status === 'draft' ? [{label: 'Delete draft', icon: 'trash' as const, danger: true, onSelect: () => askDelete(e)}] : []),
+            ]}
+          />
+        ),
+    },
+  ];
+
+  return (
+    <div className="app-page screen-events">
+      <PageHeader
+        title="Events"
+        description="Create events, publish them, and open one to edit its details, tickets and questions."
+        actions={
+          <>
+            <Button variant="secondary" onClick={() => go('/event-settings')}>
+              Settings
+            </Button>
+            <Button icon="plus" onClick={() => go('/events/new')}>
+              New event
+            </Button>
+          </>
+        }
+      />
+
+      {rowError && <ErrorNote error={rowError} />}
+
+      <Tabs
+        label="Event lists"
+        value={tab}
+        onChange={setTab}
+        items={EVENT_LIST_TABS.map(value => ({value, label: TAB_LABELS[value]}))}>
+        <Card flush>
+          <DataTable
+            caption={`${TAB_LABELS[tab]} events`}
+            columns={columns}
+            rows={rows}
+            rowKey={e => e.id}
+            loading={events.isPending}
+            error={events.error}
+            busyKey={busyKey}
+            empty={
+              <EmptyState
+                icon="clock"
+                title={`No ${TAB_LABELS[tab].toLowerCase()} events`}
+                action={
+                  <Button variant="secondary" icon="plus" onClick={() => go('/events/new')}>
+                    New event
+                  </Button>
+                }>
+                {EMPTY_TEXT[tab]}
+              </EmptyState>
+            }
+          />
+        </Card>
+        <LoadMore query={events} />
+      </Tabs>
+
+      <DuplicateModal
+        event={copying}
+        onClose={() => setCopying(null)}
+        onDone={created => {
+          setCopying(null);
+          toast.success('Created a draft copy.');
+          void refresh();
+          go(`/events/${created}`);
+        }}
+      />
+    </div>
+  );
+}
+
+/** Asks for the copy's new dates (in the event's own timezone), then duplicates. */
+function DuplicateModal({event, onClose, onDone}: {event: AdminEventSummary | null; onClose: () => void; onDone: (id: string) => void}) {
+  return event ? <DuplicateForm key={event.id} event={event} onClose={onClose} onDone={onDone} /> : <Modal open={false} onClose={onClose} title="Duplicate event" />;
+}
+
+function DuplicateForm({event, onClose, onDone}: {event: AdminEventSummary; onClose: () => void; onDone: (id: string) => void}) {
+  const shifted = (iso: string) => toLocalInput(new Date(new Date(iso).getTime() + WEEK_MS).toISOString(), event.timezone);
+  const [title, setTitle] = useState(`Copy of ${event.title}`.slice(0, 120));
+  const [start, setStart] = useState(shifted(event.startAt));
+  const [end, setEnd] = useState(shifted(event.endAt));
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const formRef = useRef<HTMLFormElement>(null);
+  const copy = useMutation({
+    mutationFn: (body: {title: string; startAt: string; endAt: string}) =>
+      read<{event: {id: string}}>(api['admin-events'][':id'].duplicate.$post({param: {id: event.id}, json: body})),
+    onSuccess: ({event: created}) => onDone(created.id),
+    onError: err => {
+      if (err instanceof ApiError && Object.keys(err.fields).length) {
+        setErrors(err.fields);
+        focusFirstInvalid(formRef.current);
+      }
+    },
+  });
+  const submit = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    const startAt = fromLocalInput(start, event.timezone);
+    const endAt = fromLocalInput(end, event.timezone);
+    const next: Record<string, string> = {};
+    if (!title.trim()) next.title = 'Enter a title.';
+    if (!startAt) next.startAt = 'Enter a valid date and time.';
+    if (!endAt) next.endAt = 'Enter a valid date and time.';
+    if (startAt && endAt && Date.parse(endAt) <= Date.parse(startAt)) next.endAt = 'End must be after the start.';
+    setErrors(next);
+    if (Object.keys(next).length) return focusFirstInvalid(formRef.current);
+    copy.mutate({title: title.trim(), startAt: startAt!, endAt: endAt!});
+  };
+  const failed = copy.error && !(copy.error instanceof ApiError && Object.keys(copy.error.fields).length);
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!copy.isPending}
+      title="Duplicate event"
+      description={`Copies the details, questions, tickets and emails as a draft. Times are in ${event.timezone}.`}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={copy.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" form="duplicate-event" pending={copy.isPending} pendingLabel="Duplicating…">
+            Duplicate
+          </Button>
+        </>
+      }>
+      <form ref={formRef} id="duplicate-event" className="form-stack" noValidate onSubmit={submit}>
+        <Field id="dup-title" label="Title" error={errors.title}>
+          <input id="dup-title" {...fieldAria('dup-title', errors.title)} value={title} onChange={ev => setTitle(ev.target.value)} maxLength={120} autoComplete="off" />
+        </Field>
+        <div className="form-grid">
+          <Field id="dup-start" label="Starts" error={errors.startAt}>
+            <input id="dup-start" {...fieldAria('dup-start', errors.startAt)} type="datetime-local" value={start} onChange={ev => setStart(ev.target.value)} />
+          </Field>
+          <Field id="dup-end" label="Ends" error={errors.endAt}>
+            <input id="dup-end" {...fieldAria('dup-end', errors.endAt)} type="datetime-local" value={end} onChange={ev => setEnd(ev.target.value)} />
+          </Field>
+        </div>
+        {failed && <ErrorNote error={copy.error!} />}
+      </form>
+    </Modal>
+  );
+}

@@ -660,6 +660,10 @@ model WebhookEndpoint {
   secret      String
   events      Json      @default("[]")
   active      Boolean   @default(true)
+  name        String?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastStatus  Int?      @map("last_status")
+  lastDeliveryAt DateTime? @map("last_delivery_at") @db.Timestamptz(6)
 
   @@map("webhook_endpoints")
 }

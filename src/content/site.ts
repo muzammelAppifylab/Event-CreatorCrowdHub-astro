@@ -4,12 +4,14 @@
  * Edit freely. The site's NAME and LOGO are not here: they come from the
  * platform (`GET /site-api/site`), so a rename in the dashboard shows
  * up without a Publish. Use `{name}` in any string below for the site name.
+ * Real product claims only: no invented reviews, customers or numbers.
  */
 
 /** Search and social basics. The NAME comes from the platform (above). */
 export const SITE = {
   /** One sentence: the meta description of pages that have none of their own. Use `{name}`. */
-  description: 'News, guides, open roles and your own dashboard at {name}.',
+  description:
+    '{name} is the event platform for creators: branded event pages, email invites, RSVPs with a waitlist, reminders and live polls behind one link.',
   /** `en`, `fr`, … : the page language (screen readers, search engines). */
   lang: 'en',
   /**
@@ -38,69 +40,67 @@ export interface NavItem {
  */
 export const NAV: NavItem[] = [
   {label: 'Home', href: '/'},
-  {label: 'Blog', href: '/blog/'},
   {label: 'Events', href: '/events/', prefetch: false},
+  {label: 'Blog', href: '/blog/'},
   {label: 'Jobs', href: '/jobs/', prefetch: false},
   {label: 'About', href: '/about/'},
 ];
 
-/**
- * The home page, top to bottom (`src/pages/index.astro`). Each block is one
- * section; reorder or drop freely. Rewrite every word for the business: what it
- * offers, who it is for, what a visitor does next. No invented reviews or numbers.
- */
+/** The home page, top to bottom (`src/pages/index.astro`). Each block is one section. */
 export const HOME = {
   hero: {
-    eyebrow: 'Welcome to {name}',
+    eyebrow: '{name} for creators',
     /** The headline. `highlight` is the part of it shown with a marker behind it (or '' for none). */
-    title: 'Everything you need, in one place',
-    highlight: 'one place',
-    body: 'Create your account in a minute, then keep your work, your files and your updates together in your own dashboard.',
-    note: 'Sign up with your email. No setup needed.',
+    title: 'Events your people actually show up to',
+    highlight: 'actually show up',
+    body: 'Branded event pages, email invites, RSVPs and live polls behind one link. Guests reply in under 30 seconds, with no account.',
+    note: 'Your guests stay in your own contacts list.',
     /** Guests: create an account, or jump down the page. */
     guest: {primary: 'Create an account', secondary: 'See how it works'},
     /** Signed-in visitors. */
-    user: {primary: 'Open your dashboard', secondary: 'Read the blog'},
+    user: {primary: 'Open your dashboard', secondary: 'Browse events'},
   },
-  /** The dashboard picture next to the headline: illustrative only, hidden from screen readers. */
+  /** The dashboard picture next to the headline: an illustrative example, hidden from screen readers. */
   visual: {
-    nav: ['Overview', 'Projects', 'Files', 'Messages', 'Settings'],
-    title: 'Overview',
+    nav: ['Events', 'Invites', 'Guests', 'Polls', 'Settings'],
+    title: 'Example event',
     stats: [
-      {label: 'Open tasks', value: '12', trend: '+3 this week'},
-      {label: 'Files', value: '48', trend: '+6 this week'},
-      {label: 'Messages', value: '5', trend: '2 unread'},
+      {label: 'Going', value: '42', trend: 'Example data'},
+      {label: 'Maybe', value: '9', trend: 'Example data'},
+      {label: 'Waitlist', value: '4', trend: 'Example data'},
     ],
-    chart: 'Activity, last 30 days',
+    chart: 'RSVPs over time',
     rows: [
-      {name: 'Welcome checklist', status: 'Done', tone: 'success'},
-      {name: 'Monthly report', status: 'In progress', tone: 'info'},
-      {name: 'Team photo', status: 'Waiting', tone: 'warning'},
+      {name: 'Invite sent', status: 'Done', tone: 'success'},
+      {name: 'Reminder, 24 hours before', status: 'Scheduled', tone: 'info'},
+      {name: 'Live poll', status: 'Draft', tone: 'warning'},
     ],
   },
   features: {
     eyebrow: 'What you get',
-    title: 'Built for the way you work',
-    body: 'The essentials, ready from the first day, and nothing you have to learn first.',
+    title: 'Everything for one event, in one place',
+    body: 'RSVPs, reminders and polls live behind one link, so there is no second tool to run.',
     /** `icon`: one of the names in `src/components/home/Icon.astro`. */
     items: [
-      {icon: 'user', title: 'Your own account', body: 'Sign up with your email and pick up where you left off, on any device.'},
-      {icon: 'dashboard', title: 'A clear dashboard', body: 'Your work, your files and your latest updates together on one screen.'},
-      {icon: 'bell', title: 'Updates that matter', body: 'Hear about what needs you, when it needs you, and nothing else.'},
-      {icon: 'shield', title: 'Private and secure', body: 'Secure sign-in and a private space that only you can open.'},
-      {icon: 'book', title: 'Practical guides', body: 'Stories and how-tos on the blog, written by the team.'},
-      {icon: 'briefcase', title: 'Open roles', body: 'See who is hiring on the job board, updated as new roles open.'},
+      {icon: 'calendar', title: 'Branded event pages', body: 'Each event gets its own page with your details and one clear RSVP button.'},
+      {icon: 'mail', title: 'Email invites', body: 'Invite people by email and see who has replied.'},
+      {icon: 'user', title: 'Smart RSVPs', body: "Going, maybe or can't go, with custom questions, plus-ones, approval and a waitlist when you are full."},
+      {icon: 'bell', title: 'Automatic reminders', body: 'Reminders go out before the event, with a calendar file guests can add in one tap.'},
+      {icon: 'chart', title: 'Live polls', body: 'Ask the room a question and show the results on screen in a presenter view.'},
+      {icon: 'shield', title: 'Your guests, your data', body: 'Every guest lands in your own contacts list with their marketing consent. Export a CSV any time.'},
     ],
   },
   how: {
     eyebrow: 'How it works',
-    title: 'Up and running in three steps',
+    title: 'From idea to full room in three steps',
     steps: [
-      {title: 'Create your account', body: 'Enter your email and choose a password. It takes about a minute.'},
-      {title: 'Make it yours', body: 'Add your details and choose what you want to see first.'},
-      {title: 'Open your dashboard', body: 'Everything is there when you come back, on your phone or your computer.'},
+      {title: 'Create the event', body: 'Add the date, the place or link, a cover and your RSVP rules.'},
+      {title: 'Send the invites', body: 'Share the link or email your list. Guests reply on their phone, no account needed.'},
+      {title: 'Run it', body: 'Check guests in at the door, open a poll when you are ready, and follow up afterwards.'},
     ],
   },
+  /** The next public events, loaded in the browser (the home page is static). */
+  events: {title: 'Upcoming events', link: 'All events'},
   blog: {title: 'Latest from the blog', link: 'All posts'},
   jobs: {title: 'Open roles', link: 'All jobs', remote: 'Remote'},
   faq: {
@@ -108,26 +108,26 @@ export const HOME = {
     title: 'Questions, answered',
     items: [
       {
-        q: 'How do I create an account?',
-        a: 'Choose Create an account at the top of any page, enter your email and pick a password. You can start right away.',
+        q: 'Do my guests need an account?',
+        a: 'No. A guest opens the invite link, replies on one screen and, if you ask, answers your questions.',
       },
       {
-        q: 'Can I use it on my phone?',
-        a: 'Yes. Every page works on phones, tablets and computers, and your dashboard is the same wherever you sign in.',
+        q: 'What happens when an event is full?',
+        a: 'If you turn the waitlist on, guests can join it and are emailed when a seat opens up. Without a waitlist the page says the event is full.',
       },
       {
-        q: 'Who can see my information?',
-        a: 'Only you, once you are signed in. You can update your details from your dashboard at any time.',
+        q: 'Who owns the guest list?',
+        a: 'You do. Guests are saved to your own contacts list with their marketing consent, and you can export them as a CSV.',
       },
       {
-        q: 'I forgot my password. What now?',
-        a: 'Choose Sign in, then Forgot your password. We email you a link to set a new one.',
+        q: 'Can I run polls during the event?',
+        a: 'Yes. Open a poll when you are ready, guests vote in two taps, and the results show on screen in the presenter view.',
       },
     ],
   },
   cta: {
-    title: 'Ready to get started with {name}?',
-    body: 'Create your account in a minute and open your dashboard.',
+    title: 'Ready to host your next event on {name}?',
+    body: 'Create your account, set up an event and send your first invites.',
     primary: 'Create an account',
     secondary: 'Sign in',
   },
@@ -135,19 +135,23 @@ export const HOME = {
 
 export const ABOUT = {
   title: 'About {name}',
-  lede: 'Who we are, and why we do this.',
+  lede: 'An event platform for creators: invites, RSVPs, reminders and live polls behind one link.',
   sections: [
     {
-      heading: 'Our story',
-      body: '{name} started with a simple idea: good things are easier together. Replace this text with your own story.',
+      heading: 'What it is',
+      body: '{name} is for coaches, community owners and course creators who run free webinars, paid workshops and meetups. It puts the event page, the invite, the RSVP, the reminders and the live poll in one tool.',
     },
     {
-      heading: 'What you will find here',
-      body: 'A blog with practical guides, open roles, and a dashboard for everyone with an account.',
+      heading: 'How it treats guests',
+      body: 'A guest never needs an account. They open the invite on their phone, reply in under 30 seconds and vote in a poll in two taps.',
+    },
+    {
+      heading: 'How it treats creators',
+      body: 'The page carries your brand, not ours. Every guest lands in your own contacts list with their marketing consent, and leaves only through your webhooks or a CSV export you control.',
     },
     {
       heading: 'How to take part',
-      body: 'Create an account and open your dashboard. Everyone is welcome.',
+      body: 'Browse the upcoming events and RSVP, or create an account to host your own.',
     },
   ],
 };

@@ -1,0 +1,100 @@
+import {describe, expect, it} from 'vitest';
+
+import {
+  conversion,
+  goingCount,
+  normaliseSource,
+  ratio,
+  showRate,
+  topSources,
+  viewsDayRange,
+  zeroFillDays,
+} from '../src/server/routes/admin-analytics';
+import {BEACON_LIMIT, createLimiter, utcDay, visitorHash} from '../src/server/routes/pageviews';
+
+const base = {secret: 'test-secret', at: new Date('2026-10-30T10:00:00Z'), ip: '203.0.113.7', userAgent: 'UA/1', eventId: 'e1'};
+
+describe('visitorHash', () => {
+  it('is a stable sha256 hex that does not contain the ip', async () => {
+    const a = await visitorHash(base);
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(a).toBe(await visitorHash(base));
+    expect(a).not.toContain('203.0.113.7');
+  });
+  it('is the same all day, different the next day (salt rotates)', async () => {
+    const a = await visitorHash(base);
+    expect(await visitorHash({...base, at: new Date('2026-10-30T23:59:59Z')})).toBe(a);
+    expect(await visitorHash({...base, at: new Date('2026-10-31T00:00:01Z')})).not.toBe(a);
+  });
+  it('differs per ip, user agent, event and secret', async () => {
+    const a = await visitorHash(base);
+    for (const change of [{ip: '203.0.113.8'}, {userAgent: 'UA/2'}, {eventId: 'e2'}, {secret: 'other'}]) {
+      expect(await visitorHash({...base, ...change})).not.toBe(a);
+    }
+  });
+  it('separates fields so concatenations cannot collide', async () => {
+    expect(await visitorHash({...base, ip: '1.2.3.4', userAgent: '5x'})).not.toBe(await visitorHash({...base, ip: '1.2.3.45', userAgent: 'x'}));
+  });
+  it('utcDay is the UTC date', () => expect(utcDay(new Date('2026-10-30T23:59:59-05:00'))).toBe('2026-10-31'));
+});
+
+describe('beacon limiter', () => {
+  it('allows the limit per window, then refuses, then resets', () => {
+    let t = 0;
+    const hit = createLimiter(3, 1000, () => t);
+    expect([hit('a'), hit('a'), hit('a'), hit('a')]).toEqual([true, true, true, false]);
+    expect(hit('b')).toBe(true);
+    t = 1000;
+    expect(hit('a')).toBe(true);
+    expect(BEACON_LIMIT.perIp).toBeGreaterThan(0);
+  });
+});
+
+describe('metrics', () => {
+  it('normalises sources', () => {
+    expect(normaliseSource('  Newsletter ')).toBe('newsletter');
+    expect(normaliseSource('')).toBeNull();
+    expect(normaliseSource(null)).toBeNull();
+    expect(normaliseSource('x'.repeat(100))).toHaveLength(64);
+  });
+  it('ratio is null with a reason when there is nothing to divide by', () => {
+    expect(ratio(1, 0, 'none')).toEqual({value: null, numerator: 1, denominator: 0, reason: 'none'});
+    expect(conversion(5, 20).value).toBe(0.25);
+  });
+  it('show rate waits for the event to end and counts only confirmed going guests', () => {
+    const rows = [
+      {response: 'going', status: 'confirmed', count: 4, showedUp: 3},
+      {response: 'maybe', status: 'confirmed', count: 2, showedUp: 2},
+      {response: 'going', status: 'cancelled', count: 1, showedUp: 0},
+    ];
+    expect(goingCount(rows)).toBe(4);
+    expect(showRate(rows, false).value).toBeNull();
+    expect(showRate(rows, true).value).toBe(0.75);
+    expect(showRate([], true).reason).toBe('No confirmed going guests.');
+  });
+  it('zero-fills a lifetime of at most 14 days, oldest first, and never inverts', () => {
+    const now = new Date('2026-10-30T12:00:00Z');
+    const range = viewsDayRange({createdAt: new Date('2026-10-28T08:00:00Z'), endAt: new Date('2026-12-01T00:00:00Z')}, now);
+    expect(range).toEqual({firstDay: '2026-10-28', lastDay: '2026-10-30'});
+    expect(zeroFillDays(range, [{date: '2026-10-29', count: 5}])).toEqual([
+      {date: '2026-10-28', views: 0},
+      {date: '2026-10-29', views: 5},
+      {date: '2026-10-30', views: 0},
+    ]);
+    const long = viewsDayRange({createdAt: new Date('2026-01-01T00:00:00Z'), endAt: new Date('2027-01-01T00:00:00Z')}, now);
+    expect(zeroFillDays(long, [])).toHaveLength(14);
+    const future = viewsDayRange({createdAt: new Date('2027-05-01T00:00:00Z'), endAt: new Date('2027-06-01T00:00:00Z')}, now);
+    expect(future.firstDay <= future.lastDay).toBe(true);
+  });
+  it('merges view and RSVP sources, direct included, sorted and capped', () => {
+    const rows = topSources(
+      [{source: 'Twitter', count: 3}, {source: null, count: 10}, {source: 'twitter', count: 2}],
+      [{source: 'twitter', count: 4}, {source: 'mail', count: 1}],
+      2
+    );
+    expect(rows).toEqual([
+      {source: null, views: 10, rsvps: 0},
+      {source: 'twitter', views: 5, rsvps: 4},
+    ]);
+  });
+});

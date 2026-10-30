@@ -1,0 +1,48 @@
+---
+/** `/privacy/`: what the site keeps about event guests and how they control it. STATIC. */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic title="Privacy" description="What we keep when you RSVP to an event, why, for how long, and how to download, correct or erase it.">
+  <main id="main" tabindex="-1" class="wrap narrow section">
+    <h1>Privacy</h1>
+    <div class="prose">
+      <h2>What we keep</h2>
+      <p>
+        When you RSVP we keep your name, your email, your answer, any answers to the host's questions, and your ticket and check-in
+        status. If you buy a ticket we keep the amount and its status, never your card details. If you tick the updates box we keep
+        that choice.
+      </p>
+      <h2>Updates from the host</h2>
+      <p>
+        Updates are off unless you tick the box when you RSVP, and they only start once you click "Yes, send me updates" in the email
+        we send you. Every update has an unsubscribe link, and it takes one click.
+      </p>
+      <h2>Your link</h2>
+      <p>
+        The email confirming your RSVP has a private link to manage your RSVP and your data. Anyone with the link can use it, so do
+        not forward it. If you lose it, ask for a new one on the event page; the old one stops working.
+      </p>
+      <h2>Download or erase your data</h2>
+      <p>
+        From your private link you can download everything we hold about you for that event as a JSON file, or erase it. Erasing
+        removes your name, email and answers and frees your seat. Payment records stay, without your name.
+      </p>
+      <h2>How long we keep it</h2>
+      <p>
+        Guest details are removed two years after the event ends. The download link works for 180 days after the event; erasing and
+        unsubscribing always work.
+      </p>
+      <h2>Visits</h2>
+      <p>
+        We count event page visits with a salted hash that changes every day, so a visit cannot be tied to you or followed from one
+        day to the next. We do not store your IP address.
+      </p>
+    </div>
+  </main>
+</Base>

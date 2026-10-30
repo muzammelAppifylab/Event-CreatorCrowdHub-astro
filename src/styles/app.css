@@ -2377,3 +2377,18 @@
   font-size: 0.85rem;
   color: var(--muted);
 }
+.screen-polls .poll-options { border: 0; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.screen-polls .poll-option-row { display: flex; gap: 0.5rem; align-items: center; }
+.screen-polls .poll-option-row input { flex: 1; }
+.screen-poll-present .poll-present-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1.5rem; flex-wrap: wrap; }
+.screen-poll-present .poll-present-question { font-size: clamp(1.75rem, 4vw, 3.5rem); line-height: 1.15; margin: 0 0 1.5rem; }
+.screen-poll-present .poll-present-url { font-size: 1.25em; }
+.screen-poll-present .poll-present-body { display: grid; gap: 1.5rem; }
+.screen-poll-present .poll-present-body .stat-value { font-size: clamp(2.5rem, 6vw, 5rem); }
+.screen-poll-present .bar-chart { min-height: 22rem; }
+.screen-poll-present .bar-chart-labels { font-size: clamp(1rem, 2vw, 1.6rem); font-weight: 600; }
+.screen-poll-present .poll-present-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; font-size: clamp(1.1rem, 2.2vw, 1.75rem); }
+.screen-poll-present .poll-present-list li { display: flex; justify-content: space-between; gap: 1rem; }
+.screen-poll-present .poll-present-answers { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); font-size: clamp(1.1rem, 2vw, 1.6rem); font-weight: 600; }
+.screen-poll-present .poll-present-answers li { padding: 1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.screen-poll-present .poll-present-note { font-size: 1.5rem; }

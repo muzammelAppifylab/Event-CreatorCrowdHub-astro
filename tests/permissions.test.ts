@@ -23,8 +23,10 @@ describe('the permission catalogue', () => {
     expect(CORE.ROLE_UPDATE).toBe('site:role:update');
     expect(CORE.AUDIT_READ).toBe('site:audit:read');
     expect(PERMISSIONS.JOB_MANAGE).toBe('site:job:manage');
+    expect(PERMISSIONS.EVENT_MANAGE).toBe('site:event:manage');
+    expect(PERMISSIONS.EVENT_CHECKIN).toBe('site:event:checkin');
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
-      ['editRoles', 'manageJobs', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
+      ['checkinGuests', 'editRoles', 'manageEvents', 'manageJobs', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
     );
     expect(Object.values(NO_ABILITIES).every(v => v === false)).toBe(true);
   });
@@ -40,6 +42,8 @@ describe('the permission catalogue', () => {
       editRoles: false,
       readAudit: true,
       manageJobs: true,
+      manageEvents: false,
+      checkinGuests: false,
     } satisfies Abilities);
     // The type is exact: a key nobody declared does not exist.
     // @ts-expect-error not in the catalogue

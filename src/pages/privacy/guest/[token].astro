@@ -1,0 +1,123 @@
+---
+/**
+ * `/privacy/guest/<token>`: a guest's own data page (the RSVP's manage token is the credential):
+ * what we hold, a JSON download, and erase. Rendered on request, never indexed, never cached.
+ * The download is a plain link to `/site-api/privacy/guest/:token/export` (a GET with no side effect);
+ * erasing POSTs `{confirm: "erase"}` to `/site-api/privacy/guest/:token/erase`.
+ */
+import Base from '../../../layouts/Base.astro';
+import {formatDate} from '../../../lib/format';
+import type {GuestPrivacySummary} from '../../../lib/privacy-types';
+import {app} from '../../../server/app';
+import {pageContext} from '../../../server/page';
+
+export const prerender = false;
+
+const token = Astro.params.token ?? '';
+const [{site, viewer}, res] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  Promise.resolve(app.request(`/site-api/privacy/guest/${encodeURIComponent(token)}`)).catch(() => null),
+]);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+const info = res?.ok ? ((await res.json().catch(() => null)) as GuestPrivacySummary | null) : null;
+const invalid = !info;
+if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
+const exportHref = `/site-api/privacy/guest/${encodeURIComponent(token)}/export`;
+const exportOpen = info ? new Date(info.exportUntil).getTime() > Date.now() : false;
+---
+
+<Base site={site} viewer={viewer} title="Your data" noindex>
+  <main id="main" tabindex="-1" class="wrap narrow section">
+    {
+      invalid ? (
+        <div class="card auth-card">
+          <h1>This link is not valid</h1>
+          <p class="muted">It may have been replaced, or the data was already erased. Use the link in your latest email from the host.</p>
+        </div>
+      ) : (
+        <>
+          <p class="eyebrow">{info.event.title}</p>
+          <h1>Your data</h1>
+          <section class="card">
+            <h2>What we hold</h2>
+            <p>
+              {info.name} · {info.email}
+            </p>
+            <p class="muted">
+              RSVP status: {info.status}. Marketing updates:{' '}
+              {info.marketingConsent ? (info.consentConfirmed ? 'on' : 'waiting for your confirmation email') : 'off'}.
+            </p>
+            {info.marketingConsent && (
+              <p>
+                <a href={`/privacy/unsubscribe/${encodeURIComponent(token)}`}>Unsubscribe from updates</a>
+              </p>
+            )}
+          </section>
+          <section class="card">
+            <h2>Download your data</h2>
+            <p class="muted">Everything we keep about you for this event, as one JSON file.</p>
+            {
+              exportOpen ? (
+                <a class="button" href={exportHref} download>
+                  Download JSON
+                </a>
+              ) : (
+                <p class="muted">The download closed on {formatDate(info.exportUntil)}. Erasing is still possible.</p>
+              )
+            }
+          </section>
+          <section class="card">
+            <h2>Erase your data</h2>
+            <p class="muted">
+              Removes your name, email and answers and frees your seat. Payment records stay without your name. This cannot be undone.
+            </p>
+            {
+              info.canErase ? (
+                <form id="erase-form" class="auth-form" novalidate data-token={token}>
+                  <div class="field">
+                    <label for="erase-confirm">Type erase to confirm</label>
+                    <input id="erase-confirm" name="confirm" type="text" autocomplete="off" placeholder="erase" />
+                  </div>
+                  <p class="notice" data-form-status hidden />
+                  <button class="button danger" type="submit">Erase my data</button>
+                </form>
+              ) : (
+                <p class="notice">Your payment is still being completed. Come back once it has finished or expired.</p>
+              )
+            }
+          </section>
+        </>
+      )
+    }
+    <p class="auth-links"><a href="/privacy/">How we handle your data</a></p>
+  </main>
+</Base>
+
+<script>
+  import {replaceWithMessage} from '../../../lib/account';
+  import {bindForm, postJson} from '../../../lib/form';
+  import {rules} from '../../../lib/rules';
+  import {siteFetch} from '../../../platform/browser';
+
+  document.addEventListener('astro:page-load', () => {
+    const form = document.querySelector<HTMLFormElement>('#erase-form');
+    if (!form) return;
+    const token = form.dataset.token ?? '';
+    bindForm(form, {
+      rules: {
+        confirm: [
+          rules.required('Type "erase" to confirm.'),
+          value => (value.trim().toLowerCase() === 'erase' ? null : 'Type "erase" to confirm.'),
+        ],
+      },
+      pendingLabel: 'Erasing…',
+      async submit(values) {
+        const {result} = await postJson(siteFetch, `/site-api/privacy/guest/${encodeURIComponent(token)}/erase`, values);
+        if (result.ok) replaceWithMessage(form, result.message ?? 'Your data has been erased.');
+        return result;
+      },
+    });
+  });
+</script>

@@ -7,7 +7,9 @@
  * What changes often is filled in by the browser after load, from the Site API:
  *   - the visitor (`<Base isStatic>`): signed-in users see "Open your dashboard"
  *     (`data-user-only`), guests "Create an account" (`data-guest-only`)
- *   - open roles (a `data-live` section, below)
+ *   - the next 3 public events and open roles (`data-live` sections, below). Events are
+ *     public data but change often, so they load client-side from `GET /site-api/events`
+ *     and are never baked into this static file.
  * The latest posts come from `src/content/blog/` at build time.
  * A section with no data stays hidden.
  */
@@ -58,7 +60,7 @@ const headline =
               {HOME.hero.user.primary}
               <Icon name="arrow-right" size={18} />
             </a>
-            <a class="button ghost home-button-lg" href="/blog/" data-astro-prefetch>{HOME.hero.user.secondary}</a>
+            <a class="button ghost home-button-lg" href="/events/">{HOME.hero.user.secondary}</a>
           </div>
           <p class="home-note" data-guest-only>{HOME.hero.note}</p>
         </div>
@@ -108,6 +110,19 @@ const headline =
             ))
           }
         </ol>
+      </div>
+    </section>
+
+    <section class="home-section" data-live="events" aria-labelledby="events-title" hidden>
+      <div class="wrap">
+        <div class="home-head home-head-row">
+          <h2 id="events-title">{HOME.events.title}</h2>
+          <a class="home-more" href="/events/">
+            {HOME.events.link}
+            <Icon name="arrow-right" size={16} />
+          </a>
+        </div>
+        <ul class="job-list" data-list></ul>
       </div>
     </section>
 
@@ -196,7 +211,8 @@ const headline =
 </Base>
 
 <script>
-  import type {JobsPage} from '../lib/types';
+  import {formatEventTime} from '../lib/format';
+  import type {EventsPage, JobsPage} from '../lib/types';
 
   // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
   // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
@@ -222,6 +238,21 @@ const headline =
         // The section stays hidden: the page is complete without it.
       }
     }
+
+    void live<EventsPage>('events', '/site-api/events', (data, list) => {
+      for (const event of data.events.slice(0, 3)) {
+        const row = el('a', 'job-row');
+        row.href = `/events/${encodeURIComponent(event.slug)}/`;
+        const text = el('div');
+        text.append(el('h3', 'job-title', event.title), el('p', 'muted', formatEventTime(event.startAt, event.timezone)));
+        row.append(text);
+        if (event.venueName) row.append(el('span', 'muted small', event.venueName));
+        const item = el('li');
+        item.append(row);
+        list.append(item);
+      }
+      return Math.min(3, data.events.length);
+    });
 
     void live<JobsPage>('jobs', '/site-api/jobs', (data, list) => {
       for (const job of data.jobs.slice(0, 3)) {

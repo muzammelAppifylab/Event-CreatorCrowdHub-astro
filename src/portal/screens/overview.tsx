@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
 
 import {firstAuditQuery, firstJobsQuery, firstUsersQuery, healthQuery, siteQuery, twoFactorQuery} from '../queries';
+import {overviewQuery} from '../overview-queries';
 import {ago, pageCount, useMe, when} from '../shared';
 import {Badge, buttonClass, Card, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
 
@@ -27,6 +28,8 @@ export function Overview() {
   const jobs = useQuery({...firstJobsQuery, enabled: Boolean(abilities?.manageJobs)});
   const activity = useQuery({...firstAuditQuery, enabled: Boolean(abilities?.readAudit)});
   const recent = activity.data?.events.slice(0, 6) ?? [];
+  const events = useQuery({...overviewQuery, enabled: Boolean(me.data)});
+  const ev = events.data;
   const firstName = viewer?.name?.split(/\s+/)[0];
 
   // The checklist: only steps this person can do, each done from real data.
@@ -96,6 +99,61 @@ export function Overview() {
         <Notice tone="info" title="Emails are not sent here">
           This copy has no Site Key, so sign-in codes and password resets are not emailed. The live site has one.
         </Notice>
+      )}
+
+      {events.error && <ErrorNote error={events.error} />}
+      {events.isPending && events.fetchStatus !== 'idle' && <LoadingBlock rows={2} />}
+      {ev && (
+        <>
+          <div className="stat-grid">
+            <Stat label="Upcoming events" icon="clock" value={String(ev.totals.upcomingEvents) + (ev.totals.hasMore ? '+' : '')} hint="Published, not yet ended" to="/events" />
+            <Stat label="RSVPs in next events" icon="users" value={String(ev.totals.going)} hint="Confirmed seats" />
+            <Stat label="Waitlisted" icon="clock" value={String(ev.totals.waitlisted)} hint="Across upcoming events" />
+            <Stat label="Awaiting approval" icon="inbox" value={String(ev.totals.pending)} hint="Pending RSVPs" />
+          </div>
+          <Card
+            title="Recent RSVPs"
+            description="Newest responses to upcoming events."
+            flush
+            actions={
+              <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to={'/events' as never}>
+                View all
+                <Icon name="arrow-right" size={16} />
+              </Link>
+            }>
+            {ev.recent.length ? (
+              <ul className="list">
+                {ev.recent.map(r => (
+                  <li key={r.id} className="list-row">
+                    <span className="list-row-icon">
+                      <Icon name="users" size={16} />
+                    </span>
+                    <div className="list-row-text">
+                      <p className="list-row-title">
+                        {r.name} <span className="muted">· {r.status.replaceAll('_', ' ')}</span>
+                      </p>
+                      <p className="list-row-sub">{r.eventTitle}</p>
+                    </div>
+                    <time className="list-row-end" dateTime={r.createdAt} title={when(r.createdAt)}>
+                      {ago(r.createdAt)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <EmptyState
+                icon="users"
+                title="No RSVPs yet"
+                action={
+                  <Link className={buttonClass({variant: 'secondary'})} to={'/events' as never}>
+                    View events
+                  </Link>
+                }>
+                Responses to your upcoming events will show here.
+              </EmptyState>
+            )}
+          </Card>
+        </>
       )}
 
       <div className="stat-grid">

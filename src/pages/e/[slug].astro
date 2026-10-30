@@ -1,0 +1,9 @@
+---
+/**
+ * `/e/<slug>` is the source app's event address: emails, ticket links and the dashboard still
+ * use it. Send it to the real page (`/events/<slug>/`) with a permanent redirect, keeping the
+ * query string (`?invite=`, `utm_source`).
+ */
+const slug = encodeURIComponent(Astro.params.slug ?? '');
+return Astro.redirect(`/events/${slug}/${Astro.url.search}`, 301);
+---

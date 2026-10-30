@@ -1,4 +1,6 @@
 import {getDb} from '../platform/db';
+import {releaseHold} from './jobs/holds';
+import {confirmPaidTicket, refundedTicket} from './ticket-checkout';
 import {type Checkout, definePaymentHooks, type PlatformMembership, type Refund} from '../platform/payments';
 
 /**
@@ -87,14 +89,18 @@ export async function recordMembership(membership: PlatformMembership, mode: str
 
 export const paymentHooks = definePaymentHooks({
   async onCheckoutPaid(checkout) {
-    const {created} = await recordOrder(checkout, 'paid');
-    if (created) {
-      // One-time work for a new order goes here (or send a background job from here).
-    }
+    // The platform's generic record first, then THIS app's ticket: RSVP -> confirmed, order -> paid,
+    // confirmation email queued (all idempotent, so the event and the thanks page's confirm can both run).
+    await recordOrder(checkout, 'paid');
+    await confirmPaidTicket(database(), checkout);
   },
 
   async onCheckoutFailed(checkout) {
     await recordOrder(checkout, 'failed');
+    // A payment that failed gives the held seat back (waitlist promoted, hold-expired email).
+    const db = database();
+    const order = await db.ticketOrder.findUnique({where: {checkoutId: checkout.id}, select: {rsvpId: true, status: true}});
+    if (order?.status === 'pending') await releaseHold(db, order.rsvpId);
   },
 
   async onMembershipChanged(membership, event) {
@@ -102,9 +108,11 @@ export const paymentHooks = definePaymentHooks({
   },
 
   async onRefund(refund: Refund) {
-    await database().order.updateMany({
+    const db = database();
+    await db.order.updateMany({
       where: {checkoutId: refund.checkoutId},
       data: {status: refund.full ? 'refunded' : 'partially_refunded'},
     });
+    await refundedTicket(db, refund);
   },
 });

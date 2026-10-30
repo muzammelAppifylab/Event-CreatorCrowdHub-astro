@@ -1,0 +1,73 @@
+---
+/**
+ * Public host page: every upcoming public event of this site as one branded page
+ * (port of CreatorCrowdHub `features/host-page`). SSR from `GET /site-api/events` (in-process) plus
+ * the public brand (`GET /site-api/event-settings/brand`: colour and font preset only).
+ * "Later events" follows the keyset cursor (`?before=`).
+ */
+import Base from '../../layouts/Base.astro';
+import {formatEventTime} from '../../lib/format';
+import type {EventsPage} from '../../lib/types';
+import {backend, read} from '../../server/backend';
+import {pageContext} from '../../server/page';
+
+const before = Astro.url.searchParams.get('before') ?? undefined;
+const api = backend(Astro.request);
+const [{site, viewer}, result, brand] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  read<EventsPage>(api.events.$get({query: {before}})),
+  read<{brandColor: string | null; fontPreset: string}>(api['event-settings'].brand.$get()),
+]);
+const events = result?.events ?? [];
+if (!result) Astro.response.status = 503;
+const color = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : null;
+const format = (f: string) => f.replace('_', ' ').replace(/^\w/, c => c.toUpperCase());
+const name = site?.name ?? 'Our events';
+---
+
+<Base site={site} viewer={viewer} title={`Events by ${name}`} description={`Upcoming events hosted by ${name}. RSVP in a minute.`}>
+  <main id="main" tabindex="-1" class="wrap section" data-brand={color ?? undefined} data-font={brand?.fontPreset}>
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Hosted by {name}</p>
+        <h1>Upcoming events</h1>
+      </div>
+    </div>
+    {
+      !result ? (
+        <p class="notice">Events are not available right now.</p>
+      ) : events.length === 0 ? (
+        <p class="lede">No upcoming events. Check back soon.</p>
+      ) : (
+        <ul class="job-list">
+          {events.map(e => (
+            <li>
+              <a class="job-row" href={`/events/${encodeURIComponent(e.slug)}/`}>
+                <div>
+                  <h2 class="job-title">{e.title}</h2>
+                  <p class="muted">{formatEventTime(e.startAt, e.timezone)}</p>
+                </div>
+                <div class="job-tags">
+                  <span class="chip">{format(e.format)}</span>
+                  {e.venueName && <span class="muted small">{e.venueName}</span>}
+                </div>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+    {result?.next && <nav class="pager"><a href={`/host/?before=${encodeURIComponent(result.next)}`}>Later events →</a></nav>}
+  </main>
+</Base>
+
+<script>
+  // Brand colour via the CSSOM (the CSP blocks style attributes).
+  document.addEventListener('astro:page-load', () => {
+    const main = document.querySelector<HTMLElement>('main[data-brand]');
+    const color = main?.dataset.brand;
+    if (!main || !color || !/^#[0-9a-fA-F]{6}$/.test(color)) return;
+    main.style.setProperty('--accent', color);
+    main.style.setProperty('--accent-hover', color);
+  });
+</script>

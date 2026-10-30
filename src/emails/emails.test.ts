@@ -4,6 +4,7 @@ import {
   broadcastEmail,
   buttonColors,
   confirmationEmail,
+  consentEmail,
   declinedEmail,
   eventCancelledEmail,
   liveNowEmail,
@@ -153,5 +154,15 @@ describe("brand button", () => {
     expect(buttonColors({ senderName: "x", brandColor: "#2b44ff" }).text).toBe("#ffffff")
     const html = confirmationEmail(data({ brand: { brandColor: "#ffe27a" } })).html
     expect(html).toContain("background:#ffe27a")
+  })
+})
+
+describe("consent email", () => {
+  it("carries the consent link as its one button, in html and text", () => {
+    const mail = consentEmail(data({ guest: { consentUrl: "https://events.example/privacy/consent/tok.sig" } }))
+    expect(mail.subject).toContain("Clara Coaching")
+    expect(mail.html).toContain("https://events.example/privacy/consent/tok.sig")
+    expect(mail.text).toContain("https://events.example/privacy/consent/tok.sig")
+    expect(mail.attachments).toBeUndefined()
   })
 })

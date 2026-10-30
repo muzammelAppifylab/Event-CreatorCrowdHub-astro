@@ -1,5 +1,5 @@
 {
-  "name": "site-app",
+  "name": "creator-crowd-hub",
   "version": "0.10.6",
   "private": true,
   "type": "module",
@@ -12,7 +12,8 @@
     "preview": "astro preview",
     "test": "prisma generate && vitest run",
     "studio": "prisma studio --browser none --port 5555",
-    "platform": "node scripts/platform.mjs"
+    "platform": "node scripts/platform.mjs",
+    "db:seed:demo": "node --env-file=.env scripts/seed-demo.mjs"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^14.3.4",
@@ -33,10 +34,12 @@
     "xss": "^1.0.15"
   },
   "devDependencies": {
+    "@astrojs/check": "^0.9.12",
     "@types/node": "^24.19.2",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "prisma": "7.10.1",
+    "typescript": "^6.0.3",
     "vitest": "4.1.11"
   },
   "allowScripts": {

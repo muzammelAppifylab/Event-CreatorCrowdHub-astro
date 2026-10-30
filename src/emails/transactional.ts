@@ -273,3 +273,20 @@ export function manageLinkEmail(data: EmailData): EmailContent {
     secondary: [],
   })
 }
+
+/** M13: double opt-in. Sent when a guest ticked marketing consent; nothing is sent to them until they confirm. */
+export function consentEmail(data: EmailData): EmailContent {
+  const { event, guest, brand } = data
+  const url = guest.consentUrl ?? guest.manageUrl
+  return compose(data, {
+    subject: `Confirm: updates from ${brand.senderName}`,
+    preheader: `One click to confirm you want updates from ${brand.senderName}.`,
+    heading: "Confirm you want updates",
+    intro: plainIntro(
+      `Hi ${firstName(guest.name)}, you asked for updates from ${brand.senderName} when you RSVP'd to ${event.title}.`,
+      "Please confirm it's you. We won't send you anything until you do. If it wasn't you, ignore this email."
+    ),
+    primary: [`Yes, send me updates from ${brand.senderName}`, url],
+    secondary: [],
+  })
+}

@@ -7,11 +7,38 @@ import {config} from '../platform/config';
 import {csrf, previewCookies, problem, sameOrigin} from '../platform/guards';
 import {syncPermissions} from '../platform/permission-sync';
 import {authSettings} from './auth-settings';
+import {adminAnalyticsRoutes} from './routes/admin-analytics';
+import {adminCheckinRoutes} from './routes/admin-checkin';
+import {adminEventRoutes} from './routes/admin-events';
+import {adminGuestRoutes} from './routes/admin-guests';
+import {adminInviteRoutes} from './routes/admin-invites';
+import {adminMessageRoutes} from './routes/admin-messages';
+import {adminOverviewRoutes} from './routes/admin-overview';
+import {adminPollRoutes} from './routes/admin-polls';
+import {adminWebhookRoutes} from './routes/admin-webhooks';
+import {eventCheckoutRoutes} from './routes/event-checkout';
+import {eventSettingsRoutes} from './routes/event-settings';
+import {pageViewRoutes} from './routes/pageviews';
+import {pollPublicRoutes} from './routes/polls-public';
+import {privacyRoutes} from './routes/privacy';
+import {rsvpRoutes, setPaidCheckoutHook} from './routes/rsvp';
+import {startTicketCheckout} from './ticket-checkout';
+import {getDb} from '../platform/db';
 import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {abilitiesFor, CATALOGUE} from './permissions';
 import {eventRoutes} from './routes/events';
 import {jobRoutes} from './routes/jobs';
 import {siteRoutes} from './routes/site';
+
+// Paid tickets: the RSVP route holds the seat, the platform checkout takes the money. ONE path:
+// `startTicketCheckout` here, then `confirmPaidTicket` / `releaseHold` from payments-hooks.ts
+// (they also keep `ticket_orders` in step, which `confirmRsvpPayment` does not).
+setPaidCheckoutHook(async ({origin, rsvp, manageToken}) => {
+  const db = getDb();
+  if (!db) return null;
+  const started = await startTicketCheckout(db, rsvp.id, {requestUrl: origin, cancelPath: `/r/${manageToken}/`});
+  return started.ok ? {checkoutUrl: started.redirectUrl} : null;
+});
 
 /**
  * The Site API: this site's ONLY backend, one Hono app at `/site-api/*`.
@@ -78,6 +105,23 @@ export const app = new Hono()
   .route('/jobs', jobRoutes)
   .route('/events', eventRoutes)
   .route('/memberships', membershipRoutes)
+  // Events: organiser routes (site:event:manage / site:event:checkin) ...
+  .route('/admin-events', adminEventRoutes)
+  .route('/event-admin', adminGuestRoutes)
+  .route('/event-admin', adminInviteRoutes)
+  .route('/event-admin', adminMessageRoutes)
+  .route('/event-settings', eventSettingsRoutes)
+  .route('/overview', adminOverviewRoutes)
+  .route('/checkin', adminCheckinRoutes)
+  .route('/analytics', adminAnalyticsRoutes)
+  .route('/polls', adminPollRoutes)
+  .route('/webhook-endpoints', adminWebhookRoutes)
+  // ... and the guest-facing ones (token in the path / body; all after csrf).
+  .route('/rsvp', rsvpRoutes)
+  .route('/event-checkout', eventCheckoutRoutes)
+  .route('/polls-public', pollPublicRoutes)
+  .route('/privacy', privacyRoutes)
+  .route('/pageviews', pageViewRoutes)
 
   .notFound(c => c.json(problem('not_found', 'No such Site API route.'), 404))
   .onError((err, c) => {

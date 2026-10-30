@@ -1,0 +1,85 @@
+---
+/**
+ * Invite landing (`/i/<token>`): the link in an invitation email. Works for private events too (the invite
+ * token is what makes them visible). The RSVP form is pre-filled with the invitee; the token travels with
+ * the RSVP so it counts as invited. Never cached, never indexed. A bad or bounced invite is a real 404.
+ */
+import NotFound from '../../components/NotFound.astro';
+import RsvpForm from '../../components/rsvp/RsvpForm.astro';
+import {rsvpRead} from '../../components/rsvp/server';
+import Base from '../../layouts/Base.astro';
+import {formatEventTime} from '../../lib/format';
+import type {InviteView} from '../../lib/rsvp-types';
+import {pageContext} from '../../server/page';
+
+const token = Astro.params.token ?? '';
+const [{site, viewer}, found] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  rsvpRead<InviteView>(Astro.request, `/invite/${encodeURIComponent(token)}`),
+]);
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+const data = found.data;
+const missing = !data && found.status === 404;
+if (!data) {
+  Astro.response.status = missing ? 404 : 503;
+  if (!missing) Astro.response.headers.set('Retry-After', '60');
+}
+const event = data?.event;
+const paragraphs = event?.description.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean) ?? [];
+---
+
+{
+  data && event ? (
+    <Base site={site} viewer={viewer} title={`You’re invited: ${event.title}`} noindex>
+      <main id="main" tabindex="-1" class="wrap narrow section">
+        <p class="eyebrow">{data.invite.name ? `${data.invite.name}, you’re invited` : 'You’re invited'}</p>
+        <h1>{event.title}</h1>
+        <p class="muted">
+          {formatEventTime(event.startAt, event.timezone)}
+          {event.venueName && ` · ${event.venueName}`}
+          {event.venueAddress && `, ${event.venueAddress}`}
+        </p>
+        <div class="prose">{paragraphs.map(p => <p>{p}</p>)}</div>
+
+        <section class="section" aria-labelledby="rsvp-heading">
+          <h2 id="rsvp-heading">RSVP</h2>
+          {
+            event.status === 'cancelled' ? (
+              <p class="notice">This event was cancelled.</p>
+            ) : event.closed ? (
+              <p class="notice">RSVPs for this event have closed.</p>
+            ) : data.alreadyResponded ? (
+              <p class="notice">
+                You have already answered this invitation. Open the link in your confirmation email to view or change your RSVP.
+              </p>
+            ) : (
+              <>
+                {event.seatsLeft === 0 && (
+                  <p class="notice">{event.waitlistEnabled ? 'This event is full. You can join the waitlist.' : 'This event is full.'}</p>
+                )}
+                <RsvpForm
+                  view={event}
+                  mode="create"
+                  inviteToken={data.invite.token}
+                  values={{name: data.invite.name ?? '', email: data.invite.email}}
+                />
+              </>
+            )
+          }
+        </section>
+      </main>
+    </Base>
+  ) : missing ? (
+    <Base site={site} viewer={viewer} title="Page not found" noindex>
+      <NotFound site={site} />
+    </Base>
+  ) : (
+    <Base site={site} viewer={viewer} title="Not available right now" noindex>
+      <main id="main" tabindex="-1" class="wrap narrow section center">
+        <h1>This invitation is not available right now</h1>
+        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
+      </main>
+    </Base>
+  )
+}

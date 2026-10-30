@@ -280,6 +280,20 @@ whole-table loops, nothing big in module memory (`performance.md`).
 - `setTimeout`/`setInterval` for later work, or a page someone must visit to run it: send a job.
 - A signed-in app as one `.astro` page per screen, a second UI kit, a second lockfile.
 
+## Events domain (CreatorCrowdHub)
+Details: `docs/ARCHITECTURE.md` (routes, data, jobs), `docs/PORTING.md` (source map, gaps), `docs/porting/*.md`.
+- Code: backend `src/server/routes/{admin-*,rsvp,events,event-*,polls-public,privacy,pageviews}.ts`,
+  jobs `src/server/jobs/`, mail `src/server/mailer.ts` + `src/emails/`, pure rules `src/domain/`, shared
+  validators `src/lib/event-schemas.ts`, dashboard `src/portal/screens/`, public pages
+  `src/pages/{events,r,i,p,privacy,host}/`, schema `prisma/schema.prisma` (events section).
+- Permissions: `site:event:manage` (`PERMISSIONS.EVENT_MANAGE`) and `site:event:checkin`
+  (`EVENT_CHECKIN`; door routes also accept manage); roles `owner`, `admin`, `checkin_staff`.
+  No workspaces: settings are the single `event_settings` row (id 1).
+- Ticket prices come only from the payments catalogue (`ticketPriceKey`, `startTicketCheckout`): never an
+  amount from the client, never a changed price (a new price is a new key).
+- Guest emails are stored and compared lower-cased.
+- Manage and invite tokens are stored as sha256 (`hashToken` in `src/domain/secureToken.ts`): never store or log the raw token.
+
 ## How changes go live
 You edit a working copy; the OWNER publishes from the editor: Prepare → Build (`npm ci`,
 `npm run build`) → Migrate → Deploy (`publishing.md`). Keep `npm run dev` working at `/`.

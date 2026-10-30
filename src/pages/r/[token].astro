@@ -1,0 +1,208 @@
+---
+/**
+ * The guest's own page: confirmation AND manage (`/r/<token>`, the link in their email and where the
+ * RSVP form sends them). The token is the credential: the page is never cached, never indexed and never
+ * sent on as a Referer. A bad, rotated or expired token is a real 404 (indistinguishable on purpose).
+ */
+import {renderSVG} from 'uqr';
+
+import NotFound from '../../components/NotFound.astro';
+import {statusCopy} from '../../components/rsvp/copy';
+import RsvpForm from '../../components/rsvp/RsvpForm.astro';
+import {rsvpRead} from '../../components/rsvp/server';
+import Base from '../../layouts/Base.astro';
+import {formatEventTime} from '../../lib/format';
+import type {GuestRsvpView} from '../../lib/rsvp-types';
+import {pageContext} from '../../server/page';
+
+const token = Astro.params.token ?? '';
+const [{site, viewer}, found] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  rsvpRead<GuestRsvpView>(Astro.request, `/manage/${encodeURIComponent(token)}`),
+]);
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+Astro.response.headers.set('X-Robots-Tag', 'noindex');
+const guest = found.data;
+const missing = !guest && found.status === 404;
+if (!guest) {
+  Astro.response.status = missing ? 404 : 503;
+  if (!missing) Astro.response.headers.set('Retry-After', '60');
+}
+const copy = guest ? statusCopy(guest.rsvp.status, guest.rsvp.response, guest.rsvp.waitlistPosition) : null;
+const going = guest?.rsvp.response === 'going' && guest.rsvp.status === 'confirmed';
+const saved = Astro.url.searchParams.get('saved') === '1';
+const inactive = guest ? guest.rsvp.status === 'cancelled' || guest.event.status === 'cancelled' : false;
+const qr = guest && going ? renderSVG(guest.rsvp.ticketCode, {border: 1}).replace('<svg ', '<svg width="168" height="168" ') : '';
+const ticket = guest?.event.ticketTypes.find(t => t.id === guest.rsvp.ticketTypeId);
+---
+
+{
+  guest && copy ? (
+    <Base site={site} viewer={viewer} title={`Your RSVP: ${guest.event.title}`} noindex>
+      <main id="main" tabindex="-1" class="wrap narrow section">
+        <p class="eyebrow">Your RSVP</p>
+        <h1>{guest.event.title}</h1>
+        <p class="muted">{formatEventTime(guest.event.startAt, guest.event.timezone)}</p>
+
+        {saved && <p class="notice notice-ok" role="status">Your changes were saved.</p>}
+        {guest.event.status === 'cancelled' && <p class="notice notice-error" role="alert">This event was cancelled.</p>}
+
+        <div class="card">
+          <h2>{copy.title}</h2>
+          <p>{copy.body}</p>
+          {
+            guest.rsvp.status === 'awaiting_payment' && (
+              <p class="muted">If you closed the payment page, check your email or ask the host for a new link.</p>
+            )
+          }
+        </div>
+
+        {
+          going && (
+            <div class="card">
+              <h2>Your ticket</h2>
+              <p>
+                <strong>{guest.rsvp.ticketCode}</strong>
+                {ticket && ` · ${ticket.name}`}
+                {` · ${guest.rsvp.seats} ${guest.rsvp.seats === 1 ? 'seat' : 'seats'}`}
+              </p>
+              <div class="ticket-qr" role="img" aria-label="QR code of your ticket code" set:html={qr} />
+              <p class="muted">Show this code at the door.</p>
+            </div>
+          )
+        }
+
+        {
+          guest.event.joinUrl && (
+            <div class="card">
+              <h2>Join online</h2>
+              <p>
+                <a class="button" href={guest.event.joinUrl} rel="noopener noreferrer" target="_blank">Open the join link</a>
+              </p>
+            </div>
+          )
+        }
+
+        {
+          !inactive && guest.rsvp.status !== 'declined' && (
+            <div class="actions">
+              <a class="button ghost" href={guest.calendar.icsPath} download data-astro-reload>Add to calendar (.ics)</a>
+              <a class="button ghost" href={guest.calendar.googleUrl} rel="noopener noreferrer" target="_blank">Google Calendar</a>
+            </div>
+          )
+        }
+
+        <p>
+          <a href={`/events/${guest.event.slug}/`}>Event page</a>
+          {guest.event.venueName && ` · ${guest.event.venueName}`}
+          {guest.event.venueAddress && `, ${guest.event.venueAddress}`}
+          {guest.event.mapUrl && (
+            <>
+              {' · '}
+              <a href={guest.event.mapUrl} rel="noopener noreferrer" target="_blank">Map</a>
+            </>
+          )}
+        </p>
+
+        {
+          guest.rsvp.canEdit && !guest.event.closed ? (
+            <section class="section" aria-labelledby="change-heading">
+              <h2 id="change-heading">Change your RSVP</h2>
+              <RsvpForm
+                view={guest.event}
+                mode="edit"
+                token={token}
+                values={{
+                  name: guest.rsvp.name,
+                  email: guest.rsvp.email,
+                  response: guest.rsvp.response,
+                  plusOnes: guest.rsvp.plusOnes,
+                  ticketTypeId: guest.rsvp.ticketTypeId,
+                  marketingConsent: guest.rsvp.marketingConsent,
+                  answers: guest.rsvp.answers,
+                }}
+              />
+              <div class="section" data-cancel-root data-token={token}>
+                <button class="button danger" type="button" data-cancel-open>Cancel my RSVP</button>
+                <div data-cancel-confirm hidden>
+                  <p>Cancel your RSVP? Your seat is released.</p>
+                  <p class="notice notice-error" data-cancel-status hidden role="alert"></p>
+                  <div class="actions">
+                    <button class="button danger" type="button" data-cancel-yes>Yes, cancel my RSVP</button>
+                    <button class="button ghost" type="button" data-cancel-no>Keep my RSVP</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : guest.rsvp.canEdit ? (
+            <p class="muted">RSVPs for this event have closed, so changes are no longer accepted here.</p>
+          ) : null
+        }
+      </main>
+    </Base>
+  ) : missing ? (
+    <Base site={site} viewer={viewer} title="Page not found" noindex>
+      <NotFound site={site} />
+    </Base>
+  ) : (
+    <Base site={site} viewer={viewer} title="Not available right now" noindex>
+      <main id="main" tabindex="-1" class="wrap narrow section center">
+        <h1>This page is not available right now</h1>
+        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
+      </main>
+    </Base>
+  )
+}
+
+<script>
+  import {siteFetch} from '../../platform/browser';
+
+  document.addEventListener('astro:page-load', () => {
+    const root = document.querySelector<HTMLElement>('[data-cancel-root]');
+    if (!root || root.dataset.bound) return;
+    root.dataset.bound = '1';
+    const open = root.querySelector<HTMLButtonElement>('[data-cancel-open]')!;
+    const panel = root.querySelector<HTMLElement>('[data-cancel-confirm]')!;
+    const yes = root.querySelector<HTMLButtonElement>('[data-cancel-yes]')!;
+    const no = root.querySelector<HTMLButtonElement>('[data-cancel-no]')!;
+    const status = root.querySelector<HTMLElement>('[data-cancel-status]')!;
+    const idle = yes.textContent ?? '';
+
+    open.addEventListener('click', () => {
+      panel.hidden = false;
+      open.hidden = true;
+      yes.focus();
+    });
+    no.addEventListener('click', () => {
+      panel.hidden = true;
+      open.hidden = false;
+      status.hidden = true;
+      open.focus();
+    });
+    yes.addEventListener('click', async () => {
+      if (yes.disabled) return;
+      yes.disabled = true;
+      no.disabled = true;
+      yes.setAttribute('aria-busy', 'true');
+      yes.textContent = 'Cancelling…';
+      status.hidden = true;
+      try {
+        const res = await siteFetch(`/site-api/rsvp/manage/${root.dataset.token}/cancel`, {method: 'POST'});
+        if (res.ok) {
+          // Keep the button pending: the refreshed page is on its way.
+          window.location.assign(window.location.pathname);
+          return;
+        }
+        const data = (await res.json().catch(() => null)) as {message?: string} | null;
+        status.textContent = data?.message ?? `Something went wrong (${res.status}). Try again.`;
+      } catch {
+        status.textContent = 'The site did not answer. Check your connection and try again.';
+      }
+      status.hidden = false;
+      yes.disabled = false;
+      no.disabled = false;
+      yes.removeAttribute('aria-busy');
+      yes.textContent = idle;
+    });
+  });
+</script>

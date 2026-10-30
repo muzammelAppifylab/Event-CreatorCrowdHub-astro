@@ -1,0 +1,266 @@
+---
+/**
+ * The RSVP form (create on the event / invite pages, edit on `/r/<token>`). Server-rendered from the
+ * RSVP view; the script below binds it with `bindForm` (in-place errors, pending button, focus on the
+ * first wrong field) and talks to `/site-api/rsvp/*`. Honeypot: `website` is hidden and must stay empty.
+ */
+import {formatMoney} from '../../lib/format';
+import type {AnswerValue, RsvpEventView} from '../../lib/rsvp-types';
+
+interface Props {
+  view: RsvpEventView;
+  mode: 'create' | 'edit';
+  /** Edit mode: the guest's manage token (from the URL). */
+  token?: string;
+  /** From an invite landing: sent with the RSVP so a private event accepts it. */
+  inviteToken?: string;
+  values?: {
+    name?: string;
+    email?: string;
+    response?: string;
+    plusOnes?: number;
+    ticketTypeId?: string | null;
+    marketingConsent?: boolean;
+    answers?: Record<string, AnswerValue>;
+  };
+}
+
+const {view, mode, token, inviteToken, values = {}} = Astro.props;
+const editing = mode === 'edit';
+const id = editing ? 'rsvp-edit' : 'rsvp-create';
+const answers = values.answers ?? {};
+const anyPaid = view.ticketTypes.some(t => t.priceCents > 0);
+const response = values.response ?? 'going';
+const action = editing ? `/site-api/rsvp/manage/${token}` : `/site-api/rsvp/events/${view.slug}`;
+const questionMeta = view.questions.map(q => ({id: q.id, type: q.type, required: q.required}));
+const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney(cents, currency) : 'Free');
+---
+
+<form
+  id={id}
+  class="auth-form"
+  novalidate
+  data-rsvp-form
+  data-mode={mode}
+  data-action={action}
+  data-invite={inviteToken ?? ''}
+  data-max-plus={String(view.maxPlusOnes)}
+  data-any-paid={anyPaid ? '1' : ''}
+  data-questions={JSON.stringify(questionMeta)}
+>
+  <div class="field">
+    <label for={`${id}-name`}>Your name</label>
+    <input id={`${id}-name`} name="name" autocomplete="name" value={values.name ?? ''} maxlength="120" />
+  </div>
+  <div class="field">
+    <label for={`${id}-email`}>Email</label>
+    <input
+      id={`${id}-email`}
+      name="email"
+      type="email"
+      autocomplete="email"
+      inputmode="email"
+      placeholder="name@example.com"
+      value={values.email ?? ''}
+      readonly={editing}
+      aria-readonly={editing ? 'true' : undefined}
+    />
+    {editing && <p class="field-hint" id={`${id}-email-hint`}>Your email identifies this RSVP, so it cannot be changed here.</p>}
+  </div>
+
+  <div class="field">
+    <label for={`${id}-response`}>Will you come?</label>
+    <select id={`${id}-response`} name="response">
+      <option value="going" selected={response === 'going'}>Going</option>
+      {view.allowMaybe && <option value="maybe" selected={response === 'maybe'}>Maybe</option>}
+      <option value="not_going" selected={response === 'not_going'}>Can’t go</option>
+    </select>
+  </div>
+
+  {
+    view.ticketTypes.length > 0 && !editing && (
+      <div class="field">
+        <label for={`${id}-ticket`}>Ticket</label>
+        <select id={`${id}-ticket`} name="ticketTypeId">
+          <option value="">{anyPaid ? 'Choose a ticket' : 'No preference'}</option>
+          {view.ticketTypes.map(t => {
+            const out = t.salesEnded || t.remaining === 0;
+            return (
+              <option value={t.id} disabled={out} selected={values.ticketTypeId === t.id}>
+                {t.name} · {priceLabel(t.priceCents, t.currency)}
+                {t.salesEnded ? ' (sales ended)' : t.remaining === 0 ? ' (sold out)' : ''}
+              </option>
+            );
+          })}
+        </select>
+      </div>
+    )
+  }
+
+  {
+    view.maxPlusOnes > 0 && (
+      <div class="field">
+        <label for={`${id}-plus`}>Extra guests you bring</label>
+        <select id={`${id}-plus`} name="plusOnes">
+          {Array.from({length: view.maxPlusOnes + 1}, (_, n) => (
+            <option value={String(n)} selected={(values.plusOnes ?? 0) === n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </div>
+    )
+  }
+
+  {
+    view.questions.map(q => {
+      const qid = `${id}-q-${q.id}`;
+      const value = answers[q.id];
+      return q.type === 'checkbox' ? (
+        <div>
+          <label class="check" for={qid}>
+            <input id={qid} name={`q_${q.id}`} type="checkbox" checked={value === true} class="check-input" />
+            {q.label}
+            {q.required ? '' : ' (optional)'}
+          </label>
+        </div>
+      ) : (
+        <div class="field">
+          <label for={qid}>
+            {q.label}
+            {q.required ? '' : ' (optional)'}
+          </label>
+          {q.type === 'long_text' ? (
+            <textarea id={qid} name={`q_${q.id}`} rows="3" maxlength="2000">{typeof value === 'string' ? value : ''}</textarea>
+          ) : q.type === 'short_text' ? (
+            <input id={qid} name={`q_${q.id}`} maxlength="200" value={typeof value === 'string' ? value : ''} />
+          ) : (
+            <>
+              <select id={qid} name={`q_${q.id}`} multiple={q.type === 'multi_choice'}>
+                {q.type === 'single_choice' && <option value="">Choose one</option>}
+                {q.options.map(o => (
+                  <option value={o} selected={Array.isArray(value) ? value.includes(o) : value === o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+              {q.type === 'multi_choice' && <p class="field-hint">Hold Ctrl (Cmd on a Mac) to pick several.</p>}
+            </>
+          )}
+        </div>
+      );
+    })
+  }
+
+  <div>
+    <label class="check" for={`${id}-consent`}>
+      <input id={`${id}-consent`} name="marketingConsent" type="checkbox" checked={values.marketingConsent === true} class="check-input" />
+      Email me about future events from this host
+    </label>
+  </div>
+
+  <div hidden aria-hidden="true">
+    <label for={`${id}-website`}>Leave this empty</label>
+    <input id={`${id}-website`} name="website" tabindex="-1" autocomplete="off" />
+  </div>
+
+  <p class="notice" data-form-status hidden></p>
+  <button class="button" type="submit">{editing ? 'Save changes' : 'Send RSVP'}</button>
+</form>
+
+<script>
+  import {bindForm, type SubmitResult} from '../../lib/form';
+  import {replaceWithMessage} from '../../lib/account';
+  import {type Rule, rules} from '../../lib/rules';
+  import {siteFetch} from '../../platform/browser';
+
+  type Meta = {id: string; type: string; required: boolean};
+
+  document.addEventListener('astro:page-load', () => {
+    for (const form of document.querySelectorAll<HTMLFormElement>('form[data-rsvp-form]')) {
+      if (form.dataset.bound) continue;
+      form.dataset.bound = '1';
+      const editing = form.dataset.mode === 'edit';
+      const metas = JSON.parse(form.dataset.questions ?? '[]') as Meta[];
+      const maxPlus = Number(form.dataset.maxPlus ?? '0');
+      const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null;
+      const declining = () => field('response')?.value === 'not_going';
+
+      const ruleSet: Record<string, Rule[]> = {
+        name: [rules.required('Add your name.'), rules.maxLength(120)],
+        // The email is the RSVP's identity: not editable on the manage page.
+        ...(editing ? {} : {email: [rules.required('Add your email.'), rules.email()]}),
+      };
+      if (field('plusOnes')) {
+        ruleSet.plusOnes = [
+          value => (Number(value) > maxPlus ? `You can bring up to ${maxPlus} ${maxPlus === 1 ? 'guest' : 'guests'}.` : null),
+        ];
+      }
+      if (field('ticketTypeId') && form.dataset.anyPaid) ruleSet.ticketTypeId = [rules.required('Choose a ticket.')];
+      for (const q of metas) {
+        if (q.required && q.type !== 'checkbox') {
+          ruleSet[`q_${q.id}`] = [value => (declining() ? null : rules.required('This question needs an answer.')(value))];
+        }
+      }
+
+      const collect = (values: Record<string, string>) => {
+        const answers: Record<string, string | string[] | boolean> = {};
+        for (const q of metas) {
+          const el = field(`q_${q.id}`);
+          if (!el) continue;
+          if (q.type === 'checkbox') answers[q.id] = (el as HTMLInputElement).checked;
+          else if (q.type === 'multi_choice') answers[q.id] = [...(el as HTMLSelectElement).selectedOptions].map(o => o.value);
+          else answers[q.id] = el.value;
+        }
+        return {
+          name: values.name,
+          email: values.email ?? field('email')?.value ?? '',
+          response: values.response,
+          plusOnes: Number(values.plusOnes ?? '0'),
+          ...(values.ticketTypeId ? {ticketTypeId: values.ticketTypeId} : {}),
+          answers,
+          marketingConsent: (field('marketingConsent') as HTMLInputElement | null)?.checked ?? false,
+          website: values.website ?? '',
+          ...(form.dataset.invite ? {inviteToken: form.dataset.invite} : {}),
+        };
+      };
+
+      bindForm(form, {
+        rules: ruleSet,
+        pendingLabel: editing ? 'Saving…' : 'Sending…',
+        async submit(values): Promise<SubmitResult> {
+          let res: Response;
+          try {
+            res = await siteFetch(form.dataset.action!, {
+              method: editing ? 'PATCH' : 'POST',
+              headers: {'content-type': 'application/json'},
+              body: JSON.stringify(collect(values)),
+            });
+          } catch {
+            return {ok: false, message: 'The site did not answer. Check your connection and try again.'};
+          }
+          const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+          if (res.ok) {
+            if (editing) return {ok: true, redirect: `${location.pathname}?saved=1`};
+            if (data?.status === 'check_email') return {ok: true, message: String(data.message ?? 'Check your inbox.')};
+            const next = (typeof data?.checkoutUrl === 'string' && data.checkoutUrl) || (typeof data?.managePath === 'string' && data.managePath);
+            return next ? {ok: true, redirect: next} : {ok: true, message: 'Thanks, your RSVP is in.'};
+          }
+          // Server field errors: `answers.<questionId>` lands on that question's control.
+          const fields: Record<string, string> = {};
+          for (const [key, message] of Object.entries((data?.fields as Record<string, string> | undefined) ?? {})) {
+            fields[key.startsWith('answers.') ? `q_${key.slice(8)}` : key] = message;
+          }
+          return {
+            ok: false,
+            message: typeof data?.message === 'string' ? data.message : `Something went wrong (${res.status}). Try again.`,
+            fields,
+          };
+        },
+        done(message) {
+          if (!editing && message) replaceWithMessage(form, message);
+        },
+      });
+    }
+  });
+</script>

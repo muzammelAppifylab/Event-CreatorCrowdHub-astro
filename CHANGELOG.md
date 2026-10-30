@@ -4,6 +4,12 @@ Template releases. `npm run platform -- check` says when a newer one is out;
 `npm run platform -- upgrade` applies it (see `scripts/platform.mjs`).
 Managed by the template: replaced on upgrade.
 
+## Unreleased
+
+- **CreatorCrowdHub port.** Events, RSVPs, invites, messages, polls, check-in, analytics, webhooks and
+  privacy pages ported onto the template. Added `docs/ARCHITECTURE.md`, `docs/PORTING.md` and an
+  "Events domain" section in `AGENTS.md`.
+
 ## 0.10.6
 
 - **Free trials need the buyer's email.** A price with a free trial starts on the payment

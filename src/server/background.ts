@@ -1,16 +1,44 @@
-import {defineBackground} from '../platform/background';
+import {DontRetry, defineBackground} from '../platform/background';
+import {deliverWebhookJob} from './webhook-delivery';
+import {getDb} from '../platform/db';
+import {GUEST_EMAIL_LIST, type GuestEmailKind, sendGuestEmail} from './jobs/guest-emails';
+import {runScheduler} from './jobs/run';
 
 /**
  * This site's BACKGROUND JOBS: one handler per list (docs/agent/background-jobs.md).
  *
- *   send:      sendJob(c.req.url, 'booking-reminders', {bookingId}, {at, key: `remind-${id}`, label})
- *   schedule:  background.json  {"schedules": {"daily-summary": {"every": "day", "at": "07:00", "tz": "Europe/London"}}}
+ *   event-scheduler  every 5 minutes (background.json): reminders, "we're live", thank-yous,
+ *                    lapsed waitlist claims, expired payment holds. Bounded and idempotent.
+ *   rsvp-emails      one transactional email to one guest (confirmation after payment, a
+ *                    waitlist offer, hold expired). Sent with `queueGuestEmail()`.
  *
- * A handler gets the job's data (JSON) and returns when done. Throw to try again later;
- * throw `DontRetry` (from ../platform/background) when trying again cannot help. It may run more
- * than once: make it safe to repeat. Load what you need by id from the Site Database here; never
- * put a whole record (or a secret) in the data.
+ * Handlers re-check the rows they act on and are safe to run twice (message_deliveries has
+ * unique(rsvp_id, reminder_rule_id); every status change is conditional).
  */
+const KINDS: ReadonlySet<string> = new Set<GuestEmailKind>(['confirmation', 'waitlist_offer', 'hold_expired']);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export const background = defineBackground({
-  // 'booking-reminders': async ({bookingId}, job) => { ... },
+  'webhook-deliveries': (data, job) => deliverWebhookJob(data as never, job),
+
+  'event-scheduler': async () => {
+    const db = getDb();
+    if (!db) throw new Error('The Site Database is off.');
+    const summary = await runScheduler(db, new Date());
+    console.info(
+      `[scheduler] reminders sent=${summary.reminders.sent} failed=${summary.reminders.failed} lapsed=${summary.waitlist.lapsed} offered=${summary.waitlist.offered} holds=${summary.holds.expired}`,
+    );
+    // A step that threw is retried by the next tick; fail the run so the owner sees it in the Jobs tab.
+    if (summary.errors.length > 0) throw new Error(summary.errors.slice(0, 3).join(' | ').slice(0, 400));
+  },
+
+  [GUEST_EMAIL_LIST]: async (data: {kind?: unknown; rsvpId?: unknown}) => {
+    if (typeof data?.kind !== 'string' || !KINDS.has(data.kind) || typeof data.rsvpId !== 'string' || !UUID.test(data.rsvpId)) {
+      throw new DontRetry('This email job has no valid guest.');
+    }
+    const db = getDb();
+    if (!db) throw new Error('The Site Database is off.');
+    const outcome = await sendGuestEmail(db, data.kind as GuestEmailKind, data.rsvpId);
+    if (outcome === 'failed') throw new Error('The email could not be sent. It will be tried again.');
+  },
 });

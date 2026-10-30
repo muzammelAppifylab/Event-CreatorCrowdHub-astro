@@ -7,6 +7,7 @@ export type { CreatorCopy, EmailAttachment, EmailBrand, EmailContent, EmailData,
 export {
   approvalPendingEmail,
   confirmationEmail,
+  consentEmail,
   declinedEmail,
   eventCancelledEmail,
   holdExpiredEmail,

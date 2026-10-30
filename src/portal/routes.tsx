@@ -13,6 +13,8 @@ import {
 } from '@tanstack/react-router';
 import {useEffect, useRef, useState} from 'react';
 
+
+import {EventHub} from './screens/event-hub';
 import type {Abilities} from '../lib/types';
 import {logout} from '../platform/browser';
 import {
@@ -30,7 +32,11 @@ import {
   twoFactorQuery,
   usersQuery,
 } from './queries';
+import {doorEventsQuery, doorListQuery} from './checkin-queries';
+import {eventsListQuery, eventSettingsQuery} from './events-queries';
+import {presenterPollsQuery} from './polls-queries';
 import {useMe, useSite} from './shared';
+import {webhooksQuery} from './webhooks-queries';
 import {
   Avatar,
   Button,
@@ -122,6 +128,16 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
     items: [
       {to: '/', label: 'Overview', icon: 'dashboard', exact: true},
       {to: '/account', label: 'Your account', icon: 'user'},
+    ],
+  },
+  {
+    label: 'Events',
+    items: [
+      {to: '/events', label: 'Events', icon: 'clock', ability: 'manageEvents'},
+      {to: '/checkin', label: 'Check-in', icon: 'check-circle', ability: 'checkinGuests'},
+      {to: '/contacts', label: 'Contacts', icon: 'users', ability: 'manageEvents'},
+      {to: '/event-settings', label: 'Event settings', icon: 'pencil', ability: 'manageEvents'},
+      {to: '/integrations', label: 'Integrations', icon: 'zap', ability: 'manageEvents'},
     ],
   },
   {
@@ -418,6 +434,78 @@ const activityRoute = createRoute({
   component: lazyRouteComponent(() => import('./screens/activity'), 'Activity'),
 });
 
+// Events (admin): the list, the editor, the tabbed hub, settings.
+function EventHubRoute() {
+  const {id} = eventHubRoute.useParams();
+  return <EventHub eventId={id} />;
+}
+const eventsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/events',
+  staticData: {title: 'Events'},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(eventsListQuery('upcoming'))),
+  component: lazyRouteComponent(() => import('./screens/events'), 'Events'),
+});
+const eventNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/events/new',
+  staticData: {title: 'New event'},
+  component: lazyRouteComponent(() => import('./screens/event-editor'), 'EventEditor'),
+});
+const eventEditRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/events/$id/edit',
+  staticData: {title: 'Edit event'},
+  component: lazyRouteComponent(() => import('./screens/event-editor'), 'EventEditor'),
+});
+const eventHubRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/events/$id',
+  staticData: {title: 'Event'},
+  component: EventHubRoute,
+});
+const contactsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/contacts',
+  staticData: {title: 'Contacts'},
+  component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
+});
+const eventSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/event-settings',
+  staticData: {title: 'Event settings'},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(eventSettingsQuery)),
+  component: lazyRouteComponent(() => import('./screens/event-settings'), 'EventSettings'),
+});
+const checkinRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/checkin',
+  staticData: {title: 'Check-in'},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(doorEventsQuery)),
+  component: lazyRouteComponent(() => import('./screens/checkin'), 'Checkin'),
+});
+const checkinEventRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/checkin/$eventId',
+  staticData: {title: 'Door list'},
+  loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(doorListQuery(params.eventId, ''))),
+  component: lazyRouteComponent(() => import('./screens/checkin-event'), 'CheckinEvent'),
+});
+const pollPresenterRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/polls/$code/present',
+  staticData: {title: 'Poll presenter'},
+  loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(presenterPollsQuery(params.code))),
+  component: lazyRouteComponent(() => import('./screens/poll-presenter'), 'PollPresenter'),
+});
+const integrationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/integrations',
+  staticData: {title: 'Integrations'},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(webhooksQuery)),
+  component: lazyRouteComponent(() => import('./screens/integrations'), 'Integrations'),
+});
+
 // The UI kit on screen, for the owner and their agent. Dev only: the whole route (and its
 // chunk) is left out of a build, because `import.meta.env.DEV` is `false` there.
 const devRoutes = import.meta.env.DEV
@@ -438,5 +526,15 @@ export const routeTree = rootRoute.addChildren([
   usersRoute,
   rolesRoute,
   activityRoute,
+  eventsRoute,
+  eventNewRoute,
+  eventEditRoute,
+  eventHubRoute,
+  eventSettingsRoute,
+  contactsRoute,
+  checkinRoute,
+  checkinEventRoute,
+  pollPresenterRoute,
+  integrationsRoute,
   ...devRoutes,
 ]);

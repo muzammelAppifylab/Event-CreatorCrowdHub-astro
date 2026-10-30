@@ -128,3 +128,54 @@ export function jobJsonLd(job: {
     ...(url && {url}),
   };
 }
+
+const EVENT_ATTENDANCE: Record<string, string> = {
+  in_person: 'OfflineEventAttendanceMode',
+  online: 'OnlineEventAttendanceMode',
+  hybrid: 'MixedEventAttendanceMode',
+};
+
+/**
+ * A public event's `Event` (Google event rich results), from the same fields the page shows
+ * (`EventDetail`). `<Base jsonLd={eventJsonLd(event)}>`. `site` (optional) names the organizer.
+ */
+export function eventJsonLd(
+  event: {
+    slug: string;
+    title: string;
+    description: string;
+    coverImageUrl?: string | null;
+    startAt: string;
+    endAt: string;
+    format: string;
+    venueName?: string | null;
+    venueAddress?: string | null;
+    joinUrl?: string | null;
+  },
+  site?: {name: string; logo?: string | null}
+): JsonLd {
+  const url = absoluteUrl(`/events/${encodeURIComponent(event.slug)}/`);
+  const image = event.coverImageUrl ? absoluteUrl(event.coverImageUrl) : null;
+  const online = event.format === 'online' || event.format === 'hybrid';
+  const physical = event.format !== 'online' && event.venueName;
+  const location = [
+    ...(physical
+      ? [{'@type': 'Place', name: event.venueName, ...(event.venueAddress && {address: event.venueAddress})}]
+      : []),
+    ...(online ? [{'@type': 'VirtualLocation', url: url ?? event.joinUrl ?? undefined}] : []),
+  ];
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Event',
+    name: event.title,
+    description: event.description,
+    startDate: event.startAt,
+    endDate: event.endAt,
+    eventStatus: 'https://schema.org/EventScheduled',
+    eventAttendanceMode: `https://schema.org/${EVENT_ATTENDANCE[event.format] ?? 'OfflineEventAttendanceMode'}`,
+    ...(location.length && {location: location.length === 1 ? location[0] : location}),
+    ...(image && {image}),
+    ...(url && {url}),
+    ...(site && {organizer: organization(site)}),
+  };
+}
