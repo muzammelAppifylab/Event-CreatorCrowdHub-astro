@@ -1,12 +1,12 @@
 import {useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
 
-import {firstJobsQuery, firstUsersQuery, healthQuery, siteQuery, twoFactorQuery} from '../queries';
+import {healthQuery, siteQuery} from '../queries';
 import {formatInZone} from '../../domain/time';
 import {type OverviewData, overviewQuery} from '../overview-queries';
 import {ago, useMe, when} from '../shared';
 import {RefundsCard} from './refunds-card';
-import {Badge, buttonClass, Card, type Column, DataTable, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
+import {Badge, buttonClass, Card, type Column, DataTable, EmptyState, ErrorNote, Icon, LoadingBlock, Notice, PageHeader, Stat} from '../ui';
 
 /**
  * `/` of the dashboard: a greeting, what needs attention, stat tiles, a
@@ -22,95 +22,12 @@ export function Overview() {
   const abilities = me.data?.abilities;
   const health = useQuery(healthQuery);
   const site = useQuery(siteQuery);
-  const twoFactor = useQuery(twoFactorQuery);
-  // Under the screens' own query keys, so a save there refreshes these too.
-  const users = useQuery({...firstUsersQuery, enabled: Boolean(abilities?.manageUsers)});
-  const jobs = useQuery({...firstJobsQuery, enabled: Boolean(abilities?.manageJobs)});
   const events = useQuery({...overviewQuery, enabled: Boolean(me.data)});
   const ev = events.data;
   const firstName = viewer?.name?.split(/\s+/)[0];
 
-  // The checklist: only steps this person can do, each done from real data.
-  const steps: {label: string; detail: string; done: boolean | undefined; to?: string; icon: IconName}[] = [
-    {
-      label: 'Confirm your email',
-      detail: 'So you can always get back in.',
-      done: viewer?.emailVerified,
-      icon: 'mail',
-    },
-    {
-      label: 'Turn on two-step sign-in',
-      detail: 'A code from your phone, so a password alone is not enough.',
-      done: twoFactor.data?.enabled,
-      to: '/account',
-      icon: 'lock',
-    },
-  ];
-  if (abilities?.manageUsers)
-    steps.push({
-      label: 'Give someone else admin access',
-      detail: 'So the site never depends on one person.',
-      done: users.data ? users.data.users.filter(user => user.roles.some(role => role === 'admin' || role === 'owner')).length > 1 : undefined,
-      to: '/users',
-      icon: 'user-plus',
-    });
-  if (abilities?.manageJobs)
-    steps.push({
-      label: 'Post your first job',
-      detail: 'It shows on the public job board at once.',
-      done: jobs.data ? jobs.data.jobs.length > 0 : undefined,
-      to: '/jobs',
-      icon: 'briefcase',
-    });
-  const done = steps.filter(step => step.done).length;
-  const setupLeft = steps.some(step => step.done === false);
-
   const upcoming = ev?.events ?? [];
   const noEvents = Boolean(ev) && upcoming.length === 0 && ev!.recent.length === 0;
-
-  const checklist = setupLeft ? (
-    <Card
-      title="Finish setting up"
-      actions={
-        <span className="muted">
-          {done} of {steps.length} done
-        </span>
-      }
-      flush
-      className="checklist-card">
-      <div className="card-body checklist-progress">
-        <ProgressBar value={done} max={steps.length} label="Setup progress" />
-      </div>
-      <ul className="list">
-        {steps.map(step => {
-          const body = (
-            <>
-              <span className="checklist-mark" data-done={step.done ? '' : undefined}>
-                <Icon name="check" size={14} />
-              </span>
-              <span className="list-row-text">
-                <span className="list-row-title">{step.label}</span>
-                <span className="list-row-sub">{step.detail}</span>
-              </span>
-              <span className="list-row-end">{step.done ? 'Done' : 'To do'}</span>
-              {step.to && !step.done && <Icon name="chevron-right" size={16} className="muted" />}
-            </>
-          );
-          return (
-            <li key={step.label} className="list-row checklist-row" data-done={step.done ? '' : undefined}>
-              {step.to && !step.done ? (
-                <Link className="checklist-link" to={step.to}>
-                  {body}
-                </Link>
-              ) : (
-                body
-              )}
-            </li>
-          );
-        })}
-      </ul>
-    </Card>
-  ) : null;
 
   return (
     <div className="app-page screen-overview">
@@ -144,7 +61,6 @@ export function Overview() {
         </Notice>
       )}
 
-      {checklist}
       {abilities?.manageEvents && <RefundsCard />}
 
       {events.error && <ErrorNote error={events.error} />}
