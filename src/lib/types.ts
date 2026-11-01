@@ -56,6 +56,9 @@ export interface EventSummary {
   format: 'in_person' | 'online' | 'hybrid';
   venueName: string | null;
   capacity: number | null;
+  /** List only: the cheapest ticket (null without ticket types) and whether every ticket is free. */
+  fromPrice?: {amountCents: number; currency: string} | null;
+  free?: boolean;
 }
 
 export interface EventDetail extends EventSummary {

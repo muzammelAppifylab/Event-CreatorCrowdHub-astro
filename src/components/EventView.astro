@@ -7,6 +7,7 @@
  * (a bottom sheet under 768px, a centred dialog above). Renders inside `<main>`, a landmark of its own.
  * Rendered on the server; the script below ticks the countdown and shows times in the guest's zone.
  */
+import {renderDescription} from '../domain/richText';
 import {initials} from '../lib/format';
 import {
   availabilityOf,
@@ -18,7 +19,6 @@ import {
   formatRange,
   formatShortWhen,
   guestCopy,
-  paragraphsOf,
   priceSummary,
 } from '../lib/guest-format';
 import {posterTextFor, type CoverStyle} from '../lib/posters';
@@ -31,6 +31,7 @@ import RsvpForm from './rsvp/RsvpForm.astro';
 
 interface Props {
   event: {
+    id?: string;
     slug: string;
     title: string;
     description: string;
@@ -69,7 +70,9 @@ const note = invite?.alreadyResponded
 const price = rsvp ? priceSummary(rsvp.ticketTypes) : '';
 const coverLabel = `Cover art for ${event.title}`;
 const posterText = posterTextFor(event, event.coverStyle);
-const paragraphs = paragraphsOf(event.description);
+// renderDescription HTML-escapes everything first and only then adds its own tags (src/domain/richText.ts),
+// so its output is safe for set:html without a second sanitiser pass.
+const descriptionHtml = event.description.trim() ? renderDescription(event.description) : '';
 const start = new Date(event.startAt).getTime();
 const end = new Date(event.endAt).getTime();
 const phase = cancelledPhase();
@@ -104,7 +107,7 @@ const titleId = 'rsvp-sheet-title';
             event.coverImageUrl ? (
               <img class="g-cover-img" src={event.coverImageUrl} alt={coverLabel} fetchpriority="high" width="288" height="384" />
             ) : (
-              <Poster design={event.coverPoster} seed={event.slug} text={posterText} palette={event.coverStyle?.palette} label={coverLabel} />
+              <Poster design={event.coverPoster} seed={event.id ?? event.slug} text={posterText} palette={event.coverStyle?.palette} label={coverLabel} />
             )
           }
         </div>
@@ -235,10 +238,10 @@ const titleId = 'rsvp-sheet-title';
       </section>
 
       {
-        paragraphs.length > 0 && (
+        descriptionHtml && (
           <section class="g-block" aria-labelledby="event-about">
             <h2 id="event-about">{guestCopy.sections.about}</h2>
-            <div class="g-rich">{paragraphs.map(p => <p>{p}</p>)}</div>
+            <div class="g-rich" set:html={descriptionHtml} />
           </section>
         )
       }
@@ -304,6 +307,12 @@ const titleId = 'rsvp-sheet-title';
       <div class="g-sheet-head">
         <h2 id={titleId}>{guestCopy.form.title(event.title)}</h2>
         <p>{guestCopy.form.description}</p>
+        {!invite && (
+          <details class="g-manage">
+            <summary>Already RSVP’d? Email me my link</summary>
+            <ManageLinkForm slug={rsvp.slug} />
+          </details>
+        )}
       </div>
       <button type="button" class="g-btn g-btn-ghost g-btn-icon g-sheet-close" data-rsvp-close>
         <GIcon name="x" class="g-icon-5" />
@@ -317,11 +326,6 @@ const titleId = 'rsvp-sheet-title';
           hostName={hostName}
           values={invite ? {name: invite.name ?? '', email: invite.email} : {}}
         />
-        {!invite && (
-          <div class="g-form-sep g-sheet-manage">
-            <ManageLinkForm slug={rsvp.slug} />
-          </div>
-        )}
       </div>
     </dialog>
   )

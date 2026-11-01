@@ -13,7 +13,10 @@ import {
   parseSettingsPatch,
 } from '../../lib/event-schemas';
 import {audit} from '../../platform/auth';
+import {listPrices} from '../../platform/payments';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {siteBase} from '../jobs/shared';
+import {shapePaymentsStatus} from '../payments-status';
 import {PERMISSIONS} from '../permissions';
 
 /**
@@ -22,6 +25,7 @@ import {PERMISSIONS} from '../permissions';
  *
  *   GET   /site-api/event-settings        `site:event:manage`: the whole row (or defaults when never saved)
  *   PATCH /site-api/event-settings        `site:event:manage`: only the keys sent change
+ *   GET   /site-api/event-settings/payments `site:event:manage`: read-only checkout status (mode, paid tickets, catalogue prices)
  *   GET   /site-api/event-settings/brand  public: colour and font only (they already style the public pages)
  */
 
@@ -74,6 +78,18 @@ export const eventSettingsRoutes = new Hono()
   .get('/', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const row = await c.var.db.eventSettings.findUnique({where: {id: 1}, select});
     return c.json({settings: toDto(row)});
+  })
+
+  .get('/payments', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+    const rows = await c.var.db.ticketType.findMany({
+      where: {priceCents: {gt: 0}, event: {deletedAt: null}},
+      select: {id: true, name: true, priceCents: true, currency: true, eventId: true, event: {select: {title: true}}},
+      orderBy: [{event: {startAt: 'desc'}}, {sortOrder: 'asc'}],
+      take: 200,
+    });
+    const catalogue = await listPrices(siteBase()).catch(() => null);
+    c.header('Cache-Control', 'no-store');
+    return c.json(shapePaymentsStatus(rows.map(({event, ...r}) => ({...r, eventTitle: event.title})), catalogue?.ok ? catalogue.data : null));
   })
 
   .patch('/', patchBody, withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {

@@ -4,6 +4,7 @@ import {validator} from 'hono/validator';
 import {JOB_TYPES, type Job, type JobsPage} from '../../lib/types';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {PERMISSIONS} from '../permissions';
+import {escapeLike} from '../like';
 
 /**
  * The job board, stored in the Site Database (table `jobs`).
@@ -143,7 +144,7 @@ export const jobRoutes = new Hono()
       where: {
         status: 'open',
         ...(cursor ? {id: {lt: cursor}} : {}),
-        ...(search ? {title: {contains: search, mode: 'insensitive' as const}} : {}),
+        ...(search ? {title: {contains: escapeLike(search), mode: 'insensitive' as const}} : {}),
         ...(type ? {type} : {}),
         ...(remote ? {remote: true} : {}),
       },

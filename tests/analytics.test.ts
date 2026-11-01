@@ -4,6 +4,8 @@ import {
   conversion,
   goingCount,
   normaliseSource,
+  pollParticipation,
+  revenueByCurrency,
   ratio,
   showRate,
   topSources,
@@ -96,5 +98,25 @@ describe('metrics', () => {
       {source: null, views: 10, rsvps: 0},
       {source: 'twitter', views: 5, rsvps: 4},
     ]);
+  });
+});
+
+describe('revenue and poll participation', () => {
+  it('sums paid orders per currency, biggest first, and merges case variants', () => {
+    expect(
+      revenueByCurrency([
+        {currency: 'usd', amountCents: 1000, orders: 1},
+        {currency: 'EUR', amountCents: 5000, orders: 2},
+        {currency: 'USD', amountCents: 500, orders: 1},
+      ])
+    ).toEqual([
+      {currency: 'EUR', amountCents: 5000, orders: 2},
+      {currency: 'USD', amountCents: 1500, orders: 2},
+    ]);
+    expect(revenueByCurrency([])).toEqual([]);
+  });
+  it('participation is answers over confirmed guests, null without guests', () => {
+    expect(pollParticipation(3, 4).value).toBe(0.75);
+    expect(pollParticipation(0, 0)).toMatchObject({value: null, reason: 'No confirmed guests.'});
   });
 });

@@ -261,3 +261,27 @@ describe('mailer glue', () => {
     expect(typeof result.ok).toBe('boolean');
   });
 });
+
+describe('guest data export (organiser)', () => {
+  it('builds the guest document by id, scoped to the event, without the credential', async () => {
+    const {guestExportById} = await import('../src/server/privacy');
+    const rsvp = {
+      id: UUID, eventId: 'e1', name: 'Ada', email: 'ada@example.com', response: 'yes', status: 'confirmed', plusOnes: 0, seats: 1, ticketCode: 'ABC12345',
+      marketingConsent: false, consentConfirmedAt: null, checkedInAt: null, attended: null, waitlistPosition: null, source: 'direct', utmSource: null,
+      confirmedAt: null, createdAt: new Date(), updatedAt: new Date(), manageToken: 'hash',
+      event: {id: 'e1', title: 'Launch', slug: 'launch', startAt: new Date('2020-01-01'), endAt: new Date('2020-01-02'), timezone: 'UTC', status: 'published'},
+    };
+    const db = {
+      rsvp: {findFirst: async ({where}: any) => (where.id === UUID && where.eventId === 'e1' ? rsvp : null)},
+      rsvpAnswer: {findMany: async () => [{questionId: 'q', value: 'vegan', question: {label: 'Diet'}}]},
+      ticketOrder: {findMany: async () => []},
+      pollVote: {findMany: async () => []},
+      messageDelivery: {findMany: async () => []},
+    } as any;
+    const doc = await guestExportById(db, 'e1', UUID, new Date('2026-10-30'));
+    expect(doc?.rsvp.ticketCode).toBe('ABC12345');
+    expect(doc?.answers).toEqual([{questionId: 'q', question: 'Diet', answer: 'vegan'}]);
+    expect(JSON.stringify(doc)).not.toContain('manageToken');
+    expect(await guestExportById(db, 'other', UUID, new Date())).toBeNull();
+  });
+});

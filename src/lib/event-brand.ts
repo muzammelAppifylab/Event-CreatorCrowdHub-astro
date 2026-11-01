@@ -85,3 +85,15 @@ export function applyFontPreset(preset: FontPreset, root: HTMLElement = document
   if (preset === "inter") root.removeAttribute("data-font-preset")
   else root.setAttribute("data-font-preset", preset)
 }
+
+/**
+ * Apply the brand the server rendered as `data-brand` / `data-font-preset` on <html> (Base.astro,
+ * App.astro). Run on `astro:page-load`: ClientRouter swaps the root attributes (dropping the
+ * inline custom properties), so each page applies it again. Idempotent; CSSOM only (CSP).
+ */
+export function applyPageBrand(root: HTMLElement = document.documentElement) {
+  applyBrand(root.dataset.brand ?? null, root)
+  // The preset is already `data-font-preset` on <html> (server-rendered); re-assert it so the hook owns the attribute.
+  const preset = root.dataset.fontPreset
+  if (preset === "serif" || preset === "rounded") applyFontPreset(preset, root)
+}

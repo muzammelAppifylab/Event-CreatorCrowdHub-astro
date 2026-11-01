@@ -179,7 +179,7 @@ export function Events() {
             disabled={busyKey !== null}
             items={[
               {label: 'Open', icon: 'external', onSelect: () => go(`/events/${e.id}`)},
-              {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}`)},
+              {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}/edit`)},
               e.status === 'draft'
                 ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
                 : e.status === 'published'

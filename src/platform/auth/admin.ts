@@ -42,6 +42,8 @@ const idOf = (value: string) => {
 };
 
 const SLUG_RE = /^[a-z][a-z0-9-]{1,47}$/;
+/** Assignable slugs: creation stays dashes-only, but the seeded `checkin_staff` role has an underscore. */
+const ASSIGN_SLUG_RE = /^[a-z][a-z0-9_-]{1,47}$/;
 
 const userSelect = {
   id: true,
@@ -246,7 +248,7 @@ export const adminRoutes = new Hono<Env>()
     '/users/:id/roles',
     validator('json', (value, c) => {
       const roles = (value as {roles?: unknown} | null)?.roles;
-      return Array.isArray(roles) && roles.length <= 20 && roles.every(r => typeof r === 'string' && SLUG_RE.test(r))
+      return Array.isArray(roles) && roles.length <= 20 && roles.every(r => typeof r === 'string' && ASSIGN_SLUG_RE.test(r))
         ? {roles: [...new Set(roles as string[])]}
         : c.json(problem('invalid_input', 'Pick roles from the list.'), 422);
     }),

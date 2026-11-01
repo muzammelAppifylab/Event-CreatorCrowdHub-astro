@@ -338,14 +338,16 @@ hr {
 }
 
 .site-header-inner .brand {
-  flex: 0 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
-.brand-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.brand-name,
+.footer-brand-name {
   white-space: nowrap;
+}
+
+.site-header-inner .session {
+  flex: 0 0 auto;
 }
 
 .brand {
@@ -393,6 +395,11 @@ hr {
 }
 
 .brand-monogram {
+  flex: none;
+  aspect-ratio: 1;
+  line-height: 1;
+  letter-spacing: 0;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -408,6 +415,7 @@ hr {
   gap: 4px;
   font-size: 15px;
   margin-right: auto;
+  min-width: 0;
 }
 
 .site-nav a {
@@ -446,6 +454,7 @@ hr {
   gap: 32px 48px;
   padding-top: 48px;
   padding-bottom: 32px;
+  align-items: start;
 }
 
 .footer-brand .brand {
@@ -925,7 +934,7 @@ hr {
   object-fit: cover;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 1000px) {
   .site-header-inner {
     flex-wrap: wrap;
     row-gap: 0;
@@ -1126,7 +1135,7 @@ hr {
 
 /* --------------------------------------------- blog as a publication -- */
 
-.pub {
+main.pub {
   max-width: 720px;
   margin: 0 auto;
   padding: 48px 16px 64px;

@@ -361,7 +361,8 @@ export function parseEventFields(raw: unknown, partial: boolean): Parsed<Partial
       else c.fail(key, 'Enter a valid date and time.');
     }
   }
-  if (need('timezone')) {
+  // On create an omitted timezone is allowed: the route fills in the workspace default.
+  if (need('timezone') && !(!partial && raw.timezone === undefined)) {
     const tz = typeof raw.timezone === 'string' ? raw.timezone.trim() : '';
     if (tz && isValidTimeZone(tz)) out.timezone = tz;
     else c.fail('timezone', tz ? 'Choose a valid timezone, e.g. Europe/London.' : 'Choose a timezone.');
@@ -503,14 +504,18 @@ export function parseReminderRules(c: Collector, v: unknown, field: string): Rem
     const kind = isIn(REMINDER_KINDS, raw.kind) ? raw.kind : undefined;
     if (!kind) c.fail(`${name}.kind`, 'Pick a kind of email.');
     const offset = int(c, `${name}.offsetMinutes`, raw.offsetMinutes, -10_000_000, 10_000_000, 'Use whole minutes.');
+    let inLimits = true;
     if (kind && offset !== undefined) {
       const {min, max} = RULE_OFFSET_LIMITS[kind];
-      if (offset < min || offset > max) c.fail(`${name}.offsetMinutes`, offsetLimitMessage(kind));
+      if (offset < min || offset > max) {
+        inLimits = false;
+        c.fail(`${name}.offsetMinutes`, offsetLimitMessage(kind));
+      }
     }
     const subject = text(c, `${name}.subject`, raw.subject, {min: 1, max: 200, label: 'a subject'});
     const body = text(c, `${name}.body`, raw.body, {min: 1, max: 10_000, label: 'a message'});
     const enabled = raw.enabled === undefined ? true : bool(c, `${name}.enabled`, raw.enabled);
-    if (kind && offset !== undefined && subject !== undefined && body !== undefined && enabled !== undefined) {
+    if (kind && offset !== undefined && inLimits && subject !== undefined && body !== undefined && enabled !== undefined) {
       out.push({kind, offsetMinutes: offset, enabled, subject, body});
     }
   });

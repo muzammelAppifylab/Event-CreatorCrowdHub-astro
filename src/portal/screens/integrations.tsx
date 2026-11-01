@@ -2,6 +2,7 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {useState} from 'react';
 
 import {ApiError} from '../api';
+import {contactsExportUrl, downloadExport} from '../guests-queries';
 import {
   createWebhook,
   deleteWebhook,
@@ -15,7 +16,6 @@ import {
 } from '../webhooks-queries';
 import {
   Button,
-  buttonClass,
   Card,
   Checkbox,
   type Column,
@@ -34,9 +34,6 @@ import {
   rules,
 } from '../ui';
 
-/** Placeholder: point it at the guest export route once that screen ships. */
-const EXPORT_CSV_HREF = '/site-api/guests/export.csv';
-
 const URL_RULES = {url: [rules.required('Enter the receiver URL.'), rules.pattern(/^https:\/\/\S+$/i, 'The URL must start with https://'), rules.maxLength(500)]};
 
 /** `/dashboard/integrations` (holders of `site:event:manage`): outbound webhooks for Zapier, Make and friends. */
@@ -45,6 +42,18 @@ export function Integrations() {
   const confirm = useConfirm();
   const toast = useToast();
   const hooks = useQuery(webhooksQuery);
+  const [exporting, setExporting] = useState(false);
+  const exportContacts = async () => {
+    setExporting(true);
+    try {
+      await downloadExport(contactsExportUrl({q: '', consent: ''}), 'contacts.csv');
+      toast.success('Contacts exported.');
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : 'The export failed.');
+    } finally {
+      setExporting(false);
+    }
+  };
   const [open, setOpen] = useState(false);
   const [events, setEvents] = useState<WebhookEventName[]>([...WEBHOOK_EVENT_NAMES]);
   const [eventsError, setEventsError] = useState<string>();
@@ -161,9 +170,9 @@ export function Integrations() {
         description="Send each event to Zapier, Make or your own server as a signed JSON POST."
         actions={
           <>
-            <a className={buttonClass({variant: 'secondary'})} href={EXPORT_CSV_HREF} download>
-              Export guests (CSV)
-            </a>
+            <Button variant="secondary" icon="file" pending={exporting} onClick={() => void exportContacts()}>
+              Export contacts (CSV)
+            </Button>
             <Button icon="plus" onClick={startNew}>
               Add webhook
             </Button>

@@ -2,6 +2,7 @@ import {useInfiniteQuery, useMutation, useQuery, useQueryClient} from '@tanstack
 import {useState} from 'react';
 
 import {ApiError} from '../api';
+import {QrCode} from '../qr';
 import {
   type CreateInvitesResult,
   embedCode,
@@ -287,6 +288,7 @@ function ShareKit({eventId}: {eventId: string}) {
               </a>
             ))}
           </div>
+          <QrCode value={data.eventUrl} label={`QR code for ${data.title}`} />
           <Field label="Embed on your site" id="share-embed" hint="Shows the RSVP page without its header.">
             <textarea id="share-embed" rows={3} readOnly value={embedCode(data.base, data.slug, data.title)} onFocus={event => event.target.select()} />
           </Field>

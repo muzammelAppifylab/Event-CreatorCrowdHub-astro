@@ -8,8 +8,8 @@ const {slug} = Astro.props;
 
 <form id="manage-link-form" class="g-form" novalidate data-slug={slug}>
   <div class="field">
-    <label for="manage-link-email">Already RSVP’d? Email me my link</label>
-    <input id="manage-link-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" />
+    <label for="manage-link-email">Your email</label>
+    <input id="manage-link-email" name="email" type="email" autocomplete="email" inputmode="email" />
   </div>
   <p class="notice" data-form-status hidden></p>
   <div class="g-form-end"><button class="g-btn g-btn-outline g-btn-lg" type="submit">Send my link</button></div>
@@ -26,7 +26,7 @@ const {slug} = Astro.props;
     if (!form || form.dataset.bound) return;
     form.dataset.bound = '1';
     bindForm(form, {
-      rules: {email: [rules.required('Add your email.'), rules.email()]},
+      rules: {email: [rules.required('Enter a valid email address'), rules.email('Enter a valid email address')]},
       pendingLabel: 'Sending…',
       async submit(values) {
         const {result} = await postJson(siteFetch, `/site-api/rsvp/events/${form.dataset.slug}/manage-link`, {email: values.email});

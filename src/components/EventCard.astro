@@ -4,11 +4,12 @@
  * card chrome, no shadow; type sits flush under the art and the whole tile is one link.
  */
 import {posterTextFor, type CoverStyle} from '../lib/posters';
-import {formatShortWhen, guestCopy} from '../lib/guest-format';
+import {formatPrice, formatShortWhen, guestCopy} from '../lib/guest-format';
 import Poster from './Poster.astro';
 
 interface Props {
   event: {
+    id?: string;
     slug: string;
     title: string;
     startAt: string;
@@ -18,13 +19,19 @@ interface Props {
     coverImageUrl: string | null;
     coverPoster: string | null;
     coverStyle?: CoverStyle | null;
+    fromPrice?: {amountCents: number; currency: string} | null;
+    free?: boolean;
   };
   /** "Free", "From $25": omit when the list does not carry ticket prices. */
   price?: string;
   href?: string;
 }
 
-const {event, price, href = `/events/${encodeURIComponent(event.slug)}/`} = Astro.props;
+const {event, price: priceProp, href = `/events/${encodeURIComponent(event.slug)}/`} = Astro.props;
+const hasTickets = !!event.fromPrice;
+const price =
+  priceProp ??
+  (!hasTickets ? undefined : event.free ? guestCopy.price.free : guestCopy.price.from(formatPrice(event.fromPrice!.amountCents, event.fromPrice!.currency)));
 const venue = event.format === 'online' ? guestCopy.format.online : (event.venueName ?? guestCopy.format[event.format]);
 ---
 
@@ -34,7 +41,7 @@ const venue = event.format === 'online' ? guestCopy.format.online : (event.venue
       event.coverImageUrl ? (
         <img src={event.coverImageUrl} alt="" loading="lazy" width="300" height="400" />
       ) : (
-        <Poster design={event.coverPoster} seed={event.slug} text={posterTextFor(event, event.coverStyle)} palette={event.coverStyle?.palette} />
+        <Poster design={event.coverPoster} seed={event.id ?? event.slug} text={posterTextFor(event, event.coverStyle)} palette={event.coverStyle?.palette} />
       )
     }
   </div>

@@ -2563,9 +2563,18 @@
   font-size: var(--fs-body-sm);
 }
 
-.app-body .button.button-ghost.button-xs,
-.app-body .button.button-ghost.button-sm,
-.app-body .button.button-ghost.button-lg,
+.app-body .button.button-ghost.button-xs {
+  font-size: 0.625rem;
+}
+
+.app-body .button.button-ghost.button-sm {
+  font-size: 0.6875rem;
+}
+
+.app-body .button.button-ghost.button-lg {
+  font-size: 0.8125rem;
+}
+
 .app-body .button.button-ghost.button-xl {
   font-size: var(--fs-body-sm);
 }
@@ -3007,6 +3016,44 @@
   color: var(--rsvp-waitlist-soft-foreground);
 }
 
+/* ---- solid RSVP / signal / ghost / link badges ---- */
+.badge-going {
+  background: var(--rsvp-going);
+  color: var(--rsvp-going-foreground);
+}
+
+.badge-maybe {
+  background: var(--rsvp-maybe);
+  color: var(--rsvp-maybe-foreground);
+}
+
+.badge-no {
+  background: var(--rsvp-no);
+  color: var(--rsvp-no-foreground);
+}
+
+.badge-waitlist {
+  background: var(--rsvp-waitlist);
+  color: var(--rsvp-waitlist-foreground);
+}
+
+.badge-signal {
+  background: var(--signal);
+  color: var(--signal-foreground);
+}
+
+.badge-ghost {
+  background: transparent;
+  color: var(--foreground);
+}
+
+.badge-link {
+  background: transparent;
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
 /* ---- avatar ---- */
 .avatar {
   position: relative;
@@ -3031,6 +3078,12 @@
   width: 2.5rem;
   height: 2.5rem;
   font-size: var(--fs-body-sm);
+}
+
+/* 1px border overlay ring (span and img) */
+.avatar {
+  outline: 1px solid var(--border);
+  outline-offset: -1px;
 }
 
 .person-detail {
@@ -3095,6 +3148,10 @@
   font-size: var(--fs-body-sm);
 }
 
+.notice-box > .notice-icon {
+  margin-top: 0.125rem;
+}
+
 .notice-title {
   font-weight: 500;
 }
@@ -3143,15 +3200,27 @@
 
 /* ---- charts and progress ---- */
 .progress {
+  display: block;
+  width: 100%;
   height: 0.5rem;
-}
-
-.progress-track {
-  fill: var(--surface-muted);
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+  overflow: hidden;
 }
 
 .progress-fill {
-  fill: var(--primary);
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: var(--r-pill);
+  background: var(--primary);
+  transition: width 500ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
 }
 
 .sparkline-line {
@@ -3199,14 +3268,38 @@
   border-bottom: 1px solid var(--border);
 }
 
-.data-table th:first-child,
-.data-table td:first-child {
+/* Source cells are px-3 everywhere and never wrap; a table flush inside a card
+   keeps the card's 1.25rem gutter on its outer cells. */
+.card-flush .data-table th:first-child,
+.card-flush .data-table td:first-child {
   padding-inline-start: 1.25rem;
 }
 
-.data-table th:last-child,
-.data-table td:last-child {
+.card-flush .data-table th:last-child,
+.card-flush .data-table td:last-child {
   padding-inline-end: 1.25rem;
+}
+
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--card);
+}
+
+.card-flush .table-wrap {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+@media (min-width: 721px) {
+  .data-table td {
+    white-space: nowrap;
+  }
 }
 
 .data-table tbody tr:hover td {
@@ -3223,13 +3316,13 @@
     border-bottom-color: var(--border);
   }
 
-  .data-table th:first-child,
-  .data-table td:first-child {
+  .card-flush .data-table th:first-child,
+  .card-flush .data-table td:first-child {
     padding-inline-start: 0;
   }
 
-  .data-table th:last-child,
-  .data-table td:last-child {
+  .card-flush .data-table th:last-child,
+  .card-flush .data-table td:last-child {
     padding-inline-end: 0;
   }
 }
@@ -3269,6 +3362,15 @@
   line-height: var(--lh-body);
   box-shadow: none;
   transition: border-color var(--dur-fast) ease-out, box-shadow var(--dur-fast) ease-out;
+}
+
+.app-body .field select,
+.app-body .toolbar .select select {
+  padding-inline-end: 2.5rem;
+}
+
+.app-body .field .pw-input input {
+  padding-inline-end: 4.25rem;
 }
 
 .app-body .field textarea {
@@ -3381,6 +3483,16 @@
   opacity: 0.5;
 }
 
+.checkbox input[type='checkbox'][aria-invalid='true'] {
+  border-color: var(--destructive);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive) 20%, transparent);
+}
+
+/* the input already dims to .5: do not compound it on the wrapper */
+.checkbox[data-disabled] {
+  opacity: 1;
+}
+
 .checkbox-label {
   font-size: var(--fs-body-sm);
   font-weight: 500;
@@ -3413,6 +3525,10 @@
 .switch:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
+}
+
+.switch:disabled {
+  opacity: 0.5;
 }
 
 .switch-thumb {
@@ -3577,6 +3693,7 @@
 }
 
 .modal-box {
+  position: relative;
   gap: 1rem;
   padding: 0;
   background: var(--popover);
@@ -3588,7 +3705,27 @@
 
 .modal-head,
 .drawer-head {
-  padding: 1.5rem 1.5rem 0;
+  padding: 1.5rem 3.25rem 0 1.5rem;
+}
+
+/* close: 44px ghost icon at top 8 / right 8, like the source */
+.modal-head > .icon-button,
+.drawer-head > .icon-button {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+@media (max-width: 640px) {
+  .modal-foot {
+    flex-direction: column-reverse;
+  }
+
+  .modal-foot > * {
+    width: 100%;
+  }
 }
 
 .modal-head h2,
@@ -3634,6 +3771,7 @@
 }
 
 .drawer-box {
+  position: relative;
   background: var(--popover);
   border-left: 1px solid var(--border);
   box-shadow: var(--elev-3);
@@ -3641,13 +3779,15 @@
 }
 
 .drawer-head {
-  padding: 1rem;
+  padding: 1rem 3.25rem 1rem 1rem;
   border-bottom: 0;
 }
 
 .drawer-body {
   padding: 1rem;
   gap: 1rem;
+  color: var(--popover-foreground);
+  font-size: var(--fs-body-sm);
 }
 
 .drawer-foot {
@@ -3770,6 +3910,18 @@
   pointer-events: none;
   transform: translateX(-50%) translateY(0.25rem);
   transition: opacity var(--dur-fast) ease-out, transform var(--dur-fast) ease-out;
+}
+
+.tooltip-content::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  background: inherit;
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
 .tooltip:hover > .tooltip-content,

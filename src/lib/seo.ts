@@ -162,7 +162,7 @@ export function eventJsonLd(
     ...(physical
       ? [{'@type': 'Place', name: event.venueName, ...(event.venueAddress && {address: event.venueAddress})}]
       : []),
-    ...(online ? [{'@type': 'VirtualLocation', url: url ?? event.joinUrl ?? undefined}] : []),
+    ...(online ? [{'@type': 'VirtualLocation', url: url ?? undefined}] : []),
   ];
   return {
     '@context': 'https://schema.org',

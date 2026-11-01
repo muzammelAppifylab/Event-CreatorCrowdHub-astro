@@ -1,5 +1,5 @@
 import {Link} from '@tanstack/react-router';
-import {type ReactNode, useId} from 'react';
+import {type ReactNode, useEffect, useId, useRef} from 'react';
 
 import {Icon, type IconName} from './icon';
 
@@ -153,13 +153,13 @@ export function Stat({
 
 export type Tone = 'neutral' | 'brand' | 'success' | 'warning' | 'danger' | 'info';
 /** Badge-only looks from the design system: a solid ink pill, an outlined pill, an uppercase tracked label. */
-export type BadgeTone = Tone | 'solid' | 'outline' | 'label';
+export type BadgeTone = Tone | 'solid' | 'outline' | 'label' | 'going' | 'maybe' | 'no' | 'waitlist' | 'signal' | 'ghost' | 'link';
 
 /** A short label: a role, a tag, a count. Never a button. */
 export function Badge({tone = 'neutral', icon, children}: {tone?: BadgeTone; icon?: IconName; children: ReactNode}) {
   return (
     <span className={`badge badge-${tone}`}>
-      {icon && <Icon name={icon} size={14} />}
+      {icon && <Icon name={icon} size={12} />}
       {children}
     </span>
   );
@@ -283,7 +283,7 @@ export function Notice({
   const icon: IconName = tone === 'success' ? 'check-circle' : tone === 'warning' ? 'warning' : tone === 'danger' ? 'alert' : 'info';
   return (
     <div className={`notice-box notice-${tone}`} role={tone === 'danger' ? 'alert' : 'status'}>
-      <Icon name={icon} size={18} className="notice-icon" />
+      <Icon name={icon} size={16} className="notice-icon" />
       <div className="notice-text">
         {title && <p className="notice-title">{title}</p>}
         {children && <div className="notice-body">{children}</div>}
@@ -378,19 +378,16 @@ export function BarChart({data, label, format = String}: {data: {label: string; 
 /** How far along something is (storage used, steps done). `value` 0–`max`. */
 export function ProgressBar({value, max = 100, label}: {value: number; max?: number; label: string}) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
+  // The CSP forbids inline style attributes: the fill's width is set through
+  // the CSSOM (allowed), which also lets the 500ms width transition run.
+  const fill = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (fill.current) fill.current.style.width = `${pct}%`;
+  }, [pct]);
   return (
-    <svg
-      className="progress"
-      viewBox="0 0 100 8"
-      preserveAspectRatio="none"
-      role="progressbar"
-      aria-label={label}
-      aria-valuemin={0}
-      aria-valuemax={max}
-      aria-valuenow={value}>
-      <rect className="progress-track" width="100" height="8" rx="4" />
-      <rect className="progress-fill" width={pct} height="8" rx="4" />
-    </svg>
+    <div className="progress" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={max} aria-valuenow={value}>
+      <span className="progress-fill" ref={fill} />
+    </div>
   );
 }
 

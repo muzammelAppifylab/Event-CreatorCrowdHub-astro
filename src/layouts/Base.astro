@@ -29,6 +29,7 @@ import type {Site, Viewer} from '../lib/types';
 import {initials} from '../lib/format';
 import {absoluteUrl, type JsonLd, jsonLdText, siteJsonLd} from '../lib/seo';
 import {config} from '../platform/config';
+import {backend, read} from '../server/backend';
 
 interface Props {
   site: Site | null;
@@ -64,6 +65,8 @@ interface Props {
    * `?embed=1` drops that chrome too (the iframe embed).
    */
   guest?: boolean;
+  /** The public brand; a guest page that did not fetch it gets it here (in-process). */
+  brand?: {brandColor: string | null; fontPreset: string} | null;
 }
 
 const {
@@ -81,7 +84,12 @@ const {
   secretInUrl = false,
   jsonLd,
   guest = false,
+  brand: brandProp,
 } = Astro.props;
+// Guest pages wear the host's brand colour and font preset (applied in the script below).
+const brand = brandProp !== undefined ? brandProp : guest ? await read<{brandColor: string | null; fontPreset: string}>(backend(Astro.request)['event-settings'].brand.$get()) : null;
+const brandColor = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : undefined;
+const fontPreset = brand?.fontPreset === 'serif' || brand?.fontPreset === 'rounded' ? brand.fontPreset : undefined;
 const embed = guest && Astro.url.searchParams.get('embed') === '1';
 const name = site?.name ?? 'My site';
 const fullTitle = title ? `${title} · ${name}` : name;
@@ -106,7 +114,7 @@ const structured = indexable
 ---
 
 <!doctype html>
-<html lang={SITE.lang}>
+<html lang={SITE.lang} data-brand={brandColor} data-font-preset={fontPreset}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -129,6 +137,8 @@ const structured = indexable
     <meta name="twitter:description" content={description} />
     {socialImage && <meta name="twitter:image" content={socialImage} />}
     <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     {site?.favIcon ? <link rel="icon" href={site.favIcon} /> : <link rel="icon" href="/favicon.svg" type="image/svg+xml" />}
     <link rel="alternate" type="application/rss+xml" title={`${name} blog`} href="/rss.xml" />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
@@ -136,6 +146,16 @@ const structured = indexable
     {/* Client navigation: a click swaps the next page in without a reload (prefetched on hover). The
         portal has no router, so a link to it is a normal page load. Page scripts run on `astro:page-load`. */}
     <ClientRouter />
+
+    <script>
+      // The theme chosen in the dashboard (same key as App.astro), restored on every public page.
+      try {
+        const theme = localStorage.getItem('site:theme');
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+      } catch {
+        // Storage blocked: the device's theme.
+      }
+    </script>
   </head>
   <body class:list={['pub', {'pub-guest': guest}]} data-viewer={viewer.state} data-static={hydrate ? '1' : undefined}>
     {!embed && <a class={guest ? 'g-skip' : 'skip-link'} href="#main">Skip to content</a>}
@@ -253,6 +273,7 @@ const structured = indexable
       import {logout, refreshSession} from '../platform/browser';
       import {hydrateStaticPage} from '../platform/static-page';
       import {notifyPaymentOpener} from '../lib/checkout-session';
+      import {applyPageBrand} from '../lib/event-brand';
 
       // Every button shows when it is busy (AGENTS.md "Buttons and forms").
       const busy = (button: HTMLButtonElement, label?: string) => {
@@ -263,6 +284,7 @@ const structured = indexable
 
       // Each page, the first load and every client navigation (ClientRouter): the body is new.
       document.addEventListener('astro:page-load', () => {
+        applyPageBrand();
         // Back from the payment provider INSIDE the payment window: tell the checkout page, close.
         notifyPaymentOpener();
         if (document.body.dataset.static === '1') void hydrateStaticPage();

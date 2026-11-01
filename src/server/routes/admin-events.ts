@@ -35,6 +35,7 @@ import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import type {Viewer} from '../../platform/types';
 import {PERMISSIONS} from '../permissions';
+import {nextSortOrder, validateOrder} from '../sort-order';
 import {markEventOrdersRefundDue} from '../ticket-checkout';
 
 /**
@@ -297,7 +298,7 @@ async function loadDetail(db: PrismaClient, id: string): Promise<AdminEventDetai
   const event = await db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect});
   if (!event) return null;
   const [questions, counts] = await Promise.all([
-    db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: {id: 'asc'}}),
+    db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]}),
     emptyCountsFor(db, [id]),
   ]);
   return toDetail(event, questions, counts.get(id)!);
@@ -347,13 +348,13 @@ async function saveQuestions(db: PrismaClient, eventId: string, wanted: Question
   const drop = [...own].filter(id => !keep.has(id));
   await db.$transaction([
     ...(drop.length ? [db.rsvpQuestion.deleteMany({where: {eventId, id: {in: drop}}})] : []),
-    ...wanted.map(q =>
+    ...wanted.map((q, sortOrder) =>
       q.id && own.has(q.id)
         ? db.rsvpQuestion.updateMany({
             where: {id: q.id, eventId},
-            data: {label: q.label, type: q.type, options: q.options, required: q.required},
+            data: {label: q.label, type: q.type, options: q.options, required: q.required, sortOrder},
           })
-        : db.rsvpQuestion.create({data: questionData(eventId, q, uuidV7()), select: {id: true}})
+        : db.rsvpQuestion.create({data: {...questionData(eventId, q, uuidV7()), sortOrder}, select: {id: true}})
     ),
   ]);
 }
@@ -479,7 +480,7 @@ export const adminEventRoutes = new Hono<Env>()
           slug,
           status: 'draft',
           pollJoinCode: code,
-          rsvpQuestions: {create: values.questions.map(q => ({id: uuidV7(), label: q.label, type: q.type, options: q.options, required: q.required}))},
+          rsvpQuestions: {create: values.questions.map((q, sortOrder) => ({id: uuidV7(), sortOrder, label: q.label, type: q.type, options: q.options, required: q.required}))},
           reminderRules: {create: settings.defaultReminderRules.map(ruleData)},
         },
         select: {id: true},
@@ -503,7 +504,7 @@ export const adminEventRoutes = new Hono<Env>()
     const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}) : null;
     if (!row) return notFound(c);
     const patch = c.req.valid('json');
-    const questions = await db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: {id: 'asc'}});
+    const questions = await db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]});
     const done = completeEvent(valuesOf(row, questions), patch);
     if (!done.ok) return c.json(invalid(done.fields), 422);
     const values = done.value;
@@ -598,10 +599,15 @@ export const adminEventRoutes = new Hono<Env>()
     const title = (body.title ?? `Copy of ${source.title}`).slice(0, 120);
     const startAt = new Date(body.startAt);
     const shift = startAt.getTime() - source.startAt.getTime();
-    const [questions, tickets, rules] = await Promise.all([
-      db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: {id: 'asc'}}),
-      db.ticketType.findMany({where: {eventId: id}, select: ticketSelect, orderBy: {id: 'asc'}}),
+    const [questions, tickets, rules, polls] = await Promise.all([
+      db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]}),
+      db.ticketType.findMany({where: {eventId: id}, select: ticketSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]}),
       db.reminderRule.findMany({where: {eventId: id}, select: {kind: true, offsetMinutes: true, enabled: true, subject: true, body: true}}),
+      db.poll.findMany({
+        where: {eventId: id},
+        select: {question: true, type: true, anonymous: true, showResultsToVoters: true, sortOrder: true, pollOptions: {select: {label: true, sortOrder: true}, orderBy: {sortOrder: 'asc'}}},
+        orderBy: {sortOrder: 'asc'},
+      }),
     ]);
     const taken = async (slug: string) => (await db.event.findFirst({where: {slug, deletedAt: null}, select: {id: true}})) !== null;
     const slug = await uniqueSlug(title, taken);
@@ -620,10 +626,11 @@ export const adminEventRoutes = new Hono<Env>()
           endAt: new Date(body.endAt),
           // Keep the deadline the same distance before the start, so it stays valid.
           rsvpDeadline: source.rsvpDeadline ? new Date(source.rsvpDeadline.getTime() + shift) : null,
-          rsvpQuestions: {create: questions.map(q => ({id: uuidV7(), label: q.label, type: q.type, options: stringsOf(q.options), required: q.required}))},
+          rsvpQuestions: {create: questions.map((q, sortOrder) => ({id: uuidV7(), sortOrder, label: q.label, type: q.type, options: stringsOf(q.options), required: q.required}))},
           ticketTypes: {
-            create: tickets.map(t => ({
+            create: tickets.map((t, sortOrder) => ({
               id: uuidV7(),
+              sortOrder,
               name: t.name,
               priceCents: t.priceCents,
               currency: t.currency,
@@ -632,6 +639,19 @@ export const adminEventRoutes = new Hono<Env>()
             })),
           },
           reminderRules: {create: rules.map(r => ruleData({...r, kind: r.kind}))},
+          // Polls come across as drafts with their options and no votes (US-10).
+          polls: {
+            create: polls.map(p => ({
+              id: uuidV7(),
+              question: p.question,
+              type: p.type,
+              status: 'draft' as const,
+              anonymous: p.anonymous,
+              showResultsToVoters: p.showResultsToVoters,
+              sortOrder: p.sortOrder,
+              pollOptions: {create: p.pollOptions.map(o => ({id: uuidV7(), label: o.label, sortOrder: o.sortOrder}))},
+            })),
+          },
         },
         select: {id: true},
       });
@@ -662,7 +682,7 @@ export const adminEventRoutes = new Hono<Env>()
     const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}) : null;
     if (!event) return notFound(c);
     const [rows, held] = await Promise.all([
-      db.ticketType.findMany({where: {eventId: id}, select: ticketSelect, orderBy: {id: 'asc'}}),
+      db.ticketType.findMany({where: {eventId: id}, select: ticketSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]}),
       seatsHeld(db, id),
     ]);
     const now = new Date();
@@ -682,10 +702,12 @@ export const adminEventRoutes = new Hono<Env>()
     }
     const priceError = ticketPriceError(input.priceCents, input.currency, 1 + event.maxPlusOnes);
     if (priceError) return c.json(invalid({priceCents: priceError}), 422);
+    const last = await db.ticketType.aggregate({where: {eventId: id}, _max: {sortOrder: true}});
     const created = await db.ticketType.create({
       data: {
         id: uuidV7(),
         eventId: id,
+        sortOrder: nextSortOrder(last._max.sortOrder),
         name: input.name,
         priceCents: input.priceCents,
         currency: input.currency,
@@ -695,6 +717,19 @@ export const adminEventRoutes = new Hono<Env>()
       select: ticketSelect,
     });
     return c.json({ticketType: toTicket(created, 0, new Date())}, 201);
+  })
+
+  .patch('/:id/ticket-types/order', async c => {
+    const db = c.var.db;
+    const id = c.req.param('id');
+    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}) : null;
+    if (!event) return notFound(c);
+    const body = (await c.req.json().catch(() => null)) as {ids?: unknown} | null;
+    const existing = await db.ticketType.findMany({where: {eventId: id}, select: {id: true}, take: MAX_TICKET_TYPES + 1});
+    if (!validateOrder(body?.ids, existing.map(t => t.id))) return c.json(invalid({ids: 'Send every ticket type of this event exactly once.'}), 422);
+    const ids = body!.ids as string[];
+    await db.$transaction(ids.map((ticketId, sortOrder) => db.ticketType.updateMany({where: {id: ticketId, eventId: id}, data: {sortOrder}})));
+    return c.json({ok: true});
   })
 
   .patch('/:id/ticket-types/:ticketId', ticketBody(true), async c => {

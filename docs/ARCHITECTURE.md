@@ -100,7 +100,8 @@ Schedules do not tick locally: trigger with `sendJob(url, 'event-scheduler', {})
 `src/server/mailer.ts` `sendEventEmail` sends through Resend when the owner secrets `RESEND_API_KEY` and
 `EVENT_EMAIL_FROM` (e.g. `Studio <events@domain>`) are set; otherwise it returns false (deliveries are
 recorded `failed` and retried while due). Templates live in `src/emails/`. Account emails use the
-platform relay.
+platform relay. With no provider, local dev (`import.meta.env.DEV`, never production) also prints the
+links in the email text to the server console prefixed `[dev email]`, so a guest manage page can be opened.
 
 ## Environment
 

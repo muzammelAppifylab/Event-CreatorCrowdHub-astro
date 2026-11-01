@@ -2,6 +2,7 @@ import type {QueryClient} from '@tanstack/react-query';
 import {
   createRootRouteWithContext,
   createRoute,
+  redirect,
   type ErrorComponentProps,
   Link,
   lazyRouteComponent,
@@ -84,6 +85,17 @@ declare module '@tanstack/react-router' {
  * the error in place from the same query, as it always has.
  */
 const warm = (...reads: Promise<unknown>[]) => Promise.all(reads.map(read => read.catch(() => undefined))).then(() => undefined);
+
+/**
+ * A route's guard (the enforcement; the nav only hides): a visitor without one of `abilities` is sent
+ * to the overview. The server still checks every call; this only keeps the screens out of reach.
+ */
+const needs =
+  (...abilities: (keyof Abilities)[]) =>
+  async ({context: {queryClient}}: {context: {queryClient: QueryClient}}) => {
+    const me = await queryClient.ensureQueryData(meQuery).catch(() => null);
+    if (me && !abilities.some(a => me.abilities?.[a])) throw redirect({to: '/'});
+  };
 
 /** While a slow screen loads (after `defaultPendingMs`). */
 export function RoutePending() {
@@ -407,6 +419,7 @@ const accountRoute = createRoute({
 const jobsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/jobs',
+  beforeLoad: needs('manageJobs'),
   staticData: {title: 'Jobs'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(manageJobsQuery)),
   component: lazyRouteComponent(() => import('./screens/jobs'), 'Jobs'),
@@ -414,6 +427,7 @@ const jobsRoute = createRoute({
 const usersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/users',
+  beforeLoad: needs('manageUsers'),
   staticData: {title: 'Users'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(usersQuery({email: '', status: ''}))),
   component: lazyRouteComponent(() => import('./screens/users'), 'Users'),
@@ -421,6 +435,7 @@ const usersRoute = createRoute({
 const rolesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/roles',
+  beforeLoad: needs('manageRoles'),
   staticData: {title: 'Roles'},
   loader: ({context: {queryClient}}) =>
     warm(queryClient.ensureQueryData(rolesQuery), queryClient.ensureQueryData(permissionsQuery)),
@@ -429,6 +444,7 @@ const rolesRoute = createRoute({
 const activityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/activity',
+  beforeLoad: needs('readAudit'),
   staticData: {title: 'Activity'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(auditQuery)),
   component: lazyRouteComponent(() => import('./screens/activity'), 'Activity'),
@@ -442,6 +458,7 @@ function EventHubRoute() {
 const eventsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Events'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(eventsListQuery('upcoming'))),
   component: lazyRouteComponent(() => import('./screens/events'), 'Events'),
@@ -449,30 +466,35 @@ const eventsRoute = createRoute({
 const eventNewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events/new',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'New event'},
   component: lazyRouteComponent(() => import('./screens/event-editor'), 'EventEditor'),
 });
 const eventEditRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events/$id/edit',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Edit event'},
   component: lazyRouteComponent(() => import('./screens/event-editor'), 'EventEditor'),
 });
 const eventHubRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events/$id',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Event'},
   component: EventHubRoute,
 });
 const contactsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/contacts',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Contacts'},
   component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
 });
 const eventSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/event-settings',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Event settings'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(eventSettingsQuery)),
   component: lazyRouteComponent(() => import('./screens/event-settings'), 'EventSettings'),
@@ -480,6 +502,7 @@ const eventSettingsRoute = createRoute({
 const checkinRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/checkin',
+  beforeLoad: needs('checkinGuests', 'manageEvents'),
   staticData: {title: 'Check-in'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(doorEventsQuery)),
   component: lazyRouteComponent(() => import('./screens/checkin'), 'Checkin'),
@@ -487,13 +510,22 @@ const checkinRoute = createRoute({
 const checkinEventRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/checkin/$eventId',
+  beforeLoad: needs('checkinGuests', 'manageEvents'),
   staticData: {title: 'Door list'},
   loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(doorListQuery(params.eventId, ''))),
   component: lazyRouteComponent(() => import('./screens/checkin-event'), 'CheckinEvent'),
 });
+const checkinCodeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/checkin/code/$code',
+  beforeLoad: needs('checkinGuests', 'manageEvents'),
+  staticData: {title: 'Check in guest'},
+  component: lazyRouteComponent(() => import('./screens/checkin-code'), 'CheckinCode'),
+});
 const pollPresenterRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/polls/$code/present',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Poll presenter'},
   loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(presenterPollsQuery(params.code))),
   component: lazyRouteComponent(() => import('./screens/poll-presenter'), 'PollPresenter'),
@@ -501,9 +533,16 @@ const pollPresenterRoute = createRoute({
 const integrationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations',
+  beforeLoad: needs('manageEvents'),
   staticData: {title: 'Integrations'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(webhooksQuery)),
   component: lazyRouteComponent(() => import('./screens/integrations'), 'Integrations'),
+});
+const refundsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/refunds',
+  staticData: {title: 'Refunds to finish'},
+  component: lazyRouteComponent(() => import('./screens/refunds'), 'Refunds'),
 });
 
 // The UI kit on screen, for the owner and their agent. Dev only: the whole route (and its
@@ -533,6 +572,7 @@ export const routeTree = rootRoute.addChildren([
   eventSettingsRoute,
   contactsRoute,
   checkinRoute,
+  checkinCodeRoute,
   checkinEventRoute,
   pollPresenterRoute,
   integrationsRoute,

@@ -161,7 +161,7 @@ export function mountPoll(root: HTMLElement): void {
     const nodes: Node[] = [];
     if (error) nodes.push(h('p', {class: 'notice', role: 'alert', 'data-tone': 'error'}, error));
     if (!poll || active.status === 'waiting') {
-      nodes.push(h('p', {class: 'lede'}, 'Waiting for the host to open a poll. This page updates by itself.'));
+      nodes.push(h('p', {class: 'lede'}, 'Waiting for the host to open a poll… Keep this page open. The question appears here as soon as the host opens it.'));
     } else if (poll.status === 'open') {
       // Keep a form the voter is filling in: only rebuild it when the question changes or after a send.
       if (!force && key === formKey && body.querySelector('form')) {

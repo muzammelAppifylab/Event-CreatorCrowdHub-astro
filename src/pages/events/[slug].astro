@@ -9,6 +9,7 @@ import ErrorScreen from '../../components/ErrorScreen.astro';
 import EventView from '../../components/EventView.astro';
 import {copy} from '../../config/copy';
 import Base from '../../layouts/Base.astro';
+import {descriptionExcerpt} from '../../domain/richText';
 import {routeCopy} from '../../lib/guest-format';
 import {eventJsonLd} from '../../lib/seo';
 import type {EventDetail} from '../../lib/types';
@@ -38,7 +39,7 @@ const gone = copy.errors.eventNotFound;
 
 {
   event ? (
-    <Base site={site} viewer={viewer} guest title={event.title} description={event.description.slice(0, 160) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
+    <Base site={site} viewer={viewer} guest title={event.title} description={descriptionExcerpt(event.description) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
       <main id="main" tabindex="-1" class="g-main" data-event-slug={event.slug}>
         <EventView event={event} rsvp={rsvp} site={site} />
       </main>

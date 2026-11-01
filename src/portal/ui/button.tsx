@@ -23,7 +23,7 @@ export function buttonClass({variant = 'primary', size = 'md', block = false}: {
   return ['button', `button-${variant}`, size === 'md' ? '' : `button-${size}`, block ? 'button-block' : ''].filter(Boolean).join(' ');
 }
 
-const ICON_SIZE: Record<ButtonSize, 14 | 16 | 20> = {xs: 14, sm: 14, md: 16, lg: 16, xl: 20};
+const ICON_SIZE: Record<ButtonSize, 12 | 14 | 16 | 20> = {xs: 12, sm: 14, md: 16, lg: 16, xl: 20};
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: ButtonVariant;

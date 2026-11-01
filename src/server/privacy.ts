@@ -189,6 +189,16 @@ export async function guestSummary(db: PrismaClient, token: string): Promise<Gue
 export async function guestExport(db: PrismaClient, token: string, now: Date) {
   const rsvp = await findByManageToken(db, token);
   if (!rsvp || !exportAllowed(rsvp.event.endAt, now)) return null;
+  return buildGuestExport(db, rsvp, now);
+}
+
+/** The same document for an organiser (EVENT_MANAGE), by RSVP id: no token, no 180-day window. Null = no such guest in that event. */
+export async function guestExportById(db: PrismaClient, eventId: string, rsvpId: string, now: Date) {
+  const rsvp = await db.rsvp.findFirst({where: {id: rsvpId, eventId}, select: rsvpSelect});
+  return rsvp ? buildGuestExport(db, rsvp, now) : null;
+}
+
+async function buildGuestExport(db: PrismaClient, rsvp: FoundRsvp, now: Date) {
   const [answers, orders, votes, deliveries] = await Promise.all([
     db.rsvpAnswer.findMany({where: {rsvpId: rsvp.id}, select: {questionId: true, value: true, question: {select: {label: true}}}, take: 500}),
     db.ticketOrder.findMany({where: {rsvpId: rsvp.id}, select: {amountCents: true, currency: true, seats: true, status: true, createdAt: true}, take: 100}),

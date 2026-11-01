@@ -67,3 +67,4 @@
 .ds-space span { min-width: 4.5rem; }
 .ds-motion { display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 1.5rem; font-size: var(--fs-body-sm); margin: 0; }
 .ds-motion dt { font-weight: 700; } .ds-motion dd { margin: 0; color: var(--muted); }
+.ds-aspect-demo { width: 16rem; }

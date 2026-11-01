@@ -7,6 +7,7 @@ import {can, forbidden, problem, requireAuth, requirePermission, withDb, withVie
 import type {Viewer} from '../../platform/types';
 import {PERMISSIONS} from '../permissions';
 import {checkedInPayload, emitWebhook} from '../webhook-emit';
+import {escapeLike} from '../like';
 
 /**
  * Door check-in and online attendance (ported from CreatorCrowdHub, US-27 / US-28).
@@ -165,9 +166,9 @@ export const adminCheckinRoutes = new Hono()
     const manager = await can(c as never, PERMISSIONS.EVENT_MANAGE);
     const search: Prisma.RsvpWhereInput[] = q
       ? [
-          {name: {contains: q, mode: 'insensitive' as const}},
-          {ticketCode: {contains: q.toUpperCase()}},
-          ...(manager ? [{email: {contains: q, mode: 'insensitive' as const}}] : []),
+          {name: {contains: escapeLike(q), mode: 'insensitive' as const}},
+          {ticketCode: {contains: escapeLike(q.toUpperCase())}},
+          ...(manager ? [{email: {contains: escapeLike(q), mode: 'insensitive' as const}}] : []),
         ]
       : [];
     const [rows, counts] = await Promise.all([

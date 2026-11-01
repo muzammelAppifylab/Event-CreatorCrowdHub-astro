@@ -84,6 +84,12 @@ beforeEach(() => {
         return {brandColor: '#aabbcc', fontPreset: 'inter', defaultTimezone: 'UTC', senderName: 'Me', replyToEmail: 'a@b.co', defaultReminderRules: [], allowMaybeDefault: true, showGuestListDefault: false, defaultCoverPoster: null, updatedAt: new Date('2026-10-03T00:00:00Z')};
       }),
     },
+    reminderRule: {findMany: vi.fn(async () => [])},
+    poll: {
+      findMany: vi.fn(async () => [
+        {question: 'Best slot?', type: 'single', anonymous: true, showResultsToVoters: true, sortOrder: 0, pollOptions: [{label: 'Morning', sortOrder: 0}, {label: 'Evening', sortOrder: 1}]},
+      ]),
+    },
     rsvpQuestion: {findMany: vi.fn(async () => []), deleteMany: vi.fn(), updateMany: vi.fn(), create: vi.fn()},
     rsvp: {groupBy: vi.fn(async () => []), count: vi.fn(async () => 0)},
     ticketType: {
@@ -93,6 +99,7 @@ beforeEach(() => {
         calls.ticket.push(args.data);
         return {...args.data, salesEndAt: null};
       }),
+      aggregate: vi.fn(async () => ({_max: {sortOrder: 4}})),
       update: vi.fn(),
       deleteMany: vi.fn(),
     },
@@ -209,6 +216,20 @@ describe('/:id', () => {
   });
 });
 
+describe('duplicate copies polls', () => {
+  it('creates the polls as drafts with their options', async () => {
+    // First lookup is the source event; every slug probe after it is free.
+    const find = (state.db.event as {findFirst: ReturnType<typeof vi.fn>}).findFirst;
+    find.mockResolvedValueOnce(stored).mockResolvedValue(null);
+    const res = await json(`/admin-events/${ID}/duplicate`, 'POST', {startAt: '2026-12-01T10:00:00Z', endAt: '2026-12-01T12:00:00Z'});
+    expect(res.status).toBe(201);
+    const data = calls.event.find(d => 'polls' in d) as {polls: {create: {status: string; question: string; pollOptions: {create: {label: string}[]}}[]}};
+    expect(data.polls.create).toHaveLength(1);
+    expect(data.polls.create[0]!.status).toBe('draft');
+    expect(data.polls.create[0]!.pollOptions.create.map(o => o.label)).toEqual(['Morning', 'Evening']);
+  });
+});
+
 describe('ticket types', () => {
   it('validates the ticket and its price against the event', async () => {
     const bad = await json(`/admin-events/${ID}/ticket-types`, 'POST', {name: '', priceCents: -1});
@@ -221,7 +242,7 @@ describe('ticket types', () => {
   it('creates a ticket scoped to the event, column by column', async () => {
     const res = await json(`/admin-events/${ID}/ticket-types`, 'POST', {name: 'GA', priceCents: 0, eventId: 'other', id: 'x'});
     expect(res.status).toBe(201);
-    expect(calls.ticket[0]).toMatchObject({eventId: ID, name: 'GA', priceCents: 0, currency: 'USD'});
+    expect(calls.ticket[0]).toMatchObject({eventId: ID, name: 'GA', priceCents: 0, currency: 'USD', sortOrder: 5});
     expect(calls.ticket[0]!.id).not.toBe('x');
   });
 

@@ -5,6 +5,7 @@ import {firstJobsQuery, firstUsersQuery, healthQuery, siteQuery, twoFactorQuery}
 import {formatInZone} from '../../domain/time';
 import {type OverviewData, overviewQuery} from '../overview-queries';
 import {ago, useMe, when} from '../shared';
+import {RefundsCard} from './refunds-card';
 import {Badge, buttonClass, Card, type Column, DataTable, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
 
 /**
@@ -144,6 +145,7 @@ export function Overview() {
       )}
 
       {checklist}
+      {abilities?.manageEvents && <RefundsCard />}
 
       {events.error && <ErrorNote error={events.error} />}
       {events.isPending && events.fetchStatus !== 'idle' && <LoadingBlock rows={2} />}

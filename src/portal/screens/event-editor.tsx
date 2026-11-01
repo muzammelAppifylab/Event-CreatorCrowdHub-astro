@@ -2,6 +2,9 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {useParams} from '@tanstack/react-router';
 import {useRef, useState} from 'react';
 
+import {useUnsavedGuard} from '../use-unsaved-guard';
+import {EventPreview} from './event-editor-preview';
+
 import {formatInZone} from '../../domain/time';
 import {
   type AdminEventDetail,
@@ -28,6 +31,8 @@ import {
   toLocalInput,
 } from '../../lib/event-schemas';
 import {api, ApiError, read} from '../api';
+import {siteFetch} from '../../platform/browser';
+import {MoveButtons, moved} from './move-buttons';
 import {eventQuery, eventSettingsQuery, eventTicketsQuery, fieldAria, focusFirstInvalid, useEventsNav} from '../events-queries';
 import {
   Badge,
@@ -278,6 +283,9 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
   const refresh = () => queryClient.invalidateQueries({queryKey: ['events']});
   const v = form.values;
   const isNew = event === null;
+  const [view, setView] = useState<'edit' | 'preview'>('edit');
+  const dirty = JSON.stringify(v) !== JSON.stringify(initial) || JSON.stringify(questions) !== JSON.stringify(drafts);
+  const guard = useUnsavedGuard(dirty);
 
   /** Field errors by name; `questions.N.x` ones show under that question. */
   const showErrors = (fields: FieldErrors) => {
@@ -300,6 +308,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
         : read<{event: AdminEventDetail}>(api['admin-events'][':id'].$patch({param: {id}, json: body as never})),
     onSuccess: async ({event: saved}) => {
       toast.success(isNew ? 'Draft created.' : 'Changes saved.');
+      guard.allowNext();
       await refresh();
       if (isNew) nav(`/events/${saved.id}`);
     },
@@ -343,7 +352,15 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
   );
 
   return (
-    <div className="app-page screen-event-editor">
+    <div className="app-page screen-event-editor" data-view={view}>
+      <div className="editor-viewtoggle" role="group" aria-label="Form or preview">
+        <Button variant={view === 'edit' ? 'primary' : 'secondary'} size="sm" aria-pressed={view === 'edit'} onClick={() => setView('edit')}>
+          Form
+        </Button>
+        <Button variant={view === 'preview' ? 'primary' : 'secondary'} size="sm" aria-pressed={view === 'preview'} onClick={() => setView('preview')}>
+          Preview
+        </Button>
+      </div>
       <form ref={formRef} noValidate onSubmit={submit}>
         <PageHeader
           title={isNew ? 'New event' : 'Edit event'}
@@ -567,6 +584,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                       )}
                       <div className="toolbar">
                         <Checkbox label="Required" checked={q.required} onChange={required => setQuestion(i, {required})} />
+                        <MoveButtons what={`question ${i + 1}`} index={i} count={questions.length} onMove={to => setQuestions(current => moved(current, i, to))} />
                         <IconButton icon="trash" label={`Remove question ${i + 1}`} size="sm" onClick={() => setQuestions(current => current.filter((_, at) => at !== i))} />
                       </div>
                     </div>
@@ -595,6 +613,9 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
           <p className="muted">{event ? 'Prepare questions before the event, then open them one at a time from the event hub while you present.' : 'Save the event first, then prepare its polls here. You open them live from the event hub.'}</p>
         </Card>
       </div>
+      <aside className="editor-preview" aria-label="Live preview">
+        <EventPreview values={v} eventId={event?.id ?? null} />
+      </aside>
     </div>
   );
 }
@@ -615,7 +636,31 @@ function Tickets({event}: {event: AdminEventDetail}) {
     mutationFn: (t: AdminTicketType) => read(api['admin-events'][':id']['ticket-types'][':ticketId'].$delete({param: {id: event.id, ticketId: t.id}})),
     onSuccess: refresh,
   });
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => read(siteFetch(`/site-api/admin-events/${encodeURIComponent(event.id)}/ticket-types/order`, {method: 'PATCH', headers: {'content-type': 'application/json', accept: 'application/json'}, body: JSON.stringify({ids})})),
+    onMutate: async ids => {
+      await queryClient.cancelQueries({queryKey: eventTicketsQuery(event.id).queryKey});
+      const previous = queryClient.getQueryData(eventTicketsQuery(event.id).queryKey);
+      queryClient.setQueryData(eventTicketsQuery(event.id).queryKey, current => current && {...current, ticketTypes: ids.flatMap(id => current.ticketTypes.filter(t => t.id === id))});
+      return {previous};
+    },
+    onError: (_err, _ids, context) => {
+      if (context?.previous) queryClient.setQueryData(eventTicketsQuery(event.id).queryKey, context.previous);
+      toast.danger('Could not save the new order.');
+    },
+    onSettled: () => queryClient.invalidateQueries({queryKey: eventTicketsQuery(event.id).queryKey}),
+  });
+  const rows = tickets.data?.ticketTypes;
   const columns: Column<AdminTicketType>[] = [
+    {
+      key: 'order',
+      header: 'Order',
+      width: 'shrink',
+      cell: t => {
+        const at = rows?.findIndex(r => r.id === t.id) ?? 0;
+        return <MoveButtons what={`ticket ${t.name}`} index={at} count={rows?.length ?? 0} pending={reorder.isPending} onMove={to => rows && reorder.mutate(moved(rows, at, to).map(r => r.id))} />;
+      },
+    },
     {key: 'name', header: 'Ticket', cell: t => <span className="cell-title">{t.name}</span>},
     {key: 'price', header: 'Price', width: 'shrink', cell: t => (t.priceCents === 0 ? 'Free' : money(t.priceCents, t.currency))},
     {key: 'qty', header: 'Sold', width: 'shrink', hideOnMobile: true, cell: t => `${t.sold}${t.quantity ? ` / ${t.quantity}` : ''}`},

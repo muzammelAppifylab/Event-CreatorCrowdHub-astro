@@ -1,5 +1,6 @@
 import {useState} from 'react';
 
+import {Extras} from './design-system/extras';
 import {Foundations} from './design-system/foundations';
 
 import {
@@ -58,7 +59,7 @@ const STATUS_TONES = {active: 'success', trial: 'info', overdue: 'warning'} as c
 export function Components() {
   const toast = useToast();
   const confirm = useConfirm();
-  const [tab, setTab] = useState<'buttons' | 'forms' | 'data' | 'feedback' | 'foundations'>('buttons');
+  const [tab, setTab] = useState<'buttons' | 'forms' | 'data' | 'feedback' | 'foundations' | 'extras'>('buttons');
 
   return (
     <div className="app-page">
@@ -83,12 +84,14 @@ export function Components() {
           {value: 'data', label: 'Data'},
           {value: 'feedback', label: 'States'},
           {value: 'foundations', label: 'Foundations'},
+          {value: 'extras', label: 'Extras'},
         ]}>
         {tab === 'buttons' && <ButtonsDemo onToast={toast.success} confirm={confirm} />}
         {tab === 'forms' && <FormsDemo onSaved={() => toast.success('Saved.')} />}
         {tab === 'data' && <DataDemo />}
         {tab === 'feedback' && <FeedbackDemo />}
         {tab === 'foundations' && <Foundations />}
+        {tab === 'extras' && <Extras />}
       </Tabs>
     </div>
   );

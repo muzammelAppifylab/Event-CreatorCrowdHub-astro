@@ -8,6 +8,7 @@ import {HUB_TABS, type HubTabId, type TabProps, tabLoader} from '../event-tabs';
 import {hubEventQuery} from '../overview-queries';
 import {type AdminEventDetail} from '../../lib/event-schemas';
 import {HubActions, PublishProblems} from './event-hub-actions';
+import {RefundsCard} from './refunds-card';
 import {Badge, Button, buttonClass, Card, DefinitionList, EmptyState, ErrorNote, Icon, LoadingBlock, Notice, PageHeader, Stat, Tabs, useToast} from '../ui';
 
 const STATUS_TONES = {draft: 'neutral', published: 'success', cancelled: 'danger'} as const;
@@ -60,6 +61,7 @@ function HubOverview({eventId}: TabProps) {
         <Stat label="Pending approval" icon="inbox" value={counts ? String(counts.pending) : null} />
         <Stat label="Seats taken" icon="users" value={seats} />
       </div>
+      <RefundsCard eventId={eventId} />
       <Card title="Summary">
         <div className="stat-grid">
           <Stat label="Page views" icon="search" value={a ? String(a.views) : null} />

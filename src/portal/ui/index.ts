@@ -15,3 +15,8 @@ export * from './icon';
 export * from './nav';
 export * from './overlay';
 export * from './table';
+export * from './calendar';
+export * from './command';
+export * from './disclosure';
+export * from './misc';
+export * from './popover';

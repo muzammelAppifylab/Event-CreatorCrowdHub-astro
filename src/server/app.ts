@@ -15,6 +15,7 @@ import {adminInviteRoutes} from './routes/admin-invites';
 import {adminMessageRoutes} from './routes/admin-messages';
 import {adminOverviewRoutes} from './routes/admin-overview';
 import {adminPollRoutes} from './routes/admin-polls';
+import {adminRefundRoutes} from './routes/admin-refunds';
 import {adminWebhookRoutes} from './routes/admin-webhooks';
 import {eventCheckoutRoutes} from './routes/event-checkout';
 import {eventSettingsRoutes} from './routes/event-settings';
@@ -115,6 +116,7 @@ export const app = new Hono()
   .route('/checkin', adminCheckinRoutes)
   .route('/analytics', adminAnalyticsRoutes)
   .route('/polls', adminPollRoutes)
+  .route('/refunds', adminRefundRoutes)
   .route('/webhook-endpoints', adminWebhookRoutes)
   // ... and the guest-facing ones (token in the path / body; all after csrf).
   .route('/rsvp', rsvpRoutes)

@@ -13,3 +13,4 @@ src/generated
 .platform/
 .env
 dev.log
+DEV-LOGIN.local.txt

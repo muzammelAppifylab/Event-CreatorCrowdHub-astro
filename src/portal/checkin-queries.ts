@@ -27,6 +27,8 @@ export type EventAnalyticsData = {
   showRate: Ratio;
   viewsByDay: {date: string; views: number}[];
   sources: {source: string | null; views: number; rsvps: number}[];
+  revenue: {currency: string; amountCents: number; orders: number}[];
+  pollParticipation: Ratio;
 };
 
 /** A Site API call with a JSON body (writes) or none (reads); throws `ApiError` with the server's words. */

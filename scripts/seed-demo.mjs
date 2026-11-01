@@ -337,6 +337,9 @@ const client = new pg.Client({connectionString: url});
 await client.connect();
 try {
   await client.query('BEGIN');
+  // Display order within each parent (sort_order).
+  const number = (list, parent) => { const seen = new Map(); for (const r of list) { const n = seen.get(r[parent]) ?? 0; r.sort_order = n; seen.set(r[parent], n + 1); } };
+  number(rows.ticketTypes, 'event_id'); number(rows.questions, 'event_id'); number(rows.polls, 'event_id'); number(rows.options, 'poll_id');
   // Children cascade from events (rsvps -> answers/orders/deliveries, polls -> options/votes, ...).
   const del = await client.query(`DELETE FROM "events" WHERE "slug" LIKE 'demo-%' AND "id" = ANY($1::uuid[])`, [rows.events.map((e) => e.id)]);
   // A previous run's slugs with different ids (should not happen: ids are derived from the slug).

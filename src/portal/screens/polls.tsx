@@ -3,13 +3,16 @@ import {Link} from '@tanstack/react-router';
 import {useState} from 'react';
 
 import {ApiError} from '../api';
+import {MoveButtons, moved} from './move-buttons';
 import {
   type AdminPoll,
   closePoll,
   createPoll,
   deletePoll,
   eventPollsQuery,
+  exportPollCsv,
   openPoll,
+  reorderPolls,
   POLL_TYPE_LABELS,
   type PollStatus,
   type PollType,
@@ -89,6 +92,22 @@ export function Polls({eventId}: {eventId: string}) {
   });
   const remove = useMutation({mutationFn: (id: string) => deletePoll(id), onSuccess: refresh});
 
+  const reorder = useMutation({
+    mutationFn: (ids: string[]) => reorderPolls(eventId, ids),
+    onMutate: async ids => {
+      const key = eventPollsQuery(eventId).queryKey;
+      await queryClient.cancelQueries({queryKey: key});
+      const previous = queryClient.getQueryData(key);
+      queryClient.setQueryData(key, current => current && {...current, polls: ids.flatMap(id => current.polls.filter(p => p.id === id))});
+      return {previous};
+    },
+    onError: (_err, _ids, context) => {
+      if (context?.previous) queryClient.setQueryData(eventPollsQuery(eventId).queryKey, context.previous);
+      toast.danger('Could not save the new order.');
+    },
+    onSettled: refresh,
+  });
+
   const busyKey = (act.isPending && act.variables?.id) || (remove.isPending && remove.variables) || null;
   const list = polls.data?.polls;
   const event = polls.data?.event;
@@ -114,6 +133,15 @@ export function Polls({eventId}: {eventId: string}) {
     }).then(ok => ok && toast.success('Poll deleted.'));
 
   const columns: Column<AdminPoll>[] = [
+    {
+      key: 'order',
+      header: 'Order',
+      width: 'shrink',
+      cell: p => {
+        const at = list?.findIndex(x => x.id === p.id) ?? 0;
+        return <MoveButtons what={`poll “${p.question}”`} index={at} count={list?.length ?? 0} pending={reorder.isPending} onMove={to => list && reorder.mutate(moved(list, at, to).map(x => x.id))} />;
+      },
+    },
     {
       key: 'question',
       header: 'Question',
@@ -147,7 +175,7 @@ export function Polls({eventId}: {eventId: string}) {
                     'separator' as const,
                     {label: 'Delete', icon: 'trash' as const, danger: true, onSelect: () => askDelete(p)},
                   ]
-                : []),
+                : [{label: 'Export CSV', icon: 'file' as const, onSelect: () => void exportPollCsv(p.id, toast)}]),
             ]}
           />
         ),
@@ -275,6 +303,7 @@ export function Polls({eventId}: {eventId: string}) {
                       setOptions(o => o.map((x, j) => (j === i ? e.target.value : x)));
                     }}
                   />
+                  <MoveButtons what={`option ${i + 1}`} index={i} count={options.length} onMove={to => setOptions(o => moved(o, i, to))} />
                   <IconButton
                     icon="x"
                     label={`Remove option ${i + 1}`}

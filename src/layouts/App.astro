@@ -12,8 +12,10 @@ import '../styles/global.css';
 import '../styles/app.css';
 import '../styles/events.css';
 import '../styles/screens.css';
+import '../styles/kit-extra.css';
 
 import type {Site, Viewer} from '../lib/types';
+import {backend, read} from '../server/backend';
 
 interface Props {
   site: Site | null;
@@ -24,14 +26,20 @@ interface Props {
 
 const {site, viewer, title} = Astro.props;
 const name = site?.name ?? 'My site';
+// The workspace brand, once per load, for signed-in screens (the source's useApplyWorkspaceBrand).
+const brand = viewer.state === 'user' ? await read<{brandColor: string | null; fontPreset: string}>(backend(Astro.request)['event-settings'].brand.$get()) : null;
+const brandColor = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : undefined;
+const fontPreset = brand?.fontPreset === 'serif' || brand?.fontPreset === 'rounded' ? brand.fontPreset : undefined;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="en" data-brand={brandColor} data-font-preset={fontPreset}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{`${title} · ${name}`}</title>
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <!-- Signed-in screens are never search results. -->
     <meta name="robots" content="noindex" />
     {site?.favIcon ? <link rel="icon" href={site.favIcon} /> : <link rel="icon" href="/favicon.svg" type="image/svg+xml" />}
@@ -41,6 +49,9 @@ const name = site?.name ?? 'My site';
 
     <script>
       import {refreshSession} from '../platform/browser';
+      import {applyPageBrand} from '../lib/event-brand';
+
+      applyPageBrand();
 
       // The theme picked in the dashboard's top bar (src/portal/routes.tsx `useTheme`), before the app draws.
       try {

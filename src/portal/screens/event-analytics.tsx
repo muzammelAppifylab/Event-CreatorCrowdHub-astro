@@ -8,6 +8,18 @@ const dayLabel = (iso: string) => new Intl.DateTimeFormat('en-GB', {day: 'numeri
 
 type SourceRow = {source: string | null; views: number; rsvps: number};
 
+type Revenue = {currency: string; amountCents: number; orders: number};
+function money(r: Revenue): string {
+  try {
+    return new Intl.NumberFormat('en-GB', {style: 'currency', currency: r.currency}).format(r.amountCents / 100);
+  } catch {
+    return `${(r.amountCents / 100).toFixed(2)} ${r.currency}`;
+  }
+}
+/** Paid orders (refunds excluded); further currencies are listed, never added together. */
+const revenueHint = (rows: Revenue[]) =>
+  rows.length === 0 ? 'No paid tickets yet' : [`${rows.reduce((n, r) => n + r.orders, 0)} paid orders`, ...rows.slice(1).map(money)].join(' · ');
+
 /**
  * Analytics for one event: KPIs, page views over time, views and RSVPs by utm source.
  * A building block (not a route): the event hub embeds `<EventAnalytics eventId={id} />`.
@@ -36,6 +48,18 @@ export function EventAnalytics({eventId}: {eventId: string}) {
         <Stat label="RSVPs" value={data ? data.rsvps.total : null} icon="users" hint={data ? `${data.rsvps.going} going` : undefined} />
         <Stat label="Conversion" value={data ? percent(data.conversion) : null} icon="trending-up" hint={data?.conversion.reason ?? 'RSVPs per page view'} />
         <Stat label="Show rate" value={data ? percent(data.showRate) : null} icon="check-circle" hint={data?.showRate.reason ?? 'Checked in or attended, of going'} />
+        <Stat
+          label="Revenue"
+          value={data ? (data.revenue.length === 0 ? '—' : money(data.revenue[0]!)) : null}
+          icon="trending-up"
+          hint={data ? revenueHint(data.revenue) : undefined}
+        />
+        <Stat
+          label="Poll participation"
+          value={data ? percent(data.pollParticipation) : null}
+          icon="zap"
+          hint={data?.pollParticipation.reason ?? `${data?.pollParticipation.numerator ?? 0} answers from ${data?.pollParticipation.denominator ?? 0} confirmed guests`}
+        />
       </div>
 
       <Card title="Page views" description={data ? `${days.length} day${days.length === 1 ? '' : 's'}` : undefined}>

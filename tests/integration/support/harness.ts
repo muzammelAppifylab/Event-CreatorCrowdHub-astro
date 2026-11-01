@@ -237,6 +237,8 @@ export class Browser {
 export async function signedIn(app: App, email: string, password = 'a long test passphrase', ip?: string) {
   const browser = new Browser(app, ip);
   const reg = await browser.post('/site-api/auth/register', {email, name: email.split('@')[0], password});
+  // requireEmailVerification off: register (201) already signed the user in.
+  if (reg.status === 201) return browser;
   if (reg.status !== 202) throw new Error(`register ${reg.status} ${JSON.stringify(reg.json)}`);
   const verify = await browser.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', email)});
   if (verify.status !== 200) throw new Error(`verify ${verify.status}`);

@@ -297,7 +297,12 @@
   --shadow-lg: var(--elev-3);
   --overlay: color-mix(in oklab, var(--ink-1000) 50%, transparent);
 
+  --radius-xs: var(--r-xs);
   --radius-sm: var(--r-sm);
+  --radius-md: 10px;
+  --radius-2xl: var(--r-xl);
+  --radius-3xl: 32px;
+  --radius-4xl: var(--r-2xl);
   --radius: var(--r-md);
   --radius-lg: var(--r-lg);
   --radius-xl: var(--r-xl);
@@ -305,5 +310,9 @@
 
   --font-sans: var(--type-ui);
   --font-display: var(--type-display);
+  --font-heading: var(--type-display);
+  --font-poster: var(--type-poster);
+  --font-serif: var(--font-family-serif);
+  --font-rounded: var(--font-family-rounded);
   --font-mono: var(--type-code);
 }

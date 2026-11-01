@@ -3,7 +3,8 @@ import {useParams} from '@tanstack/react-router';
 import {useCallback, useEffect} from 'react';
 
 import {nextPollToOpen} from '../../domain/polls';
-import {type AdminPoll, closePoll, openPoll, presenterPollsQuery} from '../polls-queries';
+import {type AdminPoll, closePoll, exportPollCsv, openPoll, presenterPollsQuery} from '../polls-queries';
+import {QrCode} from '../qr';
 import {BarChart, Button, EmptyState, ErrorNote, LoadingBlock, StatusBadge, Stat, useToast} from '../ui';
 
 /** The poll on screen: the open one, else the last opened (its final results), else the first. */
@@ -129,6 +130,7 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
         <aside aria-label="How to join" className="poll-present-join">
           <span className="muted">Join at {window.location.host}</span>
           <strong className="poll-present-code">{event.pollJoinCode}</strong>
+          <QrCode value={`${window.location.origin}/p/${event.pollJoinCode}`} label="QR code to join the poll" size={192} />
           <span className="muted poll-present-url">{voteUrl}</span>
         </aside>
       </div>
@@ -141,6 +143,9 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
         </Button>
         <Button variant="secondary" onClick={closeOpen} disabled={busy || !polls.some(p => p.status === 'open')}>
           <kbd>C</kbd> Close
+        </Button>
+        <Button variant="ghost" onClick={() => shown && void exportPollCsv(shown.id, toast)} disabled={!shown || shown.status === 'draft'}>
+          Export CSV
         </Button>
         <Button variant="ghost" onClick={fullscreen}>
           <kbd>F</kbd> Full screen

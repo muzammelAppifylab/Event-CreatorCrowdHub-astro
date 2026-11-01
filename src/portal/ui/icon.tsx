@@ -137,6 +137,7 @@ const ICONS = {
     </>
   ),
   'chevron-down': <path d="m6 9 6 6 6-6" />,
+  'chevron-up': <path d="m18 15-6-6-6 6" />,
   'chevron-right': <path d="m9 18 6-6-6-6" />,
   'chevrons-up-down': (
     <>
@@ -301,7 +302,7 @@ export const ICON_NAMES = Object.keys(ICONS) as IconName[];
  * next to it says what it means. An icon that is the ONLY content of a
  * control goes in `IconButton`, which takes the `label`.
  */
-export function Icon({name, size = 18, className}: {name: IconName; size?: 14 | 16 | 18 | 20 | 24 | 32; className?: string}) {
+export function Icon({name, size = 18, className}: {name: IconName; size?: 12 | 14 | 16 | 18 | 20 | 24 | 32; className?: string}) {
   return (
     <svg
       className={className ? `icon ${className}` : 'icon'}

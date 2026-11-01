@@ -28,7 +28,7 @@ const color = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? 
 const name = site?.name ?? 'Our events';
 ---
 
-<Base site={site} viewer={viewer} guest title={guestCopy.hostPage.title(name)} description={`Upcoming events hosted by ${name}. RSVP in a minute.`}>
+<Base site={site} viewer={viewer} guest brand={brand} title={guestCopy.hostPage.title(name)} description={`Upcoming events hosted by ${name}. RSVP in a minute.`}>
   <main id="main" tabindex="-1" class="g-main" data-brand={color ?? undefined} data-font={brand?.fontPreset}>
     <div class="page-container g-host-page">
       <header class="g-host-head">
@@ -72,15 +72,3 @@ const name = site?.name ?? 'Our events';
   </main>
 </Base>
 
-<script>
-  // Brand colour via the CSSOM (the CSP blocks style attributes). The source writes --brand on <html>;
-  // theme.css derives --primary from it.
-  document.addEventListener('astro:page-load', () => {
-    const main = document.querySelector<HTMLElement>('main[data-brand]');
-    const color = main?.dataset.brand;
-    if (!main || !color || !/^#[0-9a-fA-F]{6}$/.test(color)) return;
-    main.style.setProperty('--brand', color);
-    main.style.setProperty('--accent', color);
-    main.style.setProperty('--accent-hover', color);
-  });
-</script>

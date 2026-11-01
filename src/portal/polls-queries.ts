@@ -2,6 +2,7 @@ import {queryOptions} from '@tanstack/react-query';
 
 import {siteFetch} from '../platform/browser';
 import {read} from './api';
+import {downloadExport} from './guests-queries';
 
 /**
  * Live polls: reads and writes for the dashboard screens (`screens/polls.tsx`, `screens/poll-presenter.tsx`).
@@ -69,6 +70,8 @@ export const createPoll = (eventId: string, input: PollInput) =>
   read<{poll: AdminPoll}>(siteFetch(`/site-api/polls/event/${encodeURIComponent(eventId)}`, json('POST', input)));
 export const updatePoll = (pollId: string, input: PollInput) =>
   read<{poll: AdminPoll}>(siteFetch(`/site-api/polls/${encodeURIComponent(pollId)}`, json('PATCH', input)));
+export const reorderPolls = (eventId: string, ids: string[]) =>
+  read<{ok: true}>(siteFetch(`/site-api/polls/event/${encodeURIComponent(eventId)}/order`, json('PATCH', {ids})));
 export const deletePoll = (pollId: string) => read<{ok: true}>(siteFetch(`/site-api/polls/${encodeURIComponent(pollId)}`, json('DELETE')));
 export const openPoll = (pollId: string) => read<{ok: true}>(siteFetch(`/site-api/polls/${encodeURIComponent(pollId)}/open`, json('POST')));
 export const closePoll = (pollId: string) => read<{ok: true}>(siteFetch(`/site-api/polls/${encodeURIComponent(pollId)}/close`, json('POST')));
@@ -79,3 +82,15 @@ export const POLL_TYPE_LABELS: Record<PollType, {label: string; description: str
   rating: {label: 'Rating', description: 'Guests rate from 1 to 5.'},
   short_text: {label: 'Short answer', description: 'One answer of up to 140 characters.'},
 };
+
+export const pollResultsCsvUrl = (pollId: string) => `/site-api/polls/${encodeURIComponent(pollId)}/results.csv`;
+
+/** Downloads a poll's votes as CSV; toasts the outcome (`downloadExport` carries the session through `siteFetch`). */
+export async function exportPollCsv(pollId: string, toast: {success: (m: string) => void; danger: (m: string) => void}): Promise<void> {
+  try {
+    const {truncated} = await downloadExport(pollResultsCsvUrl(pollId), 'poll-votes.csv');
+    toast.success(truncated ? 'Exported the first 10,000 votes.' : 'Votes exported.');
+  } catch (err) {
+    toast.danger(err instanceof Error ? err.message : 'The export failed.');
+  }
+}

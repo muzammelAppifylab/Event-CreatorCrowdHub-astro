@@ -56,8 +56,29 @@ export const eventRoutes = new Hono()
     });
     const page = rows.slice(0, PAGE_SIZE);
     const last = page.at(-1);
+    // Cheapest ticket per event for the cards' price chip (one bounded, explicit-select query).
+    const tickets = page.length
+      ? await c.var.db.ticketType.findMany({
+          where: {eventId: {in: page.map(e => e.id)}},
+          select: {eventId: true, priceCents: true, currency: true},
+          take: PAGE_SIZE * 20,
+        })
+      : [];
+    const cheapest = new Map<string, {amountCents: number; currency: string}>();
+    const paid = new Set<string>();
+    for (const t of tickets) {
+      if (t.priceCents > 0) paid.add(t.eventId);
+      const best = cheapest.get(t.eventId);
+      if (!best || t.priceCents < best.amountCents) cheapest.set(t.eventId, {amountCents: t.priceCents, currency: t.currency});
+    }
     return c.json({
-      events: page.map(e => ({...e, startAt: e.startAt.toISOString(), endAt: e.endAt.toISOString()})),
+      events: page.map(e => ({
+        ...e,
+        startAt: e.startAt.toISOString(),
+        endAt: e.endAt.toISOString(),
+        fromPrice: cheapest.get(e.id) ?? null,
+        free: !paid.has(e.id),
+      })),
       next: rows.length > PAGE_SIZE && last ? `${last.startAt.toISOString()}_${last.id}` : null,
     });
   })

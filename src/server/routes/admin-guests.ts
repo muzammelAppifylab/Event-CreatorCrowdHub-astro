@@ -11,8 +11,10 @@ import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {attachmentHeader, type CsvValue, toCsv} from '../csv';
 import {eventMailSelect, type GuestNotice, type MailEvent, notifyGuests, publicBase} from '../guest-mail';
+import {exportFilename, guestExportById} from '../privacy';
 import {PERMISSIONS} from '../permissions';
 import {isUuid, normalizeEmail} from './admin-invites';
+import {escapeLike} from '../like';
 
 /**
  * Guest management for event organisers (`site:event:manage`). Mounted by the
@@ -97,8 +99,8 @@ export function guestWhere(eventId: string, filter: GuestFilter): Prisma.RsvpWhe
   if (filter.checkedIn !== undefined) where.checkedInAt = filter.checkedIn ? {not: null} : null;
   if (filter.q) {
     where.OR = [
-      {name: {contains: filter.q, mode: 'insensitive'}},
-      {email: {contains: filter.q, mode: 'insensitive'}},
+      {name: {contains: escapeLike(filter.q), mode: 'insensitive'}},
+      {email: {contains: escapeLike(filter.q), mode: 'insensitive'}},
       {ticketCode: filter.q.toUpperCase()},
     ];
   }
@@ -168,11 +170,11 @@ function chunks<T>(items: T[], size: number): T[][] {
 async function enrich(db: PrismaClient, eventId: string, rows: RsvpRow[]) {
   const ids = rows.map(r => r.id);
   const [questions, types] = await Promise.all([
-    db.rsvpQuestion.findMany({where: {eventId}, select: {id: true, label: true, type: true}, orderBy: {id: 'asc'}, take: 50}),
+    db.rsvpQuestion.findMany({where: {eventId}, select: {id: true, label: true, type: true}, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}], take: 50}),
     db.ticketType.findMany({
       where: {eventId},
       select: {id: true, name: true, priceCents: true, currency: true},
-      orderBy: {id: 'asc'},
+      orderBy: [{sortOrder: 'asc'}, {id: 'asc'}],
       take: 50,
     }),
   ]);
@@ -679,6 +681,25 @@ export const adminGuestRoutes = new Hono()
     if (!event || !isUuid(rsvpId)) return c.json(notFound('Guest'), 404);
     const row = await db.rsvp.findFirst({where: {id: rsvpId, eventId: event.id}, select: rowSelect});
     return row ? c.json(await detailOf(db, event.id, row)) : c.json(notFound('Guest'), 404);
+  })
+
+  // Everything we hold about one guest (the guest's own export document), for the organiser. Audited.
+  .get('/events/:eventId/guests/:rsvpId/data', ...guard, async c => {
+    const {db} = c.var;
+    const event = await loadEvent(db, c.req.param('eventId'));
+    const rsvpId = c.req.param('rsvpId');
+    if (!event || !isUuid(rsvpId)) return c.json(notFound('Guest'), 404);
+    const now = new Date();
+    const doc = await guestExportById(db, event.id, rsvpId, now);
+    if (!doc) return c.json(notFound('Guest'), 404);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'guest_data_exported', target: ['event', event.id], meta: {rsvpId}});
+    return new Response(JSON.stringify(doc, null, 2), {
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': attachmentHeader(exportFilename(event.slug, now)),
+        'Cache-Control': 'no-store',
+      },
+    });
   })
 
   .patch('/events/:eventId/guests/:rsvpId', patchBody, ...guard, async c => {

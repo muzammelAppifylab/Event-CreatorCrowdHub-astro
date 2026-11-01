@@ -337,6 +337,9 @@ export function summarizeBulk(result: BulkResult): {ok: boolean; message: string
   return {ok: result.succeeded.length > 0, message: `${done} ${result.failed.length} skipped: ${why}.`};
 }
 
+/** One guest's full data (the guest's own export document), an organiser download. */
+export const guestDataUrl = (eventId: string, rsvpId: string) => `${ADMIN}/events/${eventId}/guests/${rsvpId}/data`;
+
 export const answerText = (value: AnswerValue | undefined): string =>
   value === undefined ? '' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : Array.isArray(value) ? value.join(', ') : value;
 

@@ -163,8 +163,8 @@ const eventSelect = {
   allowMaybe: true,
   maxPlusOnes: true,
   thankYouLink: true,
-  rsvpQuestions: {select: {id: true, label: true, type: true, options: true, required: true}},
-  ticketTypes: {select: {id: true, name: true, priceCents: true, currency: true, quantity: true, salesEndAt: true}},
+  rsvpQuestions: {select: {id: true, label: true, type: true, options: true, required: true}, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]},
+  ticketTypes: {select: {id: true, name: true, priceCents: true, currency: true, quantity: true, salesEndAt: true}, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]},
 } satisfies Prisma.EventSelect;
 
 type EventRow = Prisma.EventGetPayload<{select: typeof eventSelect}>;

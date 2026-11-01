@@ -44,7 +44,7 @@ const cancelledEvent = guest?.event.status === 'cancelled';
 const active = !!guest && guest.rsvp.status !== 'cancelled' && guest.rsvp.status !== 'declined' && !cancelledEvent;
 const joinUrl = confirmed && guest && guest.event.format !== 'in_person' ? guest.event.joinUrl : null;
 const showTicket = confirmed && !!guest?.rsvp.ticketCode && guest.event.format !== 'online';
-const qr = guest && showTicket ? renderSVG(guest.rsvp.ticketCode ?? '', {border: 1}) : '';
+const qr = guest && showTicket ? renderSVG(`${Astro.url.origin}/dashboard/checkin/code/${encodeURIComponent(guest.rsvp.ticketCode ?? '')}`, {border: 1}) : '';
 const inPerson = guest ? guest.event.format !== 'online' : false;
 const place = guest
   ? guest.event.format === 'online'

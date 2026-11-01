@@ -70,6 +70,8 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
   data-invite={inviteToken ?? ''}
   data-max-plus={String(view.maxPlusOnes)}
   data-any-paid={anyPaid ? '1' : ''}
+  data-approval={view.approvalRequired ? '1' : ''}
+  data-waitlist={full && view.waitlistEnabled ? '1' : ''}
   data-questions={JSON.stringify(questionMeta)}
 >
   <fieldset class="g-fieldset g-response">
@@ -103,7 +105,6 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
       inputmode="email"
       autocapitalize="none"
       spellcheck="false"
-      placeholder="name@example.com"
       value={values.email ?? ''}
       readonly={editing}
       aria-required="true"
@@ -177,7 +178,7 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
             <input id={qid} name={`q_${q.id}`} maxlength="200" value={typeof value === 'string' ? value : ''} />
           ) : (
             <>
-              <select id={qid} name={`q_${q.id}`} multiple={q.type === 'multi_choice'}>
+              <select id={qid} name={`q_${q.id}`} {...(q.type === 'multi_choice' ? {multiple: true} : {})}>
                 {q.type === 'single_choice' && <option value="">Choose one</option>}
                 {q.options.map(o => (
                   <option value={o} selected={Array.isArray(value) ? value.includes(o) : value === o}>
@@ -214,11 +215,59 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
 
 <script>
   import {bindForm, type SubmitResult} from '../../lib/form';
-  import {replaceWithMessage} from '../../lib/account';
   import {type Rule, rules} from '../../lib/rules';
   import {siteFetch} from '../../platform/browser';
 
   type Meta = {id: string; type: string; required: boolean};
+
+  /** Swaps the form for the confirmation panel: the API answers 202 `check_email` for every email. */
+  function showCheckEmail(form: HTMLFormElement, fallback: string) {
+    const email = (form.elements.namedItem('email') as HTMLInputElement | null)?.value.trim() ?? '';
+    const waitlist = !!form.dataset.waitlist;
+    const approval = !!form.dataset.approval;
+    const paid = !!form.dataset.anyPaid;
+    const panel = document.createElement('div');
+    panel.className = 'g-confirm';
+    panel.setAttribute('role', 'status');
+    panel.tabIndex = -1;
+    const add = (tag: string, className: string) => {
+      const el = document.createElement(tag);
+      el.className = className;
+      panel.append(el);
+      return el;
+    };
+    add('h3', 'g-confirm-title').textContent = 'Check your email';
+    const lead = add('p', 'g-confirm-body');
+    if (email) {
+      const strong = document.createElement('strong');
+      strong.textContent = email;
+      lead.append('We sent a link to ', strong, ' to view or change your RSVP.');
+    } else lead.textContent = fallback;
+    const steps = add('ul', 'g-confirm-steps');
+    const items = [
+      approval
+        ? `The host reviews every request. We'll email ${email || 'you'} as soon as they decide.`
+        : waitlist
+          ? paid
+            ? "If a seat opens up, we'll email you a link to claim it. You'll have 24 hours to pay."
+            : "If a seat opens up, you'll get it automatically and we'll email you."
+          : 'Open the link in that email to see your RSVP, add it to your calendar or change your reply.',
+      'Nothing there? Check your spam folder.',
+    ];
+    for (const text of items) {
+      const li = document.createElement('li');
+      li.textContent = text;
+      steps.append(li);
+    }
+    const done = document.createElement('button');
+    done.type = 'button';
+    done.className = 'g-btn g-btn-outline g-btn-lg';
+    done.textContent = 'Done';
+    done.addEventListener('click', () => form.closest('dialog')?.close());
+    panel.append(done);
+    form.replaceWith(panel);
+    panel.focus();
+  }
 
   document.addEventListener('astro:page-load', () => {
     for (const form of document.querySelectorAll<HTMLFormElement>('form[data-rsvp-form]')) {
@@ -231,19 +280,19 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
       const declining = () => field('response')?.value === 'not_going';
 
       const ruleSet: Record<string, Rule[]> = {
-        name: [rules.required('Add your name.'), rules.maxLength(120)],
+        name: [rules.required('Add your name'), rules.maxLength(120)],
         // The email is the RSVP's identity: not editable on the manage page.
-        ...(editing ? {} : {email: [rules.required('Add your email.'), rules.email()]}),
+        ...(editing ? {} : {email: [rules.required('Enter a valid email address'), rules.email('Enter a valid email address')]}),
       };
       if (field('plusOnes')) {
         ruleSet.plusOnes = [
           value => (Number(value) > maxPlus ? `You can bring up to ${maxPlus} ${maxPlus === 1 ? 'guest' : 'guests'}.` : null),
         ];
       }
-      if (field('ticketTypeId') && form.dataset.anyPaid) ruleSet.ticketTypeId = [rules.required('Choose a ticket.')];
+      if (field('ticketTypeId') && form.dataset.anyPaid) ruleSet.ticketTypeId = [rules.required('Choose a ticket')];
       for (const q of metas) {
         if (q.required && q.type !== 'checkbox') {
-          ruleSet[`q_${q.id}`] = [value => (declining() ? null : rules.required('This question needs an answer.')(value))];
+          ruleSet[`q_${q.id}`] = [value => (declining() ? null : rules.required('This question needs an answer')(value))];
         }
       }
 
@@ -290,7 +339,10 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
               if (typeof data?.checkoutUrl === 'string' && data.checkoutUrl) return {ok: true, redirect: data.checkoutUrl};
               return {ok: true, redirect: `${location.pathname}?saved=1`};
             }
-            if (data?.status === 'check_email') return {ok: true, message: String(data.message ?? 'Check your inbox.')};
+            if (data?.status === 'check_email') {
+              if (typeof data.checkoutUrl === 'string' && data.checkoutUrl) return {ok: true, redirect: data.checkoutUrl};
+              return {ok: true, message: String(data.message ?? 'Check your email for a link to change your RSVP.')};
+            }
             const next = (typeof data?.checkoutUrl === 'string' && data.checkoutUrl) || (typeof data?.managePath === 'string' && data.managePath);
             return next ? {ok: true, redirect: next} : {ok: true, message: 'Thanks, your RSVP is in.'};
           }
@@ -306,8 +358,17 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
           };
         },
         done(message) {
-          if (!editing && message) replaceWithMessage(form, message);
+          if (!editing && message) showCheckEmail(form, message);
         },
+      });
+      // The source's banner above the submit bar when answers need a look (bindForm has already validated).
+      form.addEventListener('submit', () => {
+        const status = form.querySelector<HTMLElement>('[data-form-status]');
+        if (!status || !form.querySelector('[aria-invalid="true"]')) return;
+        status.textContent = 'Some answers need a look before we can save.';
+        status.className = 'notice notice-error';
+        status.setAttribute('role', 'alert');
+        status.hidden = false;
       });
     }
   });

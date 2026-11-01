@@ -86,6 +86,7 @@ export const pollSelect = {
   showResultsToVoters: true,
   openedAt: true,
   closedAt: true,
+  sortOrder: true,
 } as const;
 
 export type PollRow = {
@@ -98,6 +99,7 @@ export type PollRow = {
   showResultsToVoters: boolean;
   openedAt: Date | null;
   closedAt: Date | null;
+  sortOrder?: number;
 };
 
 export type ResultsDto = {
@@ -131,10 +133,10 @@ export async function optionsOf(db: PrismaClient, pollIds: string[]) {
   if (pollIds.length === 0) return [];
   const rows = await db.pollOption.findMany({
     where: {pollId: {in: pollIds}},
-    select: {id: true, pollId: true, label: true},
-    orderBy: {id: 'asc'},
+    select: {id: true, pollId: true, label: true, sortOrder: true},
+    orderBy: [{sortOrder: 'asc'}, {id: 'asc'}],
   });
-  return rows.map((o, sortOrder) => ({...o, sortOrder}));
+  return rows.map(o => ({...o}));
 }
 
 /** The current poll for guests: the open one, else the most recently opened (closed) one. */

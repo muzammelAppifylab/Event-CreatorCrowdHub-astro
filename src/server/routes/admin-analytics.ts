@@ -8,7 +8,7 @@ import {PERMISSIONS} from '../permissions';
  * Event analytics for people who manage events (ported from CreatorCrowdHub, US-32).
  * Mount: `.route('/analytics', adminAnalyticsRoutes)`.
  *
- *   GET /analytics/events/:eventId   KPIs, views per day, breakdown by utm source (`site:event:manage`)
+ *   GET /analytics/events/:eventId   KPIs (incl. paid revenue, poll participation), views per day, utm sources (`site:event:manage`)
  *
  * Every number is one aggregate scoped to the event (indexes: page_views (event_id, created_at),
  * rsvps (event_id)); nothing counts a whole table. Views are unique visitors per UTC day, summed
@@ -98,6 +98,24 @@ export function showRate(rows: RsvpAgg[], ended: boolean): Ratio {
   return ratio(showed, going, 'No confirmed going guests.');
 }
 
+/** Poll answers ÷ confirmed guests (one answer per voter per poll, so it can pass 100% with several polls). */
+export const pollParticipation = (votes: number, confirmedGuests: number) => ratio(votes, confirmedGuests, 'No confirmed guests.');
+
+export type RevenueRow = {currency: string; amountCents: number; orders: number};
+
+/** Paid orders only (refunded, pending, expired excluded by the query); biggest currency first, upper-cased. */
+export function revenueByCurrency(rows: RevenueRow[]): RevenueRow[] {
+  const by = new Map<string, RevenueRow>();
+  for (const r of rows) {
+    const currency = r.currency.toUpperCase();
+    const row = by.get(currency) ?? {currency, amountCents: 0, orders: 0};
+    row.amountCents += r.amountCents;
+    row.orders += r.orders;
+    by.set(currency, row);
+  }
+  return [...by.values()].sort((a, b) => b.amountCents - a.amountCents || a.currency.localeCompare(b.currency));
+}
+
 /** RSVPs received ÷ unique views. */
 export const conversion = (rsvps: number, views: number) => ratio(rsvps, views, 'No page views recorded yet.');
 
@@ -130,7 +148,7 @@ export const adminAnalyticsRoutes = new Hono().get(
     const from = new Date(`${range.firstDay}T00:00:00Z`);
     const to = new Date(Date.parse(`${range.lastDay}T00:00:00Z`) + DAY_MS);
 
-    const [rsvpRows, views, daily, viewSources, rsvpSources] = await Promise.all([
+    const [rsvpRows, views, daily, viewSources, rsvpSources, revenueRows, pollVotes] = await Promise.all([
       db.$queryRaw<RsvpAgg[]>`
         select response::text as response, status::text as status, count(*)::int as count,
                (count(*) filter (where checked_in_at is not null or attended = true))::int as "showedUp"
@@ -150,10 +168,18 @@ export const adminAnalyticsRoutes = new Hono().get(
         select utm_source as source, count(*)::int as count
         from rsvps where event_id = ${eventId}::uuid
         group by utm_source order by count(*) desc limit ${MAX_SOURCES * 2}`,
+      // Paid revenue per currency: orders reach the event through rsvps (event_id index) and ticket_orders_rsvp_id_idx.
+      db.$queryRaw<RevenueRow[]>`
+        select o.currency as currency, coalesce(sum(o.amount_cents), 0)::int as "amountCents", count(*)::int as orders
+        from ticket_orders o join rsvps r on r.id = o.rsvp_id
+        where r.event_id = ${eventId}::uuid and o.status = 'paid'
+        group by o.currency limit 10`,
+      db.pollVote.count({where: {poll: {eventId}}}),
     ]);
 
     const ended = event.endAt < now;
     const total = rsvpRows.reduce((n, r) => n + r.count, 0);
+    const confirmedGuests = rsvpRows.reduce((n, r) => (r.status === 'confirmed' ? n + r.count : n), 0);
     const checkedIn = rsvpRows.reduce((n, r) => n + r.showedUp, 0);
     return c.json({
       eventId: event.id,
@@ -165,6 +191,8 @@ export const adminAnalyticsRoutes = new Hono().get(
       showRate: showRate(rsvpRows, ended),
       viewsByDay: zeroFillDays(range, daily),
       sources: topSources(viewSources, rsvpSources),
+      revenue: revenueByCurrency(revenueRows),
+      pollParticipation: pollParticipation(pollVotes, confirmedGuests),
     });
   }
 );

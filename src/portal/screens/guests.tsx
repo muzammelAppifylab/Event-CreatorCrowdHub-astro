@@ -11,6 +11,7 @@ import {
   type GuestRow,
   type GuestStatus,
   guestCount,
+  guestDataUrl,
   guestQuery,
   guestsExportUrl,
   guestsQuery,
@@ -232,6 +233,14 @@ export function GuestsTab({eventId}: {eventId: string}) {
     {key: 'response', header: 'Response', width: 'shrink', hideOnMobile: true, cell: g => RESPONSE_LABELS[g.response]},
     {key: 'seats', header: 'Seats', width: 'shrink', hideOnMobile: true, cell: g => g.seats},
     {key: 'ticket', header: 'Ticket', hideOnMobile: true, cell: g => g.ticketTypeName ?? <span className="muted">Free</span>},
+    {key: 'code', header: 'Code', width: 'shrink', hideOnMobile: true, cell: g => <code>{g.ticketCode}</code>},
+    {key: 'payment', header: 'Payment', width: 'shrink', hideOnMobile: true, cell: g => g.paymentStatus ?? <span className="muted">—</span>},
+    ...(first?.questions ?? []).map(q => ({
+      key: `q-${q.id}`,
+      header: q.label,
+      hideOnMobile: true,
+      cell: (g: GuestRow) => answerText(g.answers[q.id]) || <span className="muted">—</span>,
+    })),
     {
       key: 'checked',
       header: 'Checked in',
@@ -419,6 +428,18 @@ function GuestDrawer({
     },
     onError: err => err instanceof ApiError && form.setServerErrors(err.fields),
   });
+  const [downloading, setDownloading] = useState(false);
+  const download = async () => {
+    if (!rsvpId) return;
+    setDownloading(true);
+    try {
+      await downloadExport(guestDataUrl(eventId, rsvpId), 'guest-data.json');
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : 'The download failed.');
+    } finally {
+      setDownloading(false);
+    }
+  };
   const close = () => {
     if (save.isPending) return;
     setLoaded(null);
@@ -517,6 +538,9 @@ function GuestDrawer({
                 {guest.checkedInAt ? 'Undo check-in' : 'Check in'}
               </Button>
             )}
+            <Button variant="secondary" icon="file" pending={downloading} pendingLabel="Preparing…" onClick={() => void download()}>
+              Download data (JSON)
+            </Button>
             <Button variant="danger" icon="trash" onClick={() => onAction('remove', guest.id)}>
               Remove
             </Button>
