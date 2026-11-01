@@ -367,7 +367,7 @@ export function Menu({
       <button
         ref={button}
         type="button"
-        className={trigger ? 'menu-trigger' : 'button button-ghost button-sm icon-button'}
+        className={trigger ? 'menu-trigger' : 'button button-ghost button-sm icon-button menu-more'}
         aria-label={label}
         title={trigger ? undefined : label}
         aria-haspopup="menu"
