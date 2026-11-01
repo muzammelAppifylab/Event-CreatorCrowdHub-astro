@@ -167,6 +167,12 @@ describe('place: Maybe and paid tickets (audit H1)', () => {
     expect(p.status).toBe('confirmed');
   });
 
+  it('a waitlisted guest on a paid ticket can edit while payments are off and stays waitlisted', () => {
+    const wl = {...maybe, response: 'going', status: 'waitlisted', ticketTypeId: TICKET, waitlistPosition: 1, confirmedAt: null};
+    const p = place(base({current: wl, response: 'going', ticket: PAID, anyPaidTicket: true, seatsTaken: 10}));
+    expect(p.status).toBe('waitlisted');
+  });
+
   it('a settled paid Going guest keeps their seat on an unchanged edit', () => {
     const going = {...maybe, response: 'going', ticketTypeId: TICKET};
     const p = place(base({current: going, response: 'going', ticket: PAID, anyPaidTicket: true, paymentsEnabled: true}));

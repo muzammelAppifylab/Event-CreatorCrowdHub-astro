@@ -67,6 +67,7 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
     mutationFn: ({ticketCode, checkedIn}: {ticketCode: string; checkedIn: boolean; guest: DoorGuest}) =>
       call<DoorToggle>(`/checkin/codes/${encodeURIComponent(ticketCode)}`, {checkedIn}),
     onSuccess: (_, vars) => {
+      if (!vars.checkedIn) setLastScan(prev => (prev && prev.ticketCode === vars.ticketCode ? null : prev));
       toast.success(vars.checkedIn ? `${vars.guest.name} checked in.` : `Check-in undone for ${vars.guest.name}.`);
       return refreshList();
     },

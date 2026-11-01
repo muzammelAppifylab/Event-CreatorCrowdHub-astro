@@ -158,19 +158,6 @@ const headline =
       )
     }
 
-    <section class="home-section" data-live="jobs" aria-labelledby="jobs-title" hidden>
-      <div class="wrap">
-        <div class="home-head home-head-row">
-          <h2 id="jobs-title">{HOME.jobs.title}</h2>
-          <a class="home-more" href="/jobs/">
-            {HOME.jobs.link}
-            <Icon name="arrow-right" size={16} />
-          </a>
-        </div>
-        <ul class="job-list" data-list data-remote-label={HOME.jobs.remote}></ul>
-      </div>
-    </section>
-
     <section class="home-section" aria-labelledby="faq-title">
       <div class="wrap home-faq-grid">
         <div class="home-head">
@@ -212,12 +199,12 @@ const headline =
 
 <script>
   import {formatEventTime} from '../lib/format';
-  import type {EventsPage, JobsPage} from '../lib/types';
+  import type {EventsPage} from '../lib/types';
 
   // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
   // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
   document.addEventListener('astro:page-load', () => {
-    if (!document.querySelector('[data-live="jobs"]')) return;
+    if (!document.querySelector('[data-live="events"]')) return;
     /** One element with text: never HTML from an answer. */
     const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
       const node = document.createElement(tag);
@@ -254,19 +241,5 @@ const headline =
       return Math.min(3, data.events.length);
     });
 
-    void live<JobsPage>('jobs', '/site-api/jobs', (data, list) => {
-      for (const job of data.jobs.slice(0, 3)) {
-        const row = el('a', 'job-row');
-        row.href = `/jobs/${encodeURIComponent(job.slug)}/`;
-        const text = el('div');
-        text.append(el('h3', 'job-title', job.title), el('p', 'muted', `${job.company} · ${job.location}`));
-        row.append(text);
-        if (job.remote) row.append(el('span', 'chip chip-tag', list.dataset.remoteLabel || 'Remote'));
-        const item = el('li');
-        item.append(row);
-        list.append(item);
-      }
-      return Math.min(3, data.jobs.length);
-    });
   });
 </script>

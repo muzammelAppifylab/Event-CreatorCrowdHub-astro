@@ -346,7 +346,7 @@ export function place(i: PlaceInput): Placement {
   if (settled) {
     const changes = settled.ticketTypeId !== (ticket?.id ?? null) || seats !== settled.seats;
     if (changes && paid) throw conflict('paid_ticket_change');
-  } else if (paid && !i.paymentsEnabled) {
+  } else if (paid && !i.paymentsEnabled && current?.status !== 'waitlisted') {
     throw conflict('payments_unavailable');
   }
 
@@ -390,7 +390,11 @@ export function place(i: PlaceInput): Placement {
   // A seat on a paid ticket is not confirmed until the payment lands.
   // Keyed on HOLDING a settled seat, not on `status`: a Maybe is `confirmed` without a seat or a payment,
   // so Maybe -> Going on a paid ticket must pay like a fresh RSVP (audit H1).
-  if (paid && placement.status === 'confirmed' && !(holder && current?.status === 'confirmed')) return AWAITING;
+  if (paid && placement.status === 'confirmed' && !(holder && current?.status === 'confirmed')) {
+    // A waitlisted guest skipped the up-front check (a name edit must work); starting checkout still needs payments.
+    if (!i.paymentsEnabled) throw conflict('payments_unavailable');
+    return AWAITING;
+  }
   return placement;
 }
 

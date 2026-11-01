@@ -14,3 +14,4 @@ src/generated
 .env
 dev.log
 DEV-LOGIN.local.txt
+.e2e-credentials.txt

@@ -10,7 +10,7 @@ Port of the TanStack Start app in `../CreatorCrowdHub`.
 ## Where things are
 
 ```
-src/pages/            public pages: / (static), /about/, /events/ (SSR), /blog/, /jobs/, account/
+src/pages/            public pages: / (static), /about/, /events/ (SSR), /blog/, account/
 src/content/site.ts   marketing copy, nav, SITE description
 src/server/           the backend (Hono routes, background jobs, mail)
 src/portal/           the creator dashboard (React SPA at /dashboard)

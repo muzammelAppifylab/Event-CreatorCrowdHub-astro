@@ -16,15 +16,6 @@ import {abilitiesOf, type AbilitiesOf, codenamesOf, CORE_PERMISSIONS, definePerm
  */
 export const CATALOGUE = definePermissions({
   ...CORE_PERMISSIONS,
-  /** Post, edit, close and delete jobs (`/dashboard/jobs`). */
-  JOB_MANAGE: {
-    codename: 'site:job:manage',
-    title: 'Manage jobs',
-    description: 'Post, edit, close and delete jobs on the job board.',
-    group: 'Jobs',
-    ability: 'manageJobs',
-    roles: ['admin'],
-  },
   /** Create, edit and publish events, guests, invites, messages, polls, settings (). */
   EVENT_MANAGE: {
     codename: 'site:event:manage',
@@ -45,7 +36,7 @@ export const CATALOGUE = definePermissions({
   },
 });
 
-/** Codenames by key: `PERMISSIONS.JOB_MANAGE` is `'site:job:manage'`. */
+/** Codenames by key: `PERMISSIONS.EVENT_MANAGE` is `'site:event:manage'`. */
 export const PERMISSIONS = codenamesOf(CATALOGUE);
 
 export type Codename = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

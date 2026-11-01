@@ -27,7 +27,7 @@ export interface NavItem {
   label: string;
   href: string;
   /**
-   * `false` for a page rendered on every visit (SSR, like `/jobs/`): it is
+   * `false` for a page rendered on every visit (SSR, like `/events/`): it is
    * private (`no-store`), so fetching it ahead would be wasted. Every other
    * item is prerendered and prefetched as soon as the nav is on screen.
    */
@@ -35,14 +35,13 @@ export interface NavItem {
 }
 
 /**
- * Top navigation. Every href is a page of THIS site (`/`, `/blog/`, `/jobs/`,
+ * Top navigation. Every href is a page of THIS site (`/`, `/blog/`, `/events/`,
  * `/about/`, `/dashboard`, `/account/…`): plain links.
  */
 export const NAV: NavItem[] = [
   {label: 'Home', href: '/'},
   {label: 'Events', href: '/events/', prefetch: false},
   {label: 'Blog', href: '/blog/'},
-  {label: 'Jobs', href: '/jobs/', prefetch: false},
   {label: 'About', href: '/about/'},
 ];
 
@@ -102,7 +101,6 @@ export const HOME = {
   /** The next public events, loaded in the browser (the home page is static). */
   events: {title: 'Upcoming events', link: 'All events'},
   blog: {title: 'Latest from the blog', link: 'All posts'},
-  jobs: {title: 'Open roles', link: 'All jobs', remote: 'Remote'},
   faq: {
     eyebrow: 'Questions',
     title: 'Questions, answered',

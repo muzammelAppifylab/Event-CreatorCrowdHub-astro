@@ -28,7 +28,6 @@ import {getDb} from '../platform/db';
 import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {abilitiesFor, CATALOGUE} from './permissions';
 import {eventRoutes} from './routes/events';
-import {jobRoutes} from './routes/jobs';
 import {siteRoutes} from './routes/site';
 
 // Paid tickets: the RSVP route holds the seat, the platform checkout takes the money. ONE path:
@@ -54,7 +53,6 @@ setPaidCheckoutHook(async ({origin, rsvp, manageToken}) => {
  *   *    /auth/...      sign-up, sign-in, sessions, passwords   platform/auth/routes.ts
  *   *    /admin/...     users, roles, audit log (admins)        platform/auth/admin.ts
  *   GET  /site          the site's brand                        routes/site.ts
- *   *    /jobs/...      the job board (Site Database)           routes/jobs.ts
  *   *    /checkout/...  start and confirm a payment             routes/checkout.ts
  *   *    /memberships/... the member's memberships               routes/checkout.ts
  *
@@ -103,7 +101,6 @@ export const app = new Hono()
   .route('/auth', authRoutes(authSettings))
   .route('/admin', adminRoutes)
   .route('/site', siteRoutes)
-  .route('/jobs', jobRoutes)
   .route('/events', eventRoutes)
   .route('/memberships', membershipRoutes)
   // Events: organiser routes (site:event:manage / site:event:checkin) ...

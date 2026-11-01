@@ -6,7 +6,7 @@ The single source of rules for EVERY coding agent (Claude Code, Codex, Gemini, C
 This repo is ONE site: a website AND its own app, in one Astro project on ONE
 Cloudflare Worker (`output: 'server'`, `@astrojs/cloudflare`). It stands alone: it owns its
 users, sign-in, roles and data in its own Site Database. It already works end to end:
-prerendered marketing pages, a blog, a job board, sign-up/sign-in/password reset, two-step
+prerendered marketing pages, a blog, public event pages, sign-up/sign-in/password reset, two-step
 sign-in, change email, signed-in devices, delete account, one-click owner sign-in from the dashboard
 ("Open admin"), a dashboard with user and role admin, a backend and a database. Extend it; don't
 rebuild what is here.
@@ -61,17 +61,17 @@ browser ──► /dashboard (React SPA) ──── fetch ─────► H
 | --- | --- | --- |
 | `/`, `/about/` | marketing (STATIC) | `src/pages/index.astro`, `about.astro` |
 | `/blog/`, `/blog/<slug>/` | the blog: Markdown files, prerendered | `src/content/blog/*.md`, `src/pages/blog/`, `src/content.config.ts` |
-| `/jobs/`, `/jobs/<slug>/` | job board (SSR, Site Database) | `src/pages/jobs/` |
+| `/events/`, `/events/<slug>/` | public events (SSR, Site Database) | `src/pages/events/` |
 | `/account/*` | login, register, forgot, reset, verify (STATIC + script) | `src/pages/account/` |
-| `/dashboard/*` | signed-in dashboard: account, users, roles, activity, jobs (SPA) | `src/portal/` |
+| `/dashboard/*` | signed-in dashboard: account, users, roles, activity, events (SPA) | `src/portal/` |
 | `/portal/*` | the dashboard's old address: redirects to `/dashboard/*` with its query (the platform's one-click sign-in opens it); keep it | `src/pages/portal/[...path].astro` |
 | `/site-api/*` | the backend | `src/server/`, `src/platform/auth/` |
-| `/sitemap.xml` | public pages, posts, open jobs (SSR, cached 1 h) | `src/pages/sitemap.xml.ts` |
+| `/sitemap.xml` | public pages, posts, public events (SSR, cached 1 h) | `src/pages/sitemap.xml.ts` |
 | `/robots.txt`, `/rss.xml` | crawler rules, the blog feed (STATIC) | `src/pages/robots.txt.ts`, `rss.xml.ts` |
 | — | error pages: any miss (404), a page that failed on the server (500) | `src/pages/404.astro`, `500.astro` |
 | — | `<head>` SEO (title, description, canonical, Open Graph, Twitter), header, footer | `src/layouts/Base.astro`, `src/lib/seo.ts` |
 
-Public page URLs END WITH `/` (`/about/`, `/blog/<slug>/`, `/jobs/`): prerendered pages are
+Public page URLs END WITH `/` (`/about/`, `/blog/<slug>/`, `/events/`): prerendered pages are
 served there (`/about` costs a redirect), and the canonical URLs and sitemap use that form.
 Link with the slash.
 
@@ -136,7 +136,7 @@ to reach the admin, and put the app's admin screens inside `/dashboard`.
   the browser (`data-user-only`, `data-guest-only`, `data-live` sections built with `textContent`).
 
 ## A dashboard looks like a dashboard (`ui.md`)
-The dashboard ships finished: shell, overview, users, roles, activity, jobs and account, all
+The dashboard ships finished: shell, overview, users, roles, activity, events and account, all
 built from ONE UI kit in `src/portal/ui/` (`import {Button, Card, DataTable} from '../ui'`).
 Build every screen from the kit; see it live at `/dashboard/components` in the Preview.
 - The shell (`src/portal/routes.tsx`): `App.astro` layout (full height, no site header/footer,
@@ -209,11 +209,11 @@ whole-table loops, nothing big in module memory (`performance.md`).
   title, group, `ability`, default `roles`; no migration), routes behind
   `requirePermission(PERMISSIONS.X)` (own records: `can`), nav item `ability: '<ability>'`
   (`roles-and-permissions.md`). Never gate on a role slug.
-- **A server-rendered list + detail** (data in the Site Database, like `/jobs`): data route
+- **A server-rendered list + detail** (data in the Site Database, like `/events`): data route
   first; `src/pages/<name>/index.astro` reads the query string and calls `api` through
   `pageContext`; search is a GET `<form>`; detail sets `Astro.response.status = 404` +
   `<NotFound>` when the route answered 404, and 503 + a "not available" message when the read
-  failed (a database outage is never a 404), as `src/pages/jobs/[slug].astro` does; HTML from
+  failed (a database outage is never a 404), as `src/pages/events/[slug].astro` does; HTML from
   outside the repo only via `sanitizeHtml`.
 - **A blog post: add a Markdown file** `src/content/blog/<slug>.md` (the file name is the URL;
   never rename a published one). Front matter, checked at build by `src/content.config.ts`:

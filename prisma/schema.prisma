@@ -87,14 +87,14 @@ model Role {
   @@map("roles")
 }
 
-/// The permission catalogue: one row per codename (`site:job:manage`,
+/// The permission catalogue: one row per codename (`site:event:manage`,
 /// `site:user:*`, `*`). Shipped as idempotent migrations, matched by codename.
 model Permission {
   id          Int      @id @default(autoincrement())
   codename    String   @unique @db.VarChar(128)
   title       String   @db.VarChar(120)
   description String?  @db.VarChar(255)
-  /// Groups the catalogue in the roles screen ("Users", "Jobs").
+  /// Groups the catalogue in the roles screen ("Users", "Events").
   groupName   String   @default("General") @map("group_name") @db.VarChar(48)
   createdAt   DateTime @default(now()) @map("created_at")
 
@@ -365,33 +365,6 @@ model Membership {
 }
 
 // ---------------------------------------------------------------- the site's own data
-
-/// A job on the job board (`/jobs`, `/jobs/<slug>`). Holders of
-/// `site:job:manage` post and edit them from `/portal/jobs`.
-model Job {
-  id          Int      @id @default(autoincrement())
-  /// URL name, unique: `/jobs/<slug>`.
-  slug        String   @unique @db.VarChar(120)
-  title       String   @db.VarChar(120)
-  company     String   @db.VarChar(80)
-  location    String   @db.VarChar(80)
-  /// `full-time`, `part-time`, `contract` or `internship`.
-  type        String   @default("full-time") @db.VarChar(20)
-  remote      Boolean  @default(false)
-  /// Plain text; paragraphs separated by blank lines.
-  description String   @db.VarChar(10000)
-  /// Where to apply: an https URL or a mailto: link the poster chose to publish.
-  applyUrl    String   @map("apply_url") @db.VarChar(500)
-  /// `open` (listed) or `closed` (kept, not listed).
-  status      String   @default("open") @db.VarChar(10)
-  /// The user (`users.id`) who posted it. No foreign key: a job outlives its poster.
-  createdBy   Int      @map("created_by")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  @@index([status, id])
-  @@map("jobs")
-}
 
 // ---------------------------------------------------------------- events (ported from CreatorCrowdHub)
 

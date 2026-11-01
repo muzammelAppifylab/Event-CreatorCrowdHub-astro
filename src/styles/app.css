@@ -2225,23 +2225,7 @@
   background: var(--info);
 }
 
-/* screens: jobs, account */
-
-.jobs-screen .jobs-title {
-  display: grid;
-  gap: 0.1rem;
-  min-width: 0;
-}
-
-.jobs-screen .radio-cards-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-@media (max-width: 480px) {
-  .jobs-screen .radio-cards-grid {
-    grid-template-columns: 1fr;
-  }
-}
+/* screens: account */
 
 .account-screen .account-panel {
   display: grid;

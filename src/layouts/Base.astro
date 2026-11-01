@@ -13,10 +13,10 @@
  * (performance.md "Scripts with the ClientRouter"); the portal has no router, so
  * it is a full load. Only links to PRERENDERED pages carry `data-astro-prefetch` (fetched on hover;
  * the header nav as soon as it is on screen). Pages rendered per visit
- * (`/jobs/*`, `/dashboard`) answer `no-store`: a prefetch of them is thrown away.
+ * (`/events/*`, `/dashboard`) answer `no-store`: a prefetch of them is thrown away.
  *
  * Structured data (JSON-LD, src/lib/seo.ts): the home page gets `WebSite` +
- * `Organization`; a page passes its own in `jsonLd` (a post, a job).
+ * `Organization`; a page passes its own in `jsonLd` (a post, an event).
  */
 import '../styles/global.css';
 import '../styles/public.css';
@@ -57,7 +57,7 @@ interface Props {
   noindex?: boolean;
   /** The page URL carries a secret (a reset or confirmation token): send no Referer. */
   secretInUrl?: boolean;
-  /** The page's own structured data (src/lib/seo.ts): `postJsonLd(…)`, `jobJsonLd(…)`. */
+  /** The page's own structured data (src/lib/seo.ts): `postJsonLd(…)`, `eventJsonLd(…)`. */
   jsonLd?: JsonLd;
   /**
    * A guest-facing page (event, RSVP, invite, poll, privacy, errors): like the original app's

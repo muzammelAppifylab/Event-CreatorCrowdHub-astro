@@ -13,7 +13,6 @@ No workspaces, no teams: one site, one `event_settings` row (id 1). Catalogue in
 | --- | --- | --- | --- |
 | `site:event:manage` | `EVENT_MANAGE` (`manageEvents`) | events, guests, invites, messages, polls, settings, analytics, webhooks | `admin` |
 | `site:event:checkin` | `EVENT_CHECKIN` (`checkinGuests`) | door check-in only | `admin` |
-| `site:job:manage` | `JOB_MANAGE` | job board | `admin` |
 
 - `owner` is the platform's all-powerful role; `admin` gets the catalogue defaults; `checkin_staff` is a
   non-system role created by the migration `prisma/migrations/20261030100000_checkin_role` holding only
@@ -32,7 +31,6 @@ Guest routes carry no session: access is by token in the path/body (or public).
 | `/health`, `/me` | `app.ts` | public / viewer |
 | `/auth`, `/admin` | `src/platform/auth/*` | managed auth; users, roles, audit (admin) |
 | `/site` | `routes/site.ts` | public site brand |
-| `/jobs` | `routes/jobs.ts` | job board (`site:job:manage` for writes) |
 | `/events` | `routes/events.ts` | PUBLIC: list, `/sitemap`, `/:slug` |
 | `/admin-events` | `routes/admin-events.ts` | `EVENT_MANAGE`: event CRUD, publish/unpublish, cancel (+preview), duplicate, ticket types |
 | `/event-admin` | `routes/admin-guests.ts` | `EVENT_MANAGE`: guests (list, CSV, bulk, edit, delete), contacts (+CSV) |
@@ -52,7 +50,7 @@ Guest routes carry no session: access is by token in the path/body (or public).
 
 ## Portal (`/dashboard`, `src/portal/routes.tsx`)
 
-`/` overview, `/account`, `/jobs`, `/users`, `/roles`, `/activity`, `/events`, `/events/new`,
+`/` overview, `/account`, `/users`, `/roles`, `/activity`, `/events`, `/events/new`,
 `/events/$id/edit`, `/events/$id` (hub; tabs guests, invites, messages, polls, analytics, check-in,
 settings via `?tab=`; files in `src/portal/screens/`), `/contacts`, `/event-settings`, `/checkin`,
 `/checkin/$eventId`, `/polls/$code/present`, `/integrations` (webhooks), `/components`.
@@ -63,7 +61,7 @@ settings via `?tab=`; files in `src/portal/screens/`), `/contacts`, `/event-sett
 `/events/` and `/events/<slug>/` (SSR, JSON-LD, in the sitemap), `/r/<token>/` (manage an RSVP),
 `/i/<token>/` (invite landing), `/p/<code>/` (live poll voting, SSR, noindex), `/host/`,
 `/privacy/` and `/privacy/consent|unsubscribe|guest/<token>/`, `/checkout/` and `/thanks/` (platform
-payments), plus template pages (`/`, `/about/`, `/blog/`, `/jobs/`, `/account/*`).
+payments), plus template pages (`/`, `/about/`, `/blog/`, `/account/*`).
 
 ## Data model (`prisma/schema.prisma`)
 

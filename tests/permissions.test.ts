@@ -22,11 +22,10 @@ describe('the permission catalogue', () => {
     expect(CORE.ROLE_READ).toBe('site:role:read');
     expect(CORE.ROLE_UPDATE).toBe('site:role:update');
     expect(CORE.AUDIT_READ).toBe('site:audit:read');
-    expect(PERMISSIONS.JOB_MANAGE).toBe('site:job:manage');
     expect(PERMISSIONS.EVENT_MANAGE).toBe('site:event:manage');
     expect(PERMISSIONS.EVENT_CHECKIN).toBe('site:event:checkin');
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
-      ['checkinGuests', 'editRoles', 'manageEvents', 'manageJobs', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
+      ['checkinGuests', 'editRoles', 'manageEvents', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
     );
     expect(Object.values(NO_ABILITIES).every(v => v === false)).toBe(true);
   });
@@ -34,15 +33,14 @@ describe('the permission catalogue', () => {
   it('derives the abilities from granted codenames, wildcards included', () => {
     const owner = abilitiesFor(new Set(['*']));
     expect(Object.values(owner).every(Boolean)).toBe(true);
-    const admin = abilitiesFor(new Set(['site:user:*', 'site:role:read', 'site:audit:read', 'site:job:manage']));
+    const admin = abilitiesFor(new Set(['site:user:*', 'site:role:read', 'site:audit:read', 'site:event:manage']));
     expect(admin).toEqual({
       manageUsers: true,
       updateUsers: true,
       manageRoles: true,
       editRoles: false,
       readAudit: true,
-      manageJobs: true,
-      manageEvents: false,
+      manageEvents: true,
       checkinGuests: false,
     } satisfies Abilities);
     // The type is exact: a key nobody declared does not exist.

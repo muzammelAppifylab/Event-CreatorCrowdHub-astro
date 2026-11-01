@@ -21,10 +21,8 @@ import {logout} from '../platform/browser';
 import {
   auditQuery,
   firstAuditQuery,
-  firstJobsQuery,
   firstUsersQuery,
   healthQuery,
-  manageJobsQuery,
   meQuery,
   permissionsQuery,
   rolesQuery,
@@ -155,7 +153,6 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
   {
     label: 'Manage',
     items: [
-      {to: '/jobs', label: 'Jobs', icon: 'briefcase', ability: 'manageJobs'},
       {to: '/users', label: 'Users', icon: 'users', ability: 'manageUsers'},
       {to: '/roles', label: 'Roles', icon: 'shield', ability: 'manageRoles'},
       {to: '/activity', label: 'Activity', icon: 'activity', ability: 'readAudit'},
@@ -395,7 +392,6 @@ const overviewRoute = createRoute({
     const can = me?.abilities;
     await warm(
       ...(can?.manageUsers ? [queryClient.ensureQueryData(firstUsersQuery)] : []),
-      ...(can?.manageJobs ? [queryClient.ensureQueryData(firstJobsQuery)] : []),
       ...(can?.readAudit ? [queryClient.ensureQueryData(firstAuditQuery)] : [])
     );
   },
@@ -415,14 +411,6 @@ const accountRoute = createRoute({
       queryClient.ensureQueryData(sessionsQuery)
     ),
   component: lazyRouteComponent(() => import('./screens/account'), 'Account'),
-});
-const jobsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/jobs',
-  beforeLoad: needs('manageJobs'),
-  staticData: {title: 'Jobs'},
-  loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(manageJobsQuery)),
-  component: lazyRouteComponent(() => import('./screens/jobs'), 'Jobs'),
 });
 const usersRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -561,7 +549,6 @@ const devRoutes = import.meta.env.DEV
 export const routeTree = rootRoute.addChildren([
   overviewRoute,
   accountRoute,
-  jobsRoute,
   usersRoute,
   rolesRoute,
   activityRoute,
