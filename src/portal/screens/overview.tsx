@@ -22,7 +22,7 @@ export function Overview() {
   const abilities = me.data?.abilities;
   const health = useQuery(healthQuery);
   const site = useQuery(siteQuery);
-  const events = useQuery({...overviewQuery, enabled: Boolean(me.data)});
+  const events = useQuery({...overviewQuery, enabled: Boolean(abilities?.manageEvents)});
   const ev = events.data;
   const firstName = viewer?.name?.split(/\s+/)[0];
 
@@ -40,10 +40,12 @@ export function Overview() {
               <Icon name="globe" size={18} />
               View the website
             </a>
-            <Link className={buttonClass()} to={'/events/new' as never}>
-              <Icon name="plus" size={18} />
-              Create event
-            </Link>
+            {abilities?.manageEvents && (
+              <Link className={buttonClass()} to={'/events/new' as never}>
+                <Icon name="plus" size={18} />
+                Create event
+              </Link>
+            )}
           </>
         }
       />
@@ -63,9 +65,22 @@ export function Overview() {
 
       {abilities?.manageEvents && <RefundsCard />}
 
+      {me.data && !abilities?.manageEvents && (
+        <EmptyState
+          icon="user"
+          title={firstName ? `Welcome, ${firstName}` : 'Welcome'}
+          action={
+            <Link className={buttonClass({variant: 'secondary'})} to={'/account' as never}>
+              Your account
+            </Link>
+          }>
+          You are signed in. Manage your profile and sign-in details from your account.
+        </EmptyState>
+      )}
+
       {events.error && <ErrorNote error={events.error} />}
       {events.isPending && events.fetchStatus !== 'idle' && <LoadingBlock rows={2} />}
-      {noEvents && (
+      {abilities?.manageEvents && noEvents && (
         <EmptyState
           icon="clock"
           title="Create your first event"
@@ -78,7 +93,7 @@ export function Overview() {
           Set it up in a few minutes and share the link. Every guest lands in your Guests list.
         </EmptyState>
       )}
-      {ev && !noEvents && (
+      {abilities?.manageEvents && ev && !noEvents && (
         <>
           <div className="grid-main-side screen-overview-split">
             <Card
@@ -150,6 +165,15 @@ export function Overview() {
 
 type UpcomingRow = OverviewData['events'][number];
 
+const HUB_LINKS = [
+  {tab: 'guests', label: 'Guests'},
+  {tab: 'invites', label: 'Invites'},
+  {tab: 'messages', label: 'Messages'},
+  {tab: 'polls', label: 'Polls'},
+  {tab: 'checkin', label: 'Check-in'},
+  {tab: 'analytics', label: 'Analytics'},
+] as const;
+
 const upcomingColumns: Column<UpcomingRow>[] = [
   {
     key: 'event',
@@ -170,6 +194,20 @@ const upcomingColumns: Column<UpcomingRow>[] = [
         {e.capacity !== null && e.going >= e.capacity && <Badge tone="warning">Full</Badge>}{' '}
         <strong>{e.going}</strong>
         <span className="muted"> / {e.capacity === null ? 'no limit' : e.capacity}</span>
+      </span>
+    ),
+  },
+  {
+    key: 'links',
+    header: 'Manage',
+    hideOnMobile: true,
+    cell: e => (
+      <span className="badges">
+        {HUB_LINKS.map(l => (
+          <Link key={l.tab} className={buttonClass({variant: 'ghost', size: 'sm'})} to={`/events/${e.id}` as never} search={{tab: l.tab} as never}>
+            {l.label}
+          </Link>
+        ))}
       </span>
     ),
   },

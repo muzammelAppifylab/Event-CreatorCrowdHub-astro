@@ -147,7 +147,7 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
       {to: '/checkin', label: 'Check-in', icon: 'check-circle', ability: 'checkinGuests'},
       {to: '/contacts', label: 'Contacts', icon: 'users', ability: 'manageEvents'},
       {to: '/event-settings', label: 'Event settings', icon: 'pencil', ability: 'manageEvents'},
-      {to: '/integrations', label: 'Integrations', icon: 'zap', ability: 'manageEvents'},
+      {to: '/integrations', label: 'Integrations', icon: 'zap', ability: 'manageIntegrations'},
     ],
   },
   {
@@ -160,7 +160,7 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
   },
   // Only in the Preview and `npm run dev` (never in a build): the UI kit, on screen.
   ...(import.meta.env.DEV
-    ? [{label: 'Build', items: [{to: '/components', label: 'Components', icon: 'layers' as const}]}]
+    ? [{label: 'Build', items: [{to: '/components', label: 'Components', icon: 'layers' as const, ability: 'manageUsers' as const}]}]
     : []),
 ];
 
@@ -521,7 +521,7 @@ const pollPresenterRoute = createRoute({
 const integrationsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('manageIntegrations'),
   staticData: {title: 'Integrations'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(webhooksQuery)),
   component: lazyRouteComponent(() => import('./screens/integrations'), 'Integrations'),
@@ -540,6 +540,8 @@ const devRoutes = import.meta.env.DEV
       createRoute({
         getParentRoute: () => rootRoute,
         path: '/components',
+        // Admin-only like Users: the template's admin-only screens use manageUsers.
+        beforeLoad: needs('manageUsers'),
         staticData: {title: 'Components'},
         component: lazyRouteComponent(() => import('./screens/components'), 'Components'),
       }),
