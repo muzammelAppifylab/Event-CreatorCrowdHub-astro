@@ -1,6 +1,7 @@
 ---
 import BrandMark from '../components/BrandMark.astro';
-import {ABOUT, withName} from '../content/site';
+import Icon from '../components/home/Icon.astro';
+import {ABOUT, HOME, withName} from '../content/site';
 import Base from '../layouts/Base.astro';
 import {staticContext} from '../server/page';
 
@@ -8,25 +9,94 @@ import {staticContext} from '../server/page';
 export const prerender = true;
 
 const {site, viewer} = await staticContext(Astro.request);
-const name = site?.name ?? 'My site';
+const name = site?.name ?? 'CreatorCrowdHub';
 ---
 
 <Base site={site} viewer={viewer} isStatic title="About" description={withName(ABOUT.lede, name)}>
-  <main id="main" tabindex="-1" class="wrap narrow section">
-    <BrandMark site={site} size={56} />
-    <h1 data-brand-text={ABOUT.title}>{withName(ABOUT.title, name)}</h1>
-    <p class="lede">{withName(ABOUT.lede, name)}</p>
-    {
-      ABOUT.sections.map(section => (
-        <section class="about-section">
-          <h2>{section.heading}</h2>
-          <p>{withName(section.body, name)}</p>
-        </section>
-      ))
-    }
-    <div class="actions">
-      <a class="button" href="/account/register/?next=%2Fabout%2F" data-astro-prefetch data-guest-only>Create an account</a>
-      <a class="button ghost" href="/events/">Browse events</a>
-    </div>
+  <main id="main" tabindex="-1" class="ab">
+    <section class="wrap ab-hero">
+      <BrandMark site={site} size={56} />
+      <p class="eyebrow">About us</p>
+      <h1 data-brand-text={ABOUT.title}>{withName(ABOUT.title, name)}</h1>
+      <p class="ab-lede">{withName(ABOUT.lede, name)}</p>
+      <div class="ab-actions">
+        <a class="button button-lg" href="/account/register/?next=%2Fabout%2F" data-astro-prefetch data-guest-only>Create an account</a>
+        <a class="button button-lg ghost" href="/events/">Browse events</a>
+      </div>
+    </section>
+
+    <section class="wrap" aria-label="At a glance">
+      <ul class="ab-stats">
+        {
+          ABOUT.stats.map(stat => (
+            <li>
+              <strong>{stat.value}</strong>
+              <span>{stat.label}</span>
+            </li>
+          ))
+        }
+      </ul>
+    </section>
+
+    <section class="wrap ab-section">
+      <div class="ab-bento">
+        {
+          ABOUT.sections.map((section, i) => (
+            <article class:list={['ab-card', {'ab-card-wide': i === 0}]}>
+              <span class="ab-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
+              <h2>{section.heading}</h2>
+              <p>{withName(section.body, name)}</p>
+            </article>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="wrap ab-section">
+      <header class="ab-head">
+        <p class="eyebrow">{ABOUT.values.eyebrow}</p>
+        <h2>{ABOUT.values.title}</h2>
+      </header>
+      <div class="ab-values">
+        {
+          ABOUT.values.items.map(item => (
+            <article class="ab-value">
+              <span class="ab-icon"><Icon name={item.icon as any} size={22} /></span>
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+            </article>
+          ))
+        }
+      </div>
+    </section>
+
+    <section class="wrap ab-section">
+      <header class="ab-head">
+        <p class="eyebrow">{HOME.how.eyebrow}</p>
+        <h2>{HOME.how.title}</h2>
+      </header>
+      <ol class="ab-steps">
+        {
+          HOME.how.steps.map((step, i) => (
+            <li>
+              <span class="ab-step-n" aria-hidden="true">{i + 1}</span>
+              <h3>{step.title}</h3>
+              <p>{step.body}</p>
+            </li>
+          ))
+        }
+      </ol>
+    </section>
+
+    <section class="wrap ab-section">
+      <div class="ab-cta">
+        <h2>{ABOUT.cta.title}</h2>
+        <p>{ABOUT.cta.body}</p>
+        <div class="ab-actions">
+          <a class="button button-lg" href="/account/register/?next=%2Fabout%2F" data-astro-prefetch data-guest-only>{ABOUT.cta.primary}</a>
+          <a class="button button-lg ghost" href="/events/">{ABOUT.cta.secondary}</a>
+        </div>
+      </div>
+    </section>
   </main>
 </Base>

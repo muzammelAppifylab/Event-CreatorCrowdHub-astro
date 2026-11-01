@@ -54,6 +54,10 @@ export const HOME = {
     highlight: 'actually show up',
     body: 'Branded event pages, email invites, RSVPs and live polls behind one link. Guests reply in under 30 seconds, with no account.',
     note: 'Your guests stay in your own contacts list.',
+    /** Three short benefits under the lede, shown as chips. */
+    points: ['Branded event pages', 'Invites, RSVPs and a waitlist', 'Reminders and live polls'],
+    /** The label above the search box (attendees). */
+    searchLabel: 'Looking for an event to attend?',
     /** Guests: create an account, or jump down the page. */
     guest: {primary: 'Create an account', secondary: 'See how it works'},
     /** Signed-in visitors. */
@@ -69,10 +73,25 @@ export const HOME = {
       {label: 'Waitlist', value: '4', trend: 'Example data'},
     ],
     chart: 'RSVPs over time',
+    /** The two cards floating over the picture (illustrative, like the rest of it). */
+    floats: [
+      {icon: 'user', title: 'New RSVP', text: 'Sam is going, plus one'},
+      {icon: 'bell', title: 'Reminder sent', text: '24 hours before, with a calendar file'},
+    ],
     rows: [
       {name: 'Invite sent', status: 'Done', tone: 'success'},
       {name: 'Reminder, 24 hours before', status: 'Scheduled', tone: 'info'},
       {name: 'Live poll', status: 'Draft', tone: 'warning'},
+    ],
+  },
+  /** The search box under the headline and its quick filters (links into `/events/`). */
+  search: {
+    placeholder: 'Search events by name',
+    quick: [
+      {label: 'All events', href: '/events/'},
+      {label: 'This week', href: '/events/?when=week'},
+      {label: 'Online', href: '/events/?format=online'},
+      {label: 'In person', href: '/events/?format=in_person'},
     ],
   },
   features: {
@@ -99,8 +118,17 @@ export const HOME = {
     ],
   },
   /** The next public events, loaded in the browser (the home page is static). */
-  events: {title: 'Upcoming events', link: 'All events'},
+  events: {title: 'Upcoming events', link: 'Browse all events'},
   blog: {title: 'Latest from the blog', link: 'All posts'},
+  audience: {
+    eyebrow: 'Who it is for',
+    title: 'Come to an event, or host your own',
+    cards: [
+      {title: 'I want to attend', body: 'Browse what is coming up, RSVP on your phone and get a reminder with a calendar file. No account needed.', href: '/events/', cta: 'Browse events'},
+      {title: 'I want to host', body: 'Create a branded event page, send invites, run a waitlist and a live poll, and keep your guest list.', href: '/account/register/', cta: 'Create an account'},
+      {title: 'I want to learn more', body: 'Read how creators run better events, or find out who is behind {name}.', href: '/about/', cta: 'About us'},
+    ],
+  },
   faq: {
     eyebrow: 'Questions',
     title: 'Questions, answered',
@@ -134,6 +162,24 @@ export const HOME = {
 export const ABOUT = {
   title: 'About {name}',
   lede: 'An event platform for creators: invites, RSVPs, reminders and live polls behind one link.',
+  /** The strip under the hero: facts from how the product works, no invented numbers. */
+  stats: [
+    {value: '30s', label: 'for a guest to reply'},
+    {value: '0', label: 'accounts guests need'},
+    {value: '1', label: 'link per event'},
+    {value: 'CSV', label: 'export, any time'},
+  ],
+  /** Three principles, shown as cards (`icon`: a name in `src/components/home/Icon.astro`). */
+  values: {
+    eyebrow: 'What we care about',
+    title: 'Built around three promises',
+    items: [
+      {icon: 'user', title: 'Guests first', body: 'No sign-up wall, no app to install. A guest opens the link and replies on their phone.'},
+      {icon: 'shield', title: 'Your data, your list', body: 'Every guest lands in your own contacts with their consent. You decide where it goes.'},
+      {icon: 'bell', title: 'Nothing falls through', body: 'Reminders, a waitlist and check-in are built in, so a full room stays full.'},
+    ],
+  },
+  cta: {title: 'Ready to host your next event?', body: 'Create your account and send your first invites today.', primary: 'Create an account', secondary: 'Browse events'},
   sections: [
     {
       heading: 'What it is',
@@ -152,6 +198,20 @@ export const ABOUT = {
       body: 'Browse the upcoming events and RSVP, or create an account to host your own.',
     },
   ],
+};
+
+/** The brand panel beside the sign-in and sign-up forms (`src/components/AuthShell.astro`). */
+export const AUTH = {
+  login: {
+    eyebrow: '{name} for creators',
+    title: 'Welcome back. Your next full room is waiting.',
+    points: ['See who has replied to your invites', 'Run check-in and live polls from your phone', 'Your guest list stays yours'],
+  },
+  register: {
+    eyebrow: 'Host on {name}',
+    title: 'Set up your first event in minutes.',
+    points: ['A branded event page with one clear RSVP button', 'Email invites, reminders and a waitlist built in', 'Guests reply in under 30 seconds, with no account'],
+  },
 };
 
 /** Fill `{name}` with the site's name. */

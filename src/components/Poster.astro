@@ -5,8 +5,10 @@
  * reads the same as a 120px thumbnail or a 480px cover. The palette is a class (`poster-pal-*`)
  * and the fitted headline size a class (`poster-fs-N`): the CSP forbids style attributes.
  */
+import {POSTER_HEX} from '../lib/event-schemas';
 import {
   defaultPalette,
+  paletteClass,
   headlineStep,
   isPosterDesign,
   posterFor,
@@ -21,7 +23,7 @@ interface Props {
   /** The event's words; omit for the design's sample copy. */
   text?: PosterText;
   /** Omit for the design's own palette. */
-  palette?: PosterPalette | null;
+  palette?: PosterPalette | string | null;
   class?: string;
   /** Decorative in galleries; pass a label when the poster is the event cover. */
   label?: string;
@@ -34,13 +36,15 @@ const design: PosterDesign = isPosterDesign(rawDesign) ? rawDesign : posterFor(s
 const text = rawText ?? sampleText[design];
 const step = headlineStep(design, text.headline);
 const pal = palette ?? defaultPalette[design];
+const customColor = POSTER_HEX.test(pal) ? pal : undefined;
 const line = [text.eyebrow, text.footer].filter(Boolean).join(' · ');
 const dots = Array.from({length: 10}, (_, i) => i < 7);
 const star = 'M50 0 61 32 95 25 70 50 95 75 61 68 50 100 39 68 5 75 30 50 5 25 39 32Z';
 ---
 
 <div
-  class:list={['poster', `poster-pal-${pal}`, `poster-${design}`, className]}
+  class:list={['poster', paletteClass(pal), `poster-${design}`, className]}
+  data-poster-color={customColor}
   role={label ? 'img' : undefined}
   aria-label={label}
   aria-hidden={label ? undefined : 'true'}>
@@ -113,3 +117,12 @@ const star = 'M50 0 61 32 95 25 70 50 95 75 61 68 50 100 39 68 5 75 30 50 5 25 3
     )
   }
 </div>
+
+<script>
+  import {applyPosterColor} from '../lib/posters';
+
+  // A custom colour is set through CSSOM (the CSP forbids style attributes).
+  document.addEventListener('astro:page-load', () => {
+    document.querySelectorAll<HTMLElement>('[data-poster-color]').forEach(el => applyPosterColor(el, el.dataset.posterColor));
+  });
+</script>

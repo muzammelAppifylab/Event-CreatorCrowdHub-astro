@@ -18,6 +18,10 @@ export const FONT_PRESETS = ['inter', 'serif', 'rounded'] as const;
 export const REMINDER_KINDS = ['confirmation', 'reminder', 'live_now', 'thank_you'] as const;
 export const POSTER_DESIGNS = ['breakfast', 'launch', 'ama', 'mastermind', 'workshop', 'kickoff'] as const;
 export const POSTER_PALETTES = ['butter', 'cobalt', 'night', 'plum', 'tomato', 'mint', 'cream', 'teal', 'pink'] as const;
+/** The six colour sets the cover picker offers (the others still render on events that saved them). */
+export const POSTER_PRESETS = ['butter', 'cobalt', 'night', 'plum', 'tomato', 'mint'] as const;
+/** A custom poster colour: `#rrggbb`, stored lower-cased. */
+export const POSTER_HEX = /^#[0-9a-f]{6}$/;
 export const SUPPORTED_CURRENCIES = [
   'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'NZD', 'CHF', 'SEK', 'NOK', 'DKK', 'SGD', 'HKD', 'INR', 'MXN', 'BRL', 'ZAR', 'PLN', 'AED',
 ] as const;
@@ -73,7 +77,8 @@ export type FieldErrors = Record<string, string>;
 export type Parsed<T> = {ok: true; value: T} | {ok: false; fields: FieldErrors};
 
 export interface CoverStyle {
-  palette?: PosterPalette;
+  /** A colour set name, or a custom `#rrggbb` background. */
+  palette?: PosterPalette | string;
   headline?: string;
   eyebrow?: string;
   footer?: string;
@@ -256,7 +261,8 @@ function parseCoverStyle(c: Collector, v: unknown): CoverStyle | null | undefine
   const out: CoverStyle = {};
   if (v.palette !== undefined && v.palette !== null && v.palette !== '') {
     if (isIn(POSTER_PALETTES, v.palette)) out.palette = v.palette;
-    else c.fail('coverStyle', 'Pick one of the colour sets.');
+    else if (typeof v.palette === 'string' && POSTER_HEX.test(v.palette.toLowerCase())) out.palette = v.palette.toLowerCase();
+    else c.fail('coverStyle', 'Pick one of the colour sets or a custom colour.');
   }
   for (const [key, max] of [['headline', 80], ['eyebrow', 40], ['footer', 60]] as const) {
     const s = optText(c, 'coverStyle', v[key], max, `the poster ${key}`);
@@ -339,7 +345,8 @@ export function parseEventFields(raw: unknown, partial: boolean): Parsed<Partial
   };
 
   if (need('title')) set('title', text(c, 'title', raw.title, {min: 1, max: 120, label: 'a title'}));
-  if (has('slug') && raw.slug !== null && raw.slug !== '') {
+  if (partial && (raw.slug === '' || (typeof raw.slug === 'string' && !raw.slug.trim()))) c.fail('slug', 'Enter a link, or keep the current one.');
+  else if (has('slug') && raw.slug !== null && raw.slug !== '') {
     const slug = typeof raw.slug === 'string' ? raw.slug.trim().toLowerCase() : '';
     const err = slug ? slugError(slug) : 'Use lowercase letters, numbers and hyphens only.';
     if (err) c.fail('slug', err);
@@ -603,7 +610,7 @@ export const DEFAULT_RULE_COPY: Record<ReminderKind, Omit<ReminderRuleValues, 'k
   reminder: {
     offsetMinutes: -24 * 60,
     subject: 'Tomorrow: {{event.title}}',
-    body: 'Hi {{guest.first_name}},\n\nA quick reminder that {{event.title}} starts {{event.start_local}}.\n\nCan’t make it any more? Update your RSVP: {{rsvp.manage_url}}',
+    body: 'Hi {{guest.first_name}},\n\nA quick reminder that {{event.title}} starts {{event.start_local}}.\n\nTaking part in the live poll? Join with this link when we start: {{poll.join_url}}\n\nCan’t make it any more? Update your RSVP: {{rsvp.manage_url}}',
   },
   live_now: {
     offsetMinutes: 0,
@@ -702,6 +709,8 @@ export interface CancelPreview {
 }
 
 export interface EventSettingsDto extends EventSettingsValues {
+  /** Public link of the creator's own logo; null = the site logo is used. */
+  logoUrl?: string | null;
   updatedAt: string | null;
 }
 

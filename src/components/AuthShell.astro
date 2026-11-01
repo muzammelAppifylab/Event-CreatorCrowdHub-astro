@@ -1,0 +1,48 @@
+---
+/**
+ * The frame of every /account/* page: a brand panel (desktop only) beside the form, as in the
+ * split sign-in screens of Replit, Square and Sprig. The page's own form goes in the default slot.
+ * Words in `AUTH` (`src/content/site.ts`); the site name fills `{name}`.
+ */
+import '../styles/auth.css';
+
+import {AUTH, withName} from '../content/site';
+
+interface Props {
+  /** Which message the panel carries: `register` sells hosting, the others welcome people back. */
+  variant?: 'login' | 'register';
+  name?: string;
+}
+
+const {variant = 'login', name = 'My site'} = Astro.props;
+const copy = AUTH[variant];
+---
+
+<main id="main" tabindex="-1" class="auth-shell">
+  <aside class="auth-panel" aria-hidden="true">
+    <div class="auth-panel-in">
+      <p class="auth-panel-eyebrow" data-brand-text={copy.eyebrow}>{withName(copy.eyebrow, name)}</p>
+      <h2>{copy.title}</h2>
+      <ul class="auth-points">
+        {
+          copy.points.map(point => (
+            <li>
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+              {point}
+            </li>
+          ))
+        }
+      </ul>
+      <div class="auth-tiles">
+        <span class="auth-tile auth-tile-a"><b>Fri 13 Nov</b>Launch party</span>
+        <span class="auth-tile auth-tile-b"><b>Going</b>42</span>
+        <span class="auth-tile auth-tile-c"><b>Waitlist</b>4</span>
+      </div>
+    </div>
+  </aside>
+  <section class="auth-main">
+    <div class="auth-card">
+      <slot />
+    </div>
+  </section>
+</main>

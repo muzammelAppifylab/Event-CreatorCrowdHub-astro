@@ -22,7 +22,7 @@ export type EventAnalyticsData = {
   generatedAt: string;
   ended: boolean;
   views: number;
-  rsvps: {total: number; going: number; maybe: number; checkedIn: number};
+  rsvps: {total: number; going: number; maybe: number; waitlisted: number; checkedIn: number};
   conversion: Ratio;
   showRate: Ratio;
   viewsByDay: {date: string; views: number}[];

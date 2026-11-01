@@ -4,17 +4,18 @@ import {Link} from '@tanstack/react-router';
 import {healthQuery, siteQuery} from '../queries';
 import {formatInZone} from '../../domain/time';
 import {type OverviewData, overviewQuery} from '../overview-queries';
+import {formatChange} from '../overview-format';
 import {ago, useMe, when} from '../shared';
 import {RefundsCard} from './refunds-card';
-import {Badge, buttonClass, Card, type Column, DataTable, EmptyState, ErrorNote, Icon, LoadingBlock, Notice, PageHeader, Stat} from '../ui';
+import {Badge, buttonClass, Card, EmptyState, ErrorNote, Icon, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
+
+type Window = NonNullable<OverviewData['last30']>;
+type UpcomingRow = OverviewData['events'][number];
 
 /**
- * `/` of the dashboard: a greeting, what needs attention, stat tiles, a
- * setup checklist for whoever runs the site, then recent activity. Every
- * number is cheap (a first page, never a count): docs/agent/performance.md.
- *
- * Make it YOURS: swap the tiles for the numbers your app is about (bookings
- * today, open orders), each from a first page or a counter kept on write.
+ * `/` of the dashboard. Top to bottom: the last 30 days against the 30 before (KPI tiles, as in
+ * Cal.com Insights), then what needs doing next to the events coming up (Luma's "at a glance"),
+ * then the newest RSVPs. Every number is cheap (a first page, never a count): performance.md.
  */
 export function Overview() {
   const me = useMe();
@@ -32,8 +33,8 @@ export function Overview() {
   return (
     <div className="app-page screen-overview">
       <PageHeader
-        title="Dashboard"
-        description={`Here is what is happening on ${site.data?.site?.name ?? 'your site'}${firstName ? `, ${firstName}` : ''}.`}
+        title={firstName ? `Welcome back, ${firstName}` : 'Overview'}
+        description={`Here is what is happening on ${site.data?.site?.name ?? 'your site'}.`}
         actions={
           <>
             <a className={buttonClass({variant: 'secondary'})} href="/">
@@ -82,7 +83,7 @@ export function Overview() {
       {events.isPending && events.fetchStatus !== 'idle' && <LoadingBlock rows={2} />}
       {abilities?.manageEvents && noEvents && (
         <EmptyState
-          icon="clock"
+          icon="calendar"
           title="Create your first event"
           action={
             <Link className={buttonClass()} to={'/events/new' as never}>
@@ -95,9 +96,12 @@ export function Overview() {
       )}
       {abilities?.manageEvents && ev && !noEvents && (
         <>
+          <Kpis data={ev.last30} upcoming={ev.totals.upcomingEvents} more={ev.totals.hasMore} />
+
           <div className="grid-main-side screen-overview-split">
             <Card
               title="Upcoming events"
+              description="Published and not yet ended."
               flush
               actions={
                 <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to={'/events' as never}>
@@ -106,7 +110,11 @@ export function Overview() {
                 </Link>
               }>
               {upcoming.length ? (
-                <DataTable caption="Upcoming events" columns={upcomingColumns} rows={upcoming} rowKey={e => e.id} />
+                <ul className="event-rows">
+                  {upcoming.map(e => (
+                    <EventRow key={e.id} event={e} />
+                  ))}
+                </ul>
               ) : (
                 <div className="card-body">
                   <p className="muted">
@@ -115,100 +123,129 @@ export function Overview() {
                 </div>
               )}
             </Card>
-            <div className="stat-stack">
-              <Stat label="Upcoming events" icon="clock" value={String(ev.totals.upcomingEvents) + (ev.totals.hasMore ? '+' : '')} hint="Published, not yet ended" to="/events" />
-              <Stat label="Going" icon="users" value={String(ev.totals.going)} hint="Confirmed seats" />
-              <Stat label="Waitlisted" icon="clock" value={String(ev.totals.waitlisted)} hint="Across upcoming events" />
-              <Stat label="Awaiting approval" icon="inbox" value={String(ev.totals.pending)} hint="Pending RSVPs" />
+
+            <div className="side-stack">
+              <Card title="Needs your attention" description="Across all upcoming events.">
+                <ul className="attention-list">
+                  <Attention icon="inbox" count={ev.totals.pending} label="Awaiting approval" empty="No pending RSVPs" />
+                  <Attention icon="clock" count={ev.totals.waitlisted} label="On a waitlist" empty="Nobody waiting" />
+                  <Attention icon="users" count={ev.totals.going} label="Confirmed to attend" tone="neutral" empty="No confirmed guests yet" />
+                </ul>
+              </Card>
+
+              <Card title="Recent RSVPs" flush>
+                {ev.recent.length ? (
+                  <ul className="list">
+                    {ev.recent.map(r => (
+                      <li key={r.id} className="list-row">
+                        <span className="list-row-icon">
+                          <Icon name="users" size={16} />
+                        </span>
+                        <div className="list-row-text">
+                          <p className="list-row-title">
+                            {r.name} <span className="muted">· {r.status.replaceAll('_', ' ')}</span>
+                          </p>
+                          <p className="list-row-sub">{r.eventTitle}</p>
+                        </div>
+                        <time className="list-row-end" dateTime={r.createdAt} title={when(r.createdAt)}>
+                          {ago(r.createdAt)}
+                        </time>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyState icon="users" title="No RSVPs yet">
+                    Responses to your upcoming events will show here.
+                  </EmptyState>
+                )}
+              </Card>
             </div>
           </div>
-          <Card
-            title="Recent RSVPs"
-            description="Newest responses to upcoming events."
-            flush
-            actions={
-              <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to={'/events' as never}>
-                View all
-                <Icon name="arrow-right" size={16} />
-              </Link>
-            }>
-            {ev.recent.length ? (
-              <ul className="list">
-                {ev.recent.map(r => (
-                  <li key={r.id} className="list-row">
-                    <span className="list-row-icon">
-                      <Icon name="users" size={16} />
-                    </span>
-                    <div className="list-row-text">
-                      <p className="list-row-title">
-                        {r.name} <span className="muted">· {r.status.replaceAll('_', ' ')}</span>
-                      </p>
-                      <p className="list-row-sub">{r.eventTitle}</p>
-                    </div>
-                    <time className="list-row-end" dateTime={r.createdAt} title={when(r.createdAt)}>
-                      {ago(r.createdAt)}
-                    </time>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <EmptyState icon="users" title="No RSVPs yet">
-                Responses to your upcoming events will show here.
-              </EmptyState>
-            )}
-          </Card>
         </>
       )}
     </div>
   );
 }
 
-type UpcomingRow = OverviewData['events'][number];
-
-const HUB_LINKS = [
-  {tab: 'guests', label: 'Guests'},
-  {tab: 'invites', label: 'Invites'},
-  {tab: 'messages', label: 'Messages'},
-  {tab: 'polls', label: 'Polls'},
-  {tab: 'checkin', label: 'Check-in'},
-  {tab: 'analytics', label: 'Analytics'},
+const KPI_ROWS = [
+  {key: 'rsvps', label: 'RSVPs', icon: 'users'},
+  {key: 'views', label: 'Page views', icon: 'trending-up'},
+  {key: 'checkins', label: 'Check-ins', icon: 'check-circle'},
 ] as const;
 
-const upcomingColumns: Column<UpcomingRow>[] = [
-  {
-    key: 'event',
-    header: 'Event',
-    cell: e => (
-      <span className="cell-title">
-        <Link to={`/events/${e.id}` as never}>{e.title}</Link>
+/** The last window against the one before it, as a tile each: the number, and the change. */
+function Kpis({data, upcoming, more}: {data: Window | undefined; upcoming: number; more: boolean}) {
+  const fmt = new Intl.NumberFormat();
+  return (
+    <div className="stat-grid kpi-grid">
+      {KPI_ROWS.map(row => {
+        const now = data?.current[row.key];
+        const before = data?.previous[row.key];
+        const change = data && before !== undefined && before > 0 ? formatChange(now ?? 0, before) : null;
+        return (
+          <Stat
+            key={row.key}
+            label={row.label}
+            icon={row.icon}
+            value={data ? fmt.format(now ?? 0) : '–'}
+            trend={change ? {label: change, direction: (now ?? 0) >= (before ?? 0) ? 'up' : 'down'} : undefined}
+            hint={data ? `Last ${data.windowDays} days` : 'No data yet'}
+          />
+        );
+      })}
+      <Stat label="Upcoming events" icon="calendar" value={`${upcoming}${more ? '+' : ''}`} hint="Published, not yet ended" to="/events" />
+    </div>
+  );
+}
+
+function Attention({icon, count, label, empty, tone = 'warning'}: {icon: 'inbox' | 'clock' | 'users'; count: number; label: string; empty: string; tone?: 'warning' | 'neutral'}) {
+  return (
+    <li className="attention-item" data-empty={count === 0 ? '' : undefined}>
+      <span className="attention-icon">
+        <Icon name={icon} size={16} />
       </span>
-    ),
-  },
-  {key: 'when', header: 'When', width: 'shrink', cell: e => <time dateTime={e.startAt}>{formatInZone(new Date(e.startAt), e.timezone)}</time>},
-  {
-    key: 'going',
-    header: 'Going',
-    width: 'shrink',
-    cell: e => (
-      <span>
-        {e.capacity !== null && e.going >= e.capacity && <Badge tone="warning">Full</Badge>}{' '}
-        <strong>{e.going}</strong>
-        <span className="muted"> / {e.capacity === null ? 'no limit' : e.capacity}</span>
-      </span>
-    ),
-  },
-  {
-    key: 'links',
-    header: 'Manage',
-    hideOnMobile: true,
-    cell: e => (
-      <span className="badges">
-        {HUB_LINKS.map(l => (
-          <Link key={l.tab} className={buttonClass({variant: 'ghost', size: 'sm'})} to={`/events/${e.id}` as never} search={{tab: l.tab} as never}>
-            {l.label}
-          </Link>
-        ))}
-      </span>
-    ),
-  },
-];
+      <span className="attention-text">{count === 0 ? empty : label}</span>
+      {count > 0 && <Badge tone={tone}>{count}</Badge>}
+    </li>
+  );
+}
+
+const MONTH = (iso: string, timeZone: string) => new Intl.DateTimeFormat('en', {month: 'short', timeZone}).format(new Date(iso));
+const DAY = (iso: string, timeZone: string) => new Intl.DateTimeFormat('en', {day: 'numeric', timeZone}).format(new Date(iso));
+
+/** One upcoming event: a date block, the title and time, seats taken, and the two jumps people want. */
+function EventRow({event: e}: {event: UpcomingRow}) {
+  const full = e.capacity !== null && e.going >= e.capacity;
+  return (
+    <li className="event-row">
+      <div className="event-date" aria-hidden="true">
+        <span className="event-date-month">{MONTH(e.startAt, e.timezone)}</span>
+        <span className="event-date-day">{DAY(e.startAt, e.timezone)}</span>
+      </div>
+      <div className="event-row-main">
+        <Link className="event-row-title" to={`/events/${e.id}` as never}>
+          {e.title}
+        </Link>
+        <time className="event-row-sub" dateTime={e.startAt}>
+          {formatInZone(new Date(e.startAt), e.timezone)}
+        </time>
+        <div className="event-row-seats">
+          {e.capacity !== null ? <ProgressBar value={e.going} max={e.capacity} label={`${e.going} of ${e.capacity} seats taken`} /> : null}
+          <span className="event-row-count">
+            <strong>{e.going}</strong>
+            <span className="muted"> {e.capacity === null ? 'going' : `/ ${e.capacity} going`}</span>
+            {full && <Badge tone="warning">Full</Badge>}
+          </span>
+        </div>
+      </div>
+      <div className="event-row-actions">
+        <Link className={buttonClass({variant: 'secondary', size: 'sm'})} to={`/events/${e.id}` as never} search={{tab: 'guests'} as never}>
+          Guests
+        </Link>
+        <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to={`/events/${e.id}` as never}>
+          Manage
+        </Link>
+      </div>
+    </li>
+  );
+}

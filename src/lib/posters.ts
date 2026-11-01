@@ -3,7 +3,7 @@
  * `components/shared/InvitePoster.tsx`. Dependency-free and browser-safe: the artwork itself is
  * `src/components/Poster.astro` + `src/styles/public.css` (classes `.poster*`).
  */
-import {POSTER_DESIGNS, POSTER_PALETTES, type CoverStyle, type PosterDesign, type PosterPalette} from './event-schemas';
+import {POSTER_DESIGNS, POSTER_HEX, POSTER_PALETTES, type CoverStyle, type PosterDesign, type PosterPalette} from './event-schemas';
 
 export type {CoverStyle, PosterDesign, PosterPalette};
 export {POSTER_DESIGNS as posterDesigns, POSTER_PALETTES as posterPalettes};
@@ -28,6 +28,31 @@ export const paletteLabel: Record<PosterPalette, string> = {
   pink: 'Pink',
 };
 
+/** Class for a palette value: a named set, or `poster-pal-custom` for a `#rrggbb` colour. */
+export function paletteClass(palette: string): string {
+  return POSTER_HEX.test(palette) ? 'poster-pal-custom' : `poster-pal-${palette}`;
+}
+
+/**
+ * Colours for a custom background: readable ink (black or white by luminance). Applied with
+ * `style.setProperty` (CSSOM, allowed by the CSP; a style attribute is not).
+ */
+export function applyPosterColor(el: HTMLElement, hex: string | null | undefined): void {
+  const vars = ['--pb', '--pi', '--ps', '--pa', '--po'];
+  if (!hex || !POSTER_HEX.test(hex)) {
+    for (const name of vars) el.style.removeProperty(name);
+    return;
+  }
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+  const light = (0.299 * r! + 0.587 * g! + 0.114 * b!) / 255 > 0.6;
+  const ink = light ? 'black' : 'white';
+  el.style.setProperty('--pb', hex);
+  el.style.setProperty('--pi', ink);
+  el.style.setProperty('--ps', ink);
+  el.style.setProperty('--pa', ink);
+  el.style.setProperty('--po', hex);
+}
+
 /** The palette each design was drawn in; used when the creator has not picked one. */
 export const defaultPalette: Record<PosterDesign, PosterPalette> = {
   breakfast: 'butter',
@@ -46,6 +71,56 @@ export const sampleText: Record<PosterDesign, PosterText> = {
   workshop: {eyebrow: '$49 · Saturday', headline: 'Pricing Workshop', footer: '30 seats · In person'},
   kickoff: {eyebrow: 'Cohort 07', headline: 'Kickoff party', footer: 'Bring a goal. Leave with a crew.'},
 };
+
+/** The text style of each layout, in words a host can choose by. */
+export const designInfo: Record<PosterDesign, {name: string; style: string}> = {
+  breakfast: {name: 'Bold stack', style: 'Tall condensed capitals'},
+  launch: {name: 'Big modern', style: 'Heavy sans over a star'},
+  ama: {name: 'Loud & tidy', style: 'Capitals with a pill'},
+  mastermind: {name: 'Elegant serif', style: 'Centred, calm, formal'},
+  workshop: {name: 'Workshop', style: 'Capitals with seat dots'},
+  kickoff: {name: 'Friendly round', style: 'Soft rounded letters'},
+};
+
+export interface CoverTemplate {
+  id: string;
+  name: string;
+  design: PosterDesign;
+  palette: PosterPalette;
+}
+
+/** Ready-made looks: a layout in a colour set that suits it. One click sets both. */
+export const COVER_TEMPLATES: readonly CoverTemplate[] = [
+  {id: 'sunny', name: 'Sunny', design: 'breakfast', palette: 'butter'},
+  {id: 'launch', name: 'Launch night', design: 'launch', palette: 'cobalt'},
+  {id: 'midnight', name: 'Midnight', design: 'ama', palette: 'night'},
+  {id: 'salon', name: 'Salon', design: 'mastermind', palette: 'plum'},
+  {id: 'hot', name: 'Hot workshop', design: 'workshop', palette: 'tomato'},
+  {id: 'fresh', name: 'Fresh', design: 'kickoff', palette: 'mint'},
+  {id: 'classic', name: 'Classic', design: 'mastermind', palette: 'cream'},
+  {id: 'teal-talk', name: 'Teal talk', design: 'ama', palette: 'teal'},
+  {id: 'pink-pop', name: 'Pink pop', design: 'kickoff', palette: 'pink'},
+  {id: 'neon', name: 'Neon launch', design: 'launch', palette: 'night'},
+];
+
+/** What each poster line is for, with an example in the chosen layout's voice. */
+export const POSTER_LINES = {
+  eyebrow: {
+    label: 'Top line',
+    hint: 'When or what kind: a date, "Invite only", "Live on Zoom".',
+    max: 40,
+  },
+  headline: {
+    label: 'Headline',
+    hint: 'The event name in a few words. Long titles shrink to fit.',
+    max: 80,
+  },
+  footer: {
+    label: 'Bottom line',
+    hint: 'Where, who or a hook: the venue, seats left, a tagline.',
+    max: 60,
+  },
+} as const;
 
 export function isPosterDesign(value: unknown): value is PosterDesign {
   return typeof value === 'string' && (POSTER_DESIGNS as readonly string[]).includes(value);

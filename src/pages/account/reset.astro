@@ -4,6 +4,7 @@
  * minutes). PRERENDERED; the script takes the token out of the address bar
  * first and posts it to `/site-api/auth/reset-password`.
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -13,8 +14,7 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Choose a new password">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="login" name={site?.name}>
       <h1>Choose a new password</h1>
       <p class="notice notice-error" data-no-token hidden>
         This link is incomplete. Open the link from the email again, or <a href="/account/forgot/">ask for a new one</a>.
@@ -39,8 +39,7 @@ const {site, viewer} = await staticContext(Astro.request);
         <p class="notice" data-form-status hidden></p>
         <button class="button" type="submit">Save the new password</button>
       </form>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>

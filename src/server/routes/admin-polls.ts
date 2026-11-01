@@ -32,6 +32,7 @@ import {
  *   POST   /polls/:pollId/close           close it
  *   GET    /polls/:pollId/results         its results
  *   GET    /polls/:pollId/results.csv     its votes as CSV (10,000 rows at most; audited)
+ *   GET    /polls/event/:eventId/results.csv  all the event's polls as one CSV (same cap; audited)
  *
  * Order (polls and options) is carried by their ids (`orderedUuid`): the schema has no sort column.
  * One open poll per event is enforced by the partial unique index `polls_one_open_per_event_uq`.
@@ -49,20 +50,36 @@ export type ExportVote = {
   email?: string | null;
 };
 
+function voteAnswer(type: PollType, labels: Map<string, string>, v: ExportVote): CsvValue {
+  const ids = Array.isArray(v.optionIds) ? v.optionIds.filter((x): x is string => typeof x === 'string') : [];
+  if (type === 'rating') return v.ratingValue ?? '';
+  if (type === 'short_text') return v.textValue ?? '';
+  return ids.map(id => labels.get(id) ?? '').filter(Boolean).join('; ');
+}
+
 /** One row per vote: question, answer, time (UTC); the guest email column only for non-anonymous polls. */
 export function pollVotesCsv(poll: {question: string; type: PollType; anonymous: boolean}, labels: Map<string, string>, votes: ExportVote[]): string {
   const header: CsvValue[] = ['Poll', 'Answer', 'Submitted at (UTC)', ...(poll.anonymous ? [] : ['Guest email'])];
   const rows = votes.map((v): CsvValue[] => {
-    const ids = Array.isArray(v.optionIds) ? v.optionIds.filter((x): x is string => typeof x === 'string') : [];
-    const answer =
-      poll.type === 'rating'
-        ? (v.ratingValue ?? '')
-        : poll.type === 'short_text'
-          ? (v.textValue ?? '')
-          : ids.map(id => labels.get(id) ?? '').filter(Boolean).join('; ');
-    return [poll.question, answer, (v.updatedAt ?? v.createdAt).toISOString(), ...(poll.anonymous ? [] : [v.email ?? ''])];
+    const answer = voteAnswer(poll.type, labels, v);
+    return [poll.question, answer,(v.updatedAt ?? v.createdAt).toISOString(), ...(poll.anonymous ? [] : [v.email ?? ''])];
   });
   return toCsv([header, ...rows]);
+}
+
+/** All polls of an event in one sheet: one row per vote, polls in builder order; emails only on non-anonymous polls. */
+export function eventVotesCsv(
+  polls: {id: string; question: string; type: PollType; anonymous: boolean}[],
+  labels: Map<string, string>,
+  votes: (ExportVote & {pollId: string})[]
+): string {
+  const rows: CsvValue[][] = [['Poll', 'Answer', 'Submitted at (UTC)', 'Guest email']];
+  for (const poll of polls) {
+    for (const v of votes.filter(x => x.pollId === poll.id)) {
+      rows.push([poll.question, voteAnswer(poll.type, labels, v), (v.updatedAt ?? v.createdAt).toISOString(), poll.anonymous ? '' : (v.email ?? '')]);
+    }
+  }
+  return toCsv(rows);
 }
 
 export const POLL_MIN_OPTIONS = 2;
@@ -153,6 +170,34 @@ export const adminPollRoutes = new Hono()
     if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
     c.header('Cache-Control', 'private, no-store');
     return c.json(await listFor(c.var.db, event));
+  })
+
+  .get('/event/:eventId/results.csv', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+    const db = c.var.db;
+    const id = c.req.param('eventId');
+    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}) : null;
+    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
+    const polls = (await db.poll.findMany({where: {eventId: event.id}, select: pollSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}], take: 200})) as PollRow[];
+    const [options, fetched] = await Promise.all([
+      optionsOf(db, polls.map(p => p.id)),
+      db.pollVote.findMany({
+        where: {pollId: {in: polls.map(p => p.id)}},
+        orderBy: {createdAt: 'asc'},
+        take: POLL_EXPORT_MAX_ROWS + 1,
+        select: {pollId: true, optionIds: true, ratingValue: true, textValue: true, createdAt: true, updatedAt: true, rsvp: {select: {email: true}}},
+      }),
+    ]);
+    const truncated = fetched.length > POLL_EXPORT_MAX_ROWS;
+    const votes = (truncated ? fetched.slice(0, POLL_EXPORT_MAX_ROWS) : fetched).map(v => ({...v, email: v.rsvp?.email ?? null}));
+    const csv = eventVotesCsv(polls, new Map(options.map(o => [o.id, o.label])), votes);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_results_exported', target: ['event', event.id], meta: {polls: polls.length, rows: votes.length, truncated}});
+    c.header('Cache-Control', 'private, no-store');
+    return c.body(csv, 200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': attachmentHeader(`poll-votes-${event.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`),
+      'Cache-Control': 'private, no-store',
+      'X-Export-Truncated': truncated ? '1' : '0',
+    });
   })
 
   .get('/by-code/:code', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
@@ -251,7 +296,10 @@ export const adminPollRoutes = new Hono()
           await tx.poll.update({where: {id: poll.id}, data: {status: 'open', openedAt: now, closedAt: null}});
           return others;
         });
-        for (const other of closed) invalidateResults(other.id);
+        for (const other of closed) {
+          invalidateResults(other.id);
+          emitWebhook(c, db, 'poll.closed', pollClosedPayload({id: other.id, eventId: poll.eventId}));
+        }
       } catch (error) {
         // Two presenters opened polls at the same instant; the partial unique index kept one.
         if (isUnique(error)) return c.json(problem('conflict', 'Another poll was opened at the same moment. Try again.'), 409);

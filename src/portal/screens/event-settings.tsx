@@ -17,13 +17,16 @@ import {
   type ReminderRuleValues,
   timeZoneOptions,
 } from '../../lib/event-schemas';
+import {LOGO_RULE, LOGO_TYPES, parseLogoUpload} from '../../lib/event-brand';
+import {putFile} from '../../platform/files-browser';
 import {api, ApiError, read} from '../api';
 import {eventSettingsQuery, fieldAria, focusFirstInvalid} from '../events-queries';
 import {useState as useTabState} from 'react';
 import type {PaidTicketRow, PaymentsStatusDto, PriceStatus} from '../../server/payments-status';
 import {BrandPreview, PosterPicker} from './branding-preview';
+import {DefaultRemindersEditor} from './default-reminders-editor';
 import {siteQuery} from '../queries';
-import {Badge, Button, Card, Checkbox, type Column, DataTable, ErrorNote, Field, IconButton, LoadingBlock, PageHeader, RadioCards, Select, Tabs, useToast} from '../ui';
+import {Badge, Button, Card, Checkbox, type Column, DataTable, ErrorNote, Field, IconButton, LoadingBlock, PageHeader, RadioCards, Select, Tabs, useConfirm, useToast} from '../ui';
 
 const FONT_INFO: Record<FontPreset, {title: string; description: string}> = {
   inter: {title: 'Sans', description: 'Clean and neutral (Inter).'},
@@ -73,7 +76,7 @@ export function EventSettings() {
   const [tab, setTab] = useTabState<'branding' | 'defaults' | 'payments'>('branding');
   return (
     <div className="app-page screen-event-settings">
-      <PageHeader title="Settings" description="How your events look and what new events start with." />
+      <PageHeader title="Branding & defaults" description="How your events look and what new events start with." />
       {query.error && <ErrorNote error={query.error} />}
       {!settings ? (
         !query.error && <LoadingBlock rows={4} />
@@ -89,7 +92,9 @@ export function EventSettings() {
           ]}>
           {/* Both stay mounted so unsaved input survives switching tabs. */}
           <div className="app-page" hidden={tab !== 'branding'}>
-            <BrandingCard key={`b-${settings.updatedAt}`} settings={settings} />
+            <LogoCard settings={settings} />
+            {/* Keyed by its own values (not updatedAt) so a logo change never drops unsaved colour edits. */}
+            <BrandingCard key={`b-${settings.brandColor}-${settings.fontPreset}-${settings.defaultCoverPoster}`} settings={settings} />
           </div>
           <div className="app-page" hidden={tab !== 'defaults'}>
             <DefaultsCard key={`d-${settings.updatedAt}`} settings={settings} />
@@ -146,13 +151,13 @@ function BrandingCard({settings}: {settings: EventSettingsDto}) {
           <RadioCards legend="Font" name="fontPreset" columns={3} value={font} onChange={setFont} options={FONT_PRESETS.map(f => ({value: f, title: FONT_INFO[f].title, description: FONT_INFO[f].description}))} />
           <PosterPicker value={poster} onChange={setPoster} />
           <div className="bp-site">
-            <strong>Site name and logo</strong>
+            <strong>Site name and fallback logo</strong>
             <div className="bp-site-row">
               {site?.logo ? <img className="bp-logo" src={site.logo} alt="" /> : null}
               <span>{siteName}</span>
             </div>
             <p className="muted">
-              These come from the platform and appear on event pages and in emails. They are read-only here. <strong>Change in the platform dashboard</strong>.
+              The name comes from the platform (<strong>change it in the platform dashboard</strong>). Its logo is used on event pages and in emails until you upload your own above.
             </p>
           </div>
           {error && <ErrorNote error={error} />}
@@ -212,64 +217,26 @@ function DefaultsCard({settings}: {settings: EventSettingsDto}) {
   );
 }
 
-type RuleDraft = {kind: ReminderKind; offsetMinutes: string; enabled: boolean; subject: string; body: string};
-const draftOf = (r: ReminderRuleValues): RuleDraft => ({...r, offsetMinutes: String(r.offsetMinutes)});
-
 function EmailsCard({settings}: {settings: EventSettingsDto}) {
   const [errors, setErrors] = useState<FieldErrors>({});
-  const [rules, setRules] = useState<RuleDraft[]>(settings.defaultReminderRules.map(draftOf));
+  const [rules, setRules] = useState<ReminderRuleValues[]>(settings.defaultReminderRules);
   const {save, pending, error} = useSave(setErrors);
-  const update = (index: number, patch: Partial<RuleDraft>) => setRules(current => current.map((r, i) => (i === index ? {...r, ...patch} : r)));
-  const add = (kind: ReminderKind) => {
-    const copy = DEFAULT_RULE_COPY[kind];
-    setRules(current => [...current, {kind, offsetMinutes: String(copy.offsetMinutes), enabled: true, subject: copy.subject, body: copy.body}]);
-  };
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
-    save({defaultReminderRules: rules.map(r => ({kind: r.kind, offsetMinutes: r.offsetMinutes.trim() === '' ? NaN : Number(r.offsetMinutes), enabled: r.enabled, subject: r.subject, body: r.body}))}, ev.currentTarget as HTMLFormElement);
+    save({defaultReminderRules: rules}, ev.currentTarget as HTMLFormElement);
   };
   return (
     <form noValidate onSubmit={submit}>
       <Card
         title="Default emails"
         description={`Copied to every new event, where they can be edited. Up to ${MAX_DEFAULT_REMINDER_RULES}. Existing events keep theirs.`}
-        actions={
-          <Select
-            aria-label="Add an email"
-            value=""
-            disabled={rules.length >= MAX_DEFAULT_REMINDER_RULES}
-            onChange={ev => ev.target.value && add(ev.target.value as ReminderKind)}
-            options={[{value: '', label: 'Add an email…'}, ...REMINDER_KINDS.map(k => ({value: k, label: KIND_LABELS[k]}))]}
-          />
-        }
         footer={
           <Button type="submit" pending={pending} pendingLabel="Saving…">
             Save emails
           </Button>
         }>
         <div className="form-stack">
-          {rules.length === 0 && <p className="muted">No default emails. New events send nothing automatically until you add some.</p>}
-          {rules.map((r, i) => (
-            <div key={i} className="form-stack">
-              <div className="toolbar">
-                <strong>{KIND_LABELS[r.kind]}</strong>
-                <IconButton icon="trash" label={`Remove ${KIND_LABELS[r.kind]}`} size="sm" onClick={() => setRules(current => current.filter((_, at) => at !== i))} />
-              </div>
-              <div className="form-grid">
-                <Field id={`r-${i}-offset`} label="Minutes from the start" hint={offsetLimitMessage(r.kind)} error={errors[`defaultReminderRules.${i}.offsetMinutes`]}>
-                  <input id={`r-${i}-offset`} {...fieldAria(`r-${i}-offset`, errors[`defaultReminderRules.${i}.offsetMinutes`], true)} type="number" inputMode="numeric" value={r.offsetMinutes} disabled={r.kind === 'confirmation'} onChange={ev => update(i, {offsetMinutes: ev.target.value})} />
-                </Field>
-                <Field id={`r-${i}-subject`} label="Subject" error={errors[`defaultReminderRules.${i}.subject`]}>
-                  <input id={`r-${i}-subject`} {...fieldAria(`r-${i}-subject`, errors[`defaultReminderRules.${i}.subject`])} value={r.subject} maxLength={200} onChange={ev => update(i, {subject: ev.target.value})} />
-                </Field>
-              </div>
-              <Field id={`r-${i}-body`} label="Message" hint="Merge tags like {{event.title}} and {{guest.first_name}} work here." error={errors[`defaultReminderRules.${i}.body`]}>
-                <textarea id={`r-${i}-body`} {...fieldAria(`r-${i}-body`, errors[`defaultReminderRules.${i}.body`], true)} rows={5} value={r.body} onChange={ev => update(i, {body: ev.target.value})} />
-              </Field>
-              <Checkbox label="Send this email" checked={r.enabled} onChange={enabled => update(i, {enabled})} />
-            </div>
-          ))}
-          {errors.defaultReminderRules && <p className="field-error" role="alert">{errors.defaultReminderRules}</p>}
+          <DefaultRemindersEditor value={rules} onChange={setRules} error={errors.defaultReminderRules} />
           {error && <ErrorNote error={error} />}
         </div>
       </Card>
@@ -356,6 +323,86 @@ function PaymentsCard({active}: {active: boolean}) {
             <p className="muted">Refunds are issued in the platform dashboard.</p>
           </>
         )}
+      </div>
+    </Card>
+  );
+}
+
+/** The creator's own logo: upload (type and size checked first), replace, remove. Acts immediately, apart from the branding form. */
+function LogoCard({settings}: {settings: EventSettingsDto}) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const confirm = useConfirm();
+  const input = useRef<HTMLInputElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const site = useQuery(siteQuery).data?.site;
+  const logoUrl = settings.logoUrl ?? null;
+  const refresh = () => queryClient.invalidateQueries({queryKey: ['event-settings']});
+
+  const upload = useMutation({
+    mutationFn: async (file: File) => {
+      const checked = parseLogoUpload({name: file.name, contentType: file.type, size: file.size});
+      if (!checked.ok) throw new Error(checked.message);
+      const grant = await read<{fileId: string; upload: Parameters<typeof putFile>[0]}>(api['event-settings'].logo.$post({json: checked.value as never}));
+      const put = await putFile(grant.upload, file);
+      if (!put.ok) throw new Error(put.message);
+      await read(api['event-settings'].logo.complete.$post({json: {fileId: grant.fileId}}));
+    },
+    onSuccess: () => {
+      setError(null);
+      toast.success('Logo updated.');
+      return refresh();
+    },
+    onError: err => setError(err instanceof Error ? err.message : 'The logo could not be uploaded. Try again.'),
+    onSettled: () => {
+      if (input.current) input.current.value = '';
+    },
+  });
+  const remove = useMutation({
+    mutationFn: () => read(api['event-settings'].logo.$delete()),
+    onSuccess: () => {
+      setError(null);
+      toast.success('Logo removed.');
+      return refresh();
+    },
+    onError: err => setError(err instanceof Error ? err.message : 'The logo could not be removed. Try again.'),
+  });
+  const busy = upload.isPending || remove.isPending;
+  const shown = logoUrl ?? site?.logo ?? null;
+
+  return (
+    <Card title="Logo" description="Shown in the header of public event pages and at the top of emails. Without one, the site logo is used.">
+      <div className="form-stack">
+        <div className="bp-site-row">
+          {shown ? <img className="bp-logo" src={shown} alt={logoUrl ? 'Your logo' : 'Site logo'} /> : null}
+          <span className="muted">{logoUrl ? 'Your logo' : shown ? 'Using the site logo' : 'No logo yet'}</span>
+        </div>
+        <div className="toolbar">
+          <input
+            ref={input}
+            id="s-logo"
+            type="file"
+            hidden
+            accept={LOGO_TYPES.join(',')}
+            onChange={ev => {
+              const file = ev.target.files?.[0];
+              if (file) {
+                setError(null);
+                upload.mutate(file);
+              }
+            }}
+          />
+          <Button type="button" variant="secondary" pending={upload.isPending} pendingLabel="Uploading…" disabled={busy} onClick={() => input.current?.click()}>
+            {logoUrl ? 'Replace logo' : 'Upload logo'}
+          </Button>
+          {logoUrl && (
+            <Button type="button" variant="secondary" pending={remove.isPending} pendingLabel="Removing…" disabled={busy} onClick={() => void confirm({title: 'Remove your logo?', body: 'Event pages and emails go back to the site logo.', confirmLabel: 'Remove logo', pendingLabel: 'Removing…', action: () => remove.mutateAsync()})}>
+              Remove logo
+            </Button>
+          )}
+        </div>
+        <p className="muted">{LOGO_RULE}</p>
+        {error && <p className="field-error" role="alert">{error}</p>}
       </div>
     </Card>
   );

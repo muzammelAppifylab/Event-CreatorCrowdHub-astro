@@ -7,7 +7,10 @@ import {
   waitlistOfferEmail,
 } from '../emails';
 import {formatInZone} from '../domain/time';
+import {pollLinkFor} from '../domain/tokens';
+import {logoPath} from '../lib/event-brand';
 import type {PrismaClient} from '../generated/prisma/client';
+import {publicGet} from '../platform/api';
 import {config} from '../platform/config';
 import {sendEventEmail} from './mailer';
 
@@ -98,17 +101,48 @@ export function inviteLink(base: string, token: string, slug?: string): string {
   return slug ? `${link}?e=${encodeURIComponent(slug)}` : link;
 }
 
-/** The creator's sender identity from the one `event_settings` row. */
-export async function loadBrand(db: PrismaClient): Promise<EmailBrand> {
+/** An absolute https address for an email image, or null (relative paths resolve against `base`). */
+function absoluteHttps(url: string | null | undefined, base: string | null): string | null {
+  if (!url) return null;
+  try {
+    const abs = new URL(url, base ?? undefined);
+    return abs.protocol === 'https:' ? abs.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The platform's site logo (same source as the guest header), or null when unavailable. */
+async function siteLogo(requestUrl: string | undefined): Promise<string | null> {
+  const origin = config.siteUrl ?? requestUrl;
+  if (!origin) return null;
+  try {
+    const raw = await publicGet<Record<string, unknown>>(origin, '/site/v1/initial-data', {ttlSeconds: 60});
+    return typeof raw?.logo === 'string' ? raw.logo : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The creator's sender identity from the one `event_settings` row. The logo is the event's own, else
+ * the site logo (as in the guest header); emails need an absolute https address, so with none the
+ * masthead shows the sender name. Pass `requestUrl` when there is no configured site URL.
+ */
+export async function loadBrand(db: Pick<PrismaClient, 'eventSettings'>, requestUrl?: string): Promise<EmailBrand> {
   const settings = await db.eventSettings.findUnique({
     where: {id: 1},
-    select: {senderName: true, replyToEmail: true, brandColor: true},
+    select: {senderName: true, replyToEmail: true, brandColor: true, logoFileId: true, logoName: true},
   });
+  const base = (config.siteUrl ?? (requestUrl ? new URL(requestUrl).origin : null))?.replace(/\/+$/, '') ?? null;
+  const own = settings?.logoFileId ? logoPath({id: settings.logoFileId, name: settings.logoName ?? 'logo'}) : null;
+  let logoUrl = base ? absoluteHttps(own, base) : null;
+  if (!logoUrl) logoUrl = absoluteHttps(await siteLogo(requestUrl), base);
   return {
     senderName: settings?.senderName || 'Your host',
     replyToEmail: settings?.replyToEmail || null,
     brandColor: settings?.brandColor ?? null,
-    logoUrl: null,
+    logoUrl,
   };
 }
 
@@ -117,7 +151,7 @@ export async function loadBrand(db: PrismaClient): Promise<EmailBrand> {
  * guest's "Manage RSVP" link points at the event page, where they can ask for it again.
  */
 export function emailDataFor(base: string, event: MailEvent, guest: MailGuest, brand: EmailBrand, now = new Date()): EmailData {
-  const pageUrl = `${base}/e/${encodeURIComponent(event.slug)}`;
+  const pageUrl = `${base}/e/${encodeURIComponent(event.slug)}/`;
   return {
     now,
     brand,
@@ -133,7 +167,7 @@ export function emailDataFor(base: string, event: MailEvent, guest: MailGuest, b
       mapUrl: event.mapUrl,
       joinUrl: event.joinUrl,
       pageUrl,
-      pollUrl: `${base}/p/${encodeURIComponent(event.pollJoinCode)}`,
+      pollUrl: pollLinkFor(base, event.pollJoinCode, guest.id, event.id, config.jwtSecret, now),
       thankYouLink: event.thankYouLink,
     },
     guest: {
@@ -174,7 +208,7 @@ export async function notifyGuests(
   notices: Array<GuestNotice & {guest: MailGuest}>
 ): Promise<void> {
   if (!notices.length || event.status === 'cancelled') return;
-  const brand = await loadBrand(db);
+  const brand = await loadBrand(db, base);
   for (const notice of notices) {
     const content = noticeContent(base, event, brand, notice);
     const result = await sendMail({

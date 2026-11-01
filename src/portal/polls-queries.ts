@@ -85,6 +85,21 @@ export const POLL_TYPE_LABELS: Record<PollType, {label: string; description: str
 
 export const pollResultsCsvUrl = (pollId: string) => `/site-api/polls/${encodeURIComponent(pollId)}/results.csv`;
 
+export const eventPollsCsvUrl = (eventId: string) => `/site-api/polls/event/${encodeURIComponent(eventId)}/results.csv`;
+
+/** Downloads every poll of an event as one CSV. */
+export async function exportEventPollsCsv(eventId: string, toast: {success: (m: string) => void; danger: (m: string) => void}): Promise<void> {
+  try {
+    const {truncated} = await downloadExport(eventPollsCsvUrl(eventId), 'poll-votes.csv');
+    toast.success(truncated ? 'Exported the first 10,000 votes.' : 'Votes exported.');
+  } catch (err) {
+    toast.danger(err instanceof Error ? err.message : 'The export failed.');
+  }
+}
+
+/** `CZ2BXC` shown as `CZ2-BXC` (the original's display); other lengths are left alone. */
+export const formatJoinCode = (code: string) => (code.length === 6 ? `${code.slice(0, 3)}-${code.slice(3)}` : code);
+
 /** Downloads a poll's votes as CSV; toasts the outcome (`downloadExport` carries the session through `siteFetch`). */
 export async function exportPollCsv(pollId: string, toast: {success: (m: string) => void; danger: (m: string) => void}): Promise<void> {
   try {

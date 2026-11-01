@@ -11,7 +11,7 @@ import {
 } from '../platform/payments';
 import {notifyPromoted} from './jobs/holds';
 import {queueGuestEmail} from './jobs/guest-emails';
-import {emitWebhook, orderPaidPayload} from './webhook-emit';
+import {emitCancelledIds, emitSeated, emitWebhook, orderPaidPayload} from './webhook-emit';
 import {isUniqueViolation, lockEvent, seatsTakenOf, siteBase} from './jobs/shared';
 import {promoteWaitlist} from './jobs/waitlist';
 
@@ -222,11 +222,15 @@ export async function refundedTicket(db: PrismaClient, refund: Refund, now = new
   const result = await db.$transaction(async tx => {
     await lockEvent(tx, order.rsvp.eventId);
     const closed = await tx.ticketOrder.updateMany({where: {id: order.id, status: {in: ['paid', 'refund_due', 'pending', 'expired']}}, data: {status: 'refunded'}});
-    if (closed.count !== 1) return {closed: false, promoted: [] as Awaited<ReturnType<typeof promoteWaitlist>>};
+    if (closed.count !== 1) return {closed: false, freed: false, promoted: [] as Awaited<ReturnType<typeof promoteWaitlist>>};
     const freed = await tx.rsvp.updateMany({where: {id: order.rsvpId, status: {in: ['confirmed', 'awaiting_payment']}}, data: {status: 'cancelled', claimExpiresAt: null}});
     const promoted = freed.count === 1 ? await promoteWaitlist(tx, order.rsvp.eventId, now) : [];
-    return {closed: true, promoted};
+    return {closed: true, freed: freed.count === 1, promoted};
   });
+  if (result.closed) {
+    if (result.freed) emitCancelledIds(db, order.rsvp.eventId, [order.rsvpId]);
+    emitSeated(db, order.rsvp.eventId, result.promoted);
+  }
   if (result.promoted.length > 0) {
     await notifyPromoted(result.promoted.map(p => ({rsvpId: p.rsvpId, kind: p.kind, ...(p.kind === 'offer_claim' ? {claimExpiresAt: p.claimExpiresAt} : {})}))).catch(() => undefined);
   }

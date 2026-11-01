@@ -26,10 +26,12 @@ import {
   Menu,
   Modal,
   PageHeader,
+  SearchInput,
   StatusBadge,
   Tabs,
   useConfirm,
   useToast,
+  DateTimeField,
 } from '../ui';
 
 const TAB_LABELS: Record<EventListTab, string> = {upcoming: 'Upcoming', past: 'Past', drafts: 'Drafts'};
@@ -45,6 +47,8 @@ const EMPTY_TITLE: Record<EventListTab, string> = {upcoming: 'No upcoming events
 const EMPTY_ACTION: Record<EventListTab, string> = {upcoming: 'Create your first event', past: 'See upcoming events', drafts: 'Start a draft'};
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+const MONTH = (e: AdminEventSummary) => new Intl.DateTimeFormat('en', {month: 'short', timeZone: e.timezone}).format(new Date(e.startAt));
+const DAY = (e: AdminEventSummary) => new Intl.DateTimeFormat('en', {day: 'numeric', timeZone: e.timezone}).format(new Date(e.startAt));
 const when = (e: AdminEventSummary) => formatInZone(new Date(e.startAt), e.timezone);
 
 /** `/dashboard/events` for holders of `site:event:manage`: every event, by tab. */
@@ -56,7 +60,10 @@ export function Events() {
   const [tab, setTab] = useState<EventListTab>('upcoming');
   const [copying, setCopying] = useState<AdminEventSummary | null>(null);
   const events = useInfiniteQuery(eventsListQuery(tab));
-  const rows = events.data?.pages.flatMap(page => page.events);
+  const [search, setSearch] = useState('');
+  const all = events.data?.pages.flatMap(page => page.events);
+  const needle = search.trim().toLowerCase();
+  const rows = needle ? all?.filter(e => `${e.title} ${e.slug}`.toLowerCase().includes(needle)) : all;
   const refresh = () => queryClient.invalidateQueries({queryKey: ['events']});
 
   const publish = useMutation({
@@ -122,7 +129,12 @@ export function Events() {
       key: 'title',
       header: 'Event',
       cell: e => (
-        <div>
+        <div className="event-cell">
+          <div className="event-date" aria-hidden="true">
+            <span className="event-date-month">{MONTH(e)}</span>
+            <span className="event-date-day">{DAY(e)}</span>
+          </div>
+          <div>
           <span className="cell-title">
             <a
               href={`/dashboard/events/${e.id}`}
@@ -137,6 +149,7 @@ export function Events() {
           <span className="cell-sub">
             {FORMAT_LABELS[e.format]} · /e/{e.slug}
           </span>
+          </div>
         </div>
       ),
     },
@@ -178,7 +191,8 @@ export function Events() {
             label={`Actions for “${e.title}”`}
             disabled={busyKey !== null}
             items={[
-              {label: 'Open', icon: 'external', onSelect: () => go(`/events/${e.id}`)},
+              {label: 'Open event hub', icon: 'dashboard', onSelect: () => go(`/events/${e.id}`)},
+              {label: 'Guests', icon: 'users', onSelect: () => go(`/events/${e.id}?tab=guests`)},
               {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}/edit`)},
               e.status === 'draft'
                 ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
@@ -215,6 +229,9 @@ export function Events() {
         value={tab}
         onChange={setTab}
         items={EVENT_LIST_TABS.map(value => ({value, label: TAB_LABELS[value]}))}>
+        <div className="toolbar">
+          <SearchInput label="Search events" placeholder="Search loaded events by title" value={search} onChange={ev => setSearch(ev.target.value)} />
+        </div>
         <Card flush>
           <DataTable
             caption={`${TAB_LABELS[tab]} events`}
@@ -225,6 +242,11 @@ export function Events() {
             error={events.error}
             busyKey={busyKey}
             empty={
+              needle ? (
+                <EmptyState icon="search" title="No matching events">
+                  Nothing in {TAB_LABELS[tab]} matches “{search.trim()}”.
+                </EmptyState>
+              ) : (
               <EmptyState
                 icon={tab === 'drafts' ? 'file' : 'clock'}
                 title={EMPTY_TITLE[tab]}
@@ -241,6 +263,7 @@ export function Events() {
                 }>
                 {EMPTY_TEXT[tab]}
               </EmptyState>
+              )
             }
           />
         </Card>
@@ -321,10 +344,10 @@ function DuplicateForm({event, onClose, onDone}: {event: AdminEventSummary; onCl
         </Field>
         <div className="form-grid">
           <Field id="dup-start" label="Starts" error={errors.startAt}>
-            <input id="dup-start" {...fieldAria('dup-start', errors.startAt)} type="datetime-local" value={start} onChange={ev => setStart(ev.target.value)} />
+            <DateTimeField id="dup-start" {...fieldAria('dup-start', errors.startAt)} value={start} onChange={ev => setStart(ev.target.value)} />
           </Field>
           <Field id="dup-end" label="Ends" error={errors.endAt}>
-            <input id="dup-end" {...fieldAria('dup-end', errors.endAt)} type="datetime-local" value={end} onChange={ev => setEnd(ev.target.value)} />
+            <DateTimeField id="dup-end" {...fieldAria('dup-end', errors.endAt)} value={end} onChange={ev => setEnd(ev.target.value)} />
           </Field>
         </div>
         {failed && <ErrorNote error={copy.error!} />}

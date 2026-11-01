@@ -4,6 +4,7 @@
  * email confirmation on (the default) the answer is the same whether or not
  * the email already has an account: "check your inbox".
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -13,8 +14,7 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex title="Create an account">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="register" name={site?.name}>
       <h1>Create an account</h1>
       <form id="register-form" class="auth-form" novalidate>
         <div class="field">
@@ -40,8 +40,7 @@ const {site, viewer} = await staticContext(Astro.request);
       <p class="auth-links">
         Already have an account? <a href="/account/login/" data-keep-next>Sign in</a>
       </p>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>

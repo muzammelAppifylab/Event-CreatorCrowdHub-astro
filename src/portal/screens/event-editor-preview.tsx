@@ -2,7 +2,9 @@ import {useQuery} from '@tanstack/react-query';
 
 import {fromLocalInput} from '../../lib/event-schemas';
 import {formatDay, formatPrice, formatRange, guestCopy, paragraphsOf, priceSummary} from '../../lib/guest-format';
-import {posterTextFor} from '../../lib/posters';
+import {POSTER_HEX, POSTER_PALETTES} from '../../lib/event-schemas';
+import {isPosterDesign, posterFor, posterTextFor, type PosterPalette} from '../../lib/posters';
+import {PosterArt} from './cover-picker';
 import {eventTicketsQuery} from '../events-queries';
 import {Icon} from '../ui';
 
@@ -29,7 +31,7 @@ export type PreviewValues = {
  * public `g-*` stylesheet is global and only loaded on public pages, so it is not imported here).
  * Ticket types are the saved ones: they are edited and saved on their own.
  */
-export function EventPreview({values: v, eventId}: {values: PreviewValues; eventId: string | null}) {
+export function EventPreview({values: v, eventId, seed = ''}: {values: PreviewValues; eventId: string | null; seed?: string}) {
   const tickets = useQuery({...eventTicketsQuery(eventId ?? ''), enabled: eventId !== null});
   const ticketTypes = eventId ? (tickets.data?.ticketTypes ?? []) : [];
   const startIso = fromLocalInput(v.startAt, v.timezone);
@@ -49,10 +51,8 @@ export function EventPreview({values: v, eventId}: {values: PreviewValues; event
       {image ? (
         <img className="ev-preview-cover" src={image} alt={`Cover art for ${title}`} width={288} height={384} />
       ) : (
-        <div className="ev-preview-poster" role="img" aria-label={`Poster for ${title}`}>
-          {poster.eyebrow && <span className="ev-preview-eyebrow">{poster.eyebrow}</span>}
-          <span className="ev-preview-headline">{poster.headline}</span>
-          {poster.footer && <span className="ev-preview-eyebrow">{poster.footer}</span>}
+        <div className="ev-preview-posterbox" role="img" aria-label={`Poster for ${title}`}>
+          <PosterArt design={isPosterDesign(v.coverPoster) ? v.coverPoster : posterFor(seed || title)} palette={(POSTER_PALETTES as readonly string[]).includes(v.palette) || POSTER_HEX.test(v.palette) ? v.palette : null} text={poster} />
         </div>
       )}
       <ul aria-label="Event type" className="ev-preview-chips">

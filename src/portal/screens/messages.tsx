@@ -36,6 +36,8 @@ import {
   EmptyState,
   ErrorNote,
   Field,
+  Icon,
+  Listbox,
   LoadingBlock,
   LoadMore,
   Menu,
@@ -57,17 +59,64 @@ const COPY_RULES = {
   body: [rules.required('Add a message.'), rules.maxLength(10_000)],
 };
 const RULE_RULES = {...COPY_RULES, amount: [rules.pattern(/^\d{1,5}$/, 'Enter a whole number, 0 or more.')]};
-const KINDS =Object.keys(REMINDER_KIND_LABELS) as ReminderKind[];
+const KINDS = Object.keys(REMINDER_KIND_LABELS) as ReminderKind[];
+const SEGMENT_HINTS: Record<Segment, string> = {
+  going: 'Guests who said they are going',
+  maybe: 'Guests who answered maybe',
+  waitlisted: 'Guests waiting for a seat',
+  pending: 'Guests waiting for your approval',
+  checked_in: 'Guests scanned in at the door',
+  no_show: 'Said going but did not arrive (after the event ends)',
+  all: 'Everyone still expecting the event',
+};
 
-/** The merge tags as buttons that insert at the caret of a field. */
+const TAG_GROUPS: {title: string; prefixes: string[]}[] = [
+  {title: 'Guest', prefixes: ['guest.']},
+  {title: 'Event', prefixes: ['event.title', 'event.start_local', 'event.venue']},
+  {title: 'Links', prefixes: ['event.join_url', 'rsvp.', 'poll.']},
+];
+/** Short chip text: the full label stays in the tooltip. */
+const TAG_CHIP: Record<string, string> = {
+  'guest.first_name': 'First name',
+  'guest.name': 'Full name',
+  'event.title': 'Title',
+  'event.start_local': 'Date and time',
+  'event.venue': 'Venue',
+  'event.join_url': 'Join link',
+  'rsvp.manage_url': 'Manage RSVP',
+  'poll.join_url': 'Live poll',
+};
+
+/** The merge variables as grouped chips that insert at the caret of a field. */
 function TagButtons({onInsert}: {onInsert: (token: string) => void}) {
   return (
-    <div className="toolbar-group" role="group" aria-label="Insert a merge tag">
-      {TAGS.map(tag => (
-        <Button key={tag.tag} size="sm" variant="ghost" title={`${tag.label}, for example ${tag.example}`} onClick={() => onInsert(tag.token)}>
-          {tag.token}
-        </Button>
-      ))}
+    <div className="variables" role="group" aria-label="Insert a variable">
+      <p className="variables-title">Insert a variable</p>
+      <div className="variables-groups">
+        {TAG_GROUPS.map(group => {
+          const tags = TAGS.filter(tag => group.prefixes.some(prefix => tag.tag.startsWith(prefix)));
+          if (tags.length === 0) return null;
+          return (
+            <div key={group.title} className="variables-group">
+              <span className="variables-group-title">{group.title}</span>
+              <div className="variables-chips">
+                {tags.map(tag => (
+                  <button
+                    key={tag.tag}
+                    type="button"
+                    className="variable-chip"
+                    title={`${tag.label}, for example ${tag.example}. Inserts ${tag.token}`}
+                    onClick={() => onInsert(tag.token)}>
+                    <Icon name="plus" size={12} />
+                    {TAG_CHIP[tag.tag] ?? tag.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="variables-hint">Each one is replaced with that guest’s own details when the email is sent.</p>
     </div>
   );
 }
@@ -160,7 +209,9 @@ function Broadcast({eventId}: {eventId: string}) {
 
   const options = SEGMENTS.map(value => ({
     value,
-    label: `${SEGMENT_LABELS[value]}${counts ? ` (${counts[value]})` : ''}`,
+    label: SEGMENT_LABELS[value],
+    description: SEGMENT_HINTS[value],
+    meta: counts ? <Badge tone="neutral">{counts[value]}</Badge> : undefined,
   }));
   const submit = form.submit(values => {
     void confirm({
@@ -176,12 +227,13 @@ function Broadcast({eventId}: {eventId: string}) {
   return (
     <Card title="Send a message" description="One email to a group of guests. It goes to everyone in the group, whatever their marketing consent.">
       <form onSubmit={submit} noValidate>
-        {segments.data && !segments.data.eventEnded && (
-          <p className="muted">No-shows appear once the event has ended.</p>
-        )}
         {send.error && !(send.error instanceof ApiError && Object.keys(send.error.fields).length) && <ErrorNote error={send.error} />}
-        <Field label="Send to" id="f-segment" error={form.error('segment')}>
-          <Select {...form.field('segment')} options={options} />
+        <Field
+          label="Send to"
+          id="f-segment"
+          error={form.error('segment')}
+          hint={segments.data && !segments.data.eventEnded ? 'No-shows appear once the event has ended.' : undefined}>
+          <Listbox id="f-segment" value={form.values.segment} onChange={value => form.set('segment', value)} options={options} invalid={Boolean(form.error('segment'))} />
         </Field>
         <Field label="Subject" id="f-subject" error={form.error('subject')}>
           <input type="text" maxLength={200} {...form.field('subject')} />
@@ -193,7 +245,7 @@ function Broadcast({eventId}: {eventId: string}) {
           }} />
         </Field>
         <TagButtons onInsert={insert} />
-        <div className="toolbar-group">
+        <div className="form-actions composer-actions">
           <Button
             variant="secondary"
             icon="search"
@@ -228,7 +280,7 @@ function newRuleForm(kind: ReminderKind): RuleForm {
   return {kind, amount: String(amount), unit, after: copy.offsetMinutes > 0, subject: copy.subject, body: copy.body};
 }
 
-function AutomaticEmails({eventId}: {eventId: string}) {
+export function AutomaticEmails({eventId}: {eventId: string}) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const toast = useToast();

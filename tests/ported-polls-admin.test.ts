@@ -145,4 +145,26 @@ describe('admin polls routes', () => {
     expect(res.headers.get('content-disposition')).toContain('poll-votes-0192f0a1');
     expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'poll_results_exported'}));
   });
+  it('event csv: 404 for unknown event, rows per poll, emails only for named polls, audited', async () => {
+    expect((await call('/polls/event/nope/results.csv')).status).toBe(404);
+    const when = new Date('2026-10-30T10:00:00Z');
+    state.db.poll.findMany.mockResolvedValue([
+      {id: P1, question: 'Anon?', type: 'rating', anonymous: true},
+      {id: P2, question: 'Named?', type: 'short_text', anonymous: false},
+    ]);
+    state.db.pollVote.findMany.mockResolvedValue([
+      {pollId: P2, optionIds: [], ratingValue: null, textValue: 'hi', createdAt: when, updatedAt: when, rsvp: {email: 'a@x.test'}},
+      {pollId: P1, optionIds: [], ratingValue: 5, textValue: null, createdAt: when, updatedAt: when, rsvp: {email: 'b@x.test'}},
+    ]);
+    const res = await call(`/polls/event/${EV}/results.csv`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/csv');
+    expect(res.headers.get('x-export-truncated')).toBe('0');
+    expect(res.headers.get('content-disposition')).toContain('poll-votes-0192f0a1');
+    const csv = await res.text();
+    expect(csv).toContain('Anon?,5,2026-10-30T10:00:00.000Z,\r\n');
+    expect(csv).toContain('Named?,hi,2026-10-30T10:00:00.000Z,a@x.test');
+    expect(csv).not.toContain('b@x.test');
+    expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'poll_results_exported', target: ['event', EV]}));
+  });
 });

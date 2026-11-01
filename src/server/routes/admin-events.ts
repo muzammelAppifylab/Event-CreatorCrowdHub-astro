@@ -34,9 +34,15 @@ import {
 import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import type {Viewer} from '../../platform/types';
+import {STARTER_REMINDER_RULES} from '../../domain/reminders';
 import {PERMISSIONS} from '../permissions';
 import {nextSortOrder, validateOrder} from '../sort-order';
+import {queueGuestEmail} from '../jobs/guest-emails';
+import {notifyPromoted} from '../jobs/holds';
+import {lockEvent} from '../jobs/shared';
+import {promoteWaitlist} from '../jobs/waitlist';
 import {markEventOrdersRefundDue} from '../ticket-checkout';
+import {emitSeated} from '../webhook-emit';
 
 /**
  * Events, admin side. Everything here needs `site:event:manage` (`EVENT_MANAGE`);
@@ -56,8 +62,7 @@ import {markEventOrdersRefundDue} from '../ticket-checkout';
  *   DELETE /:id/ticket-types/:ticketId            remove (refused once RSVPs use it)
  *
  * Lists use the partial indexes on `events` and (start_at, id) / (updated_at, id) keysets.
- * TicketType and RsvpQuestion have no sort column: both are listed by `id`, and new rows get
- * time-ordered UUIDs (`uuidV7`) so "by id" is "in the order they were added".
+ * TicketType and RsvpQuestion are listed by (`sortOrder`, `id`); new ticket types go last (`nextSortOrder`).
  */
 
 const PAGE_SIZE = 20;
@@ -310,7 +315,7 @@ async function settingsFor(db: PrismaClient) {
     where: {id: 1},
     select: {defaultTimezone: true, allowMaybeDefault: true, showGuestListDefault: true, defaultCoverPoster: true, defaultReminderRules: true},
   });
-  if (!row) return {...DEFAULT_EVENT_SETTINGS};
+  if (!row) return {...DEFAULT_EVENT_SETTINGS, defaultReminderRules: STARTER_REMINDER_RULES.map(r => ({...r}))};
   const c = new Collector();
   const rules = parseReminderRules(c, row.defaultReminderRules, 'rules') ?? [];
   return {
@@ -319,7 +324,8 @@ async function settingsFor(db: PrismaClient) {
     allowMaybeDefault: row.allowMaybeDefault,
     showGuestListDefault: row.showGuestListDefault,
     defaultCoverPoster: (row.defaultCoverPoster as PosterDesign | null) ?? null,
-    defaultReminderRules: rules,
+    // An untouched list (the column defaults to []) starts new events with the standard emails (US-20).
+    defaultReminderRules: rules.length ? rules : STARTER_REMINDER_RULES.map(r => ({...r})),
   };
 }
 
@@ -469,25 +475,29 @@ export const adminEventRoutes = new Hono<Env>()
 
     const taken = async (slug: string) => (await db.event.findFirst({where: {slug, deletedAt: null}, select: {id: true}})) !== null;
     if (values.slug && (await taken(values.slug))) return c.json(slugTaken(), 422);
-    const slug = values.slug ?? (await uniqueSlug(values.title, taken));
-    const code = await withUniqueRetry(pollJoinCode, async v => (await db.event.findUnique({where: {pollJoinCode: v}, select: {id: true}})) !== null);
     const id = uuidV7();
-    try {
-      await db.event.create({
-        data: {
-          ...columnsOf(values),
-          id,
-          slug,
-          status: 'draft',
-          pollJoinCode: code,
-          rsvpQuestions: {create: values.questions.map((q, sortOrder) => ({id: uuidV7(), sortOrder, label: q.label, type: q.type, options: q.options, required: q.required}))},
-          reminderRules: {create: settings.defaultReminderRules.map(ruleData)},
-        },
-        select: {id: true},
-      });
-    } catch (err) {
-      if (isUniqueViolation(err)) return c.json(slugTaken(), 422);
-      throw err;
+    // A link the server chose may be taken by a concurrent create between the check and the insert: pick again.
+    for (let attempt = 0; ; attempt++) {
+      const slug = values.slug ?? (await uniqueSlug(values.title, taken));
+      const code = await withUniqueRetry(pollJoinCode, async v => (await db.event.findUnique({where: {pollJoinCode: v}, select: {id: true}})) !== null);
+      try {
+        await db.event.create({
+          data: {
+            ...columnsOf(values),
+            id,
+            slug,
+            status: 'draft',
+            pollJoinCode: code,
+            rsvpQuestions: {create: values.questions.map((q, sortOrder) => ({id: uuidV7(), sortOrder, label: q.label, type: q.type, options: q.options, required: q.required}))},
+            reminderRules: {create: settings.defaultReminderRules.map(ruleData)},
+          },
+          select: {id: true},
+        });
+        break;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        if (values.slug || attempt >= 2) return c.json(slugTaken(), 422);
+      }
     }
     return c.json({event: await loadDetail(db, id)}, 201);
   })
@@ -503,11 +513,18 @@ export const adminEventRoutes = new Hono<Env>()
     const id = c.req.param('id');
     const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}) : null;
     if (!row) return notFound(c);
+    if (row.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t be edited. Duplicate it to run it again.'), 409);
     const patch = c.req.valid('json');
     const questions = await db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]});
     const done = completeEvent(valuesOf(row, questions), patch);
     if (!done.ok) return c.json(invalid(done.fields), 422);
     const values = done.value;
+    // More plus-ones means bigger parties: every existing ticket price must still fit (as when a ticket is saved).
+    if (values.maxPlusOnes > row.maxPlusOnes) {
+      const tickets = await db.ticketType.findMany({where: {eventId: id}, select: {priceCents: true, currency: true}, take: MAX_TICKET_TYPES});
+      const tooHigh = tickets.find(t => ticketPriceError(t.priceCents, t.currency, 1 + values.maxPlusOnes));
+      if (tooHigh) return c.json(invalid({maxPlusOnes: 'A ticket price is too high for that many plus-ones. Lower the price or the plus-ones.'}), 422);
+    }
     const slug = patch.slug ?? row.slug;
     if (slug !== row.slug && (await db.event.findFirst({where: {slug, deletedAt: null, id: {not: id}}, select: {id: true}}))) {
       return c.json(slugTaken(), 422);
@@ -519,6 +536,19 @@ export const adminEventRoutes = new Hono<Env>()
       throw err;
     }
     if (patch.questions) await saveQuestions(db, id, values.questions);
+    // US-4: more seats (or no limit) go straight to the waitlist; emails are queued after the commit.
+    if (row.status === 'published' && (values.capacity === null ? row.capacity !== null : row.capacity !== null && values.capacity > row.capacity)) {
+      try {
+        const promoted = await db.$transaction(async tx => {
+          await lockEvent(tx, id);
+          return promoteWaitlist(tx, id, new Date());
+        });
+        emitSeated(db, id, promoted);
+        await notifyPromoted(promoted.map(p => ({rsvpId: p.rsvpId, kind: p.kind, ...(p.kind === 'offer_claim' ? {claimExpiresAt: p.claimExpiresAt} : {})})));
+      } catch (err) {
+        console.error(`event edit: waitlist promotion failed: ${(err as Error).message}`.slice(0, 200));
+      }
+    }
     return c.json({event: await loadDetail(db, id)});
   })
 
@@ -530,7 +560,7 @@ export const adminEventRoutes = new Hono<Env>()
     if (row.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t be published again.'), 409);
     if (row.status === 'published') return c.json({event: await loadDetail(db, id)});
     if (row.endAt < new Date()) return c.json(problem('conflict', 'This event has already ended. Change its dates before publishing.'), 409);
-    // Drafts may be saved half done: publish only a complete event.
+    // Saves already require a complete event; re-check anyway, since the rules or stored data may have moved on.
     const questions = await db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect});
     const check = completeEvent(valuesOf(row, questions), {});
     if (!check.ok) return c.json({...problem('conflict', 'Fill in the missing details before publishing.'), fields: check.fields}, 409);
@@ -586,6 +616,7 @@ export const adminEventRoutes = new Hono<Env>()
       console.error(`event cancel: refund_due marking failed: ${(err as Error).message}`.slice(0, 200));
     }
     await audit(db, {actorUserId: c.var.viewer.id, action: 'event_cancelled', target: ['event', id], meta: {refundDue}});
+    await queueCancelEmails(db, id);
     for (const hook of eventCancelHooks) await hook(db, id);
     return c.json({event: await loadDetail(db, id)});
   })
@@ -692,8 +723,9 @@ export const adminEventRoutes = new Hono<Env>()
   .post('/:id/ticket-types', ticketBody(false), async c => {
     const db = c.var.db;
     const id = c.req.param('id');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true}}) : null;
+    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true, status: true}}) : null;
     if (!event) return notFound(c);
+    if (event.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t get new tickets.'), 409);
     const input = c.req.valid('json') as TicketValues;
     const existing = await db.ticketType.findMany({where: {eventId: id}, select: {currency: true}, take: MAX_TICKET_TYPES + 1});
     if (existing.length >= MAX_TICKET_TYPES) return c.json(problem('conflict', `Use at most ${MAX_TICKET_TYPES} ticket types.`), 409);
@@ -736,9 +768,10 @@ export const adminEventRoutes = new Hono<Env>()
     const db = c.var.db;
     const id = c.req.param('id');
     const ticketId = c.req.param('ticketId');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true}}) : null;
+    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true, status: true}}) : null;
     const ticket = event && isUuid(ticketId) ? await db.ticketType.findFirst({where: {id: ticketId, eventId: id}, select: ticketSelect}) : null;
     if (!event || !ticket) return notFound(c, 'ticket type');
+    if (event.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event’s tickets can’t be changed.'), 409);
     const patch = c.req.valid('json') as Partial<TicketValues>;
     const currency = patch.currency ?? ticket.currency;
     if (currency !== ticket.currency) {
@@ -780,6 +813,26 @@ export const adminEventRoutes = new Hono<Env>()
     await db.ticketType.deleteMany({where: {id: ticketId, eventId: id}});
     return c.json({ok: true});
   });
+
+/** US-11: one queued email per guest still expecting the event (keyed, so a repeat is a no-op). Bounded; never throws. */
+async function queueCancelEmails(db: PrismaClient, eventId: string): Promise<void> {
+  try {
+    let after: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const rows = await db.rsvp.findMany({
+        where: {eventId, status: {in: ['confirmed', 'waitlisted', 'pending', 'awaiting_payment']}, ...(after ? {id: {gt: after}} : {})},
+        select: {id: true},
+        orderBy: {id: 'asc'},
+        take: 250,
+      });
+      for (let i = 0; i < rows.length; i += 25) await Promise.all(rows.slice(i, i + 25).map(r => queueGuestEmail('event_cancelled', r.id)));
+      if (rows.length < 250) return;
+      after = rows.at(-1)!.id;
+    }
+  } catch (err) {
+    console.error(`event cancel: queueing guest emails failed: ${(err as Error).message}`.slice(0, 200));
+  }
+}
 
 /** Seats held per ticket type: confirmed and awaiting-payment "going" RSVPs. */
 async function seatsHeld(db: PrismaClient, eventId: string): Promise<Map<string, number>> {

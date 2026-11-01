@@ -14,6 +14,7 @@
  * A section with no data stays hidden.
  */
 import '../styles/home.css';
+import '../styles/browse.css';
 
 import Cover from '../components/Cover.astro';
 import HeroVisual from '../components/home/HeroVisual.astro';
@@ -26,7 +27,7 @@ import {formatDate, postHref, publishedPosts} from '../lib/posts';
 export const prerender = true;
 
 const {site, viewer} = await staticContext(Astro.request);
-const name = site?.name ?? 'My site';
+const name = site?.name ?? 'CreatorCrowdHub';
 const latest = (await publishedPosts()).slice(0, 3);
 
 // The headline, split around the highlighted words (`HOME.hero.highlight`).
@@ -43,11 +44,14 @@ const headline =
     <section class="home-hero">
       <div class="wrap home-hero-grid">
         <div class="home-hero-copy">
-          <p class="home-eyebrow" data-brand-text={HOME.hero.eyebrow}>{withName(HOME.hero.eyebrow, name)}</p>
+          <p class="home-badge"><span class="home-badge-dot" aria-hidden="true"></span><span data-brand-text={HOME.hero.eyebrow}>{withName(HOME.hero.eyebrow, name)}</span></p>
           <h1>
             {headline.before}{headline.mark && <mark>{headline.mark}</mark>}{headline.after}
           </h1>
           <p class="home-lede">{HOME.hero.body}</p>
+          <ul class="home-points">
+            {HOME.hero.points.map(point => <li><Icon name="check" size={16} />{point}</li>)}
+          </ul>
           <div class="home-actions" data-guest-only>
             <a class="button home-button-lg" href="/account/register/" data-astro-prefetch>
               {HOME.hero.guest.primary}
@@ -63,10 +67,46 @@ const headline =
             <a class="button ghost home-button-lg" href="/events/">{HOME.hero.user.secondary}</a>
           </div>
           <p class="home-note" data-guest-only>{HOME.hero.note}</p>
+          <div class="home-find">
+            <p class="home-find-label">{HOME.hero.searchLabel}</p>
+            <form class="browse-search home-search" action="/events/" method="get" role="search">
+              <label class="sr-only" for="home-search">Search events</label>
+              <svg class="browse-search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
+              <input id="home-search" class="browse-search-input" type="search" name="q" maxlength="80" placeholder={HOME.search.placeholder} autocomplete="off" />
+              <button class="button" type="submit">Search</button>
+            </form>
+            <ul class="home-quick" aria-label="Quick filters">
+              {HOME.search.quick.map(chip => <li><a class="browse-chip" href={chip.href}>{chip.label}</a></li>)}
+            </ul>
+          </div>
         </div>
         <div class="home-hero-visual">
           <HeroVisual name={name} />
+          {
+            HOME.visual.floats.map((card, i) => (
+              <div class:list={['home-float', `home-float-${i + 1}`]} aria-hidden="true">
+                <span class="home-float-icon"><Icon name={card.icon as IconName} size={18} /></span>
+                <span>
+                  <strong>{card.title}</strong>
+                  <small>{card.text}</small>
+                </span>
+              </div>
+            ))
+          }
         </div>
+      </div>
+    </section>
+
+    <section class="home-section" data-live="events" aria-labelledby="events-title" hidden>
+      <div class="wrap">
+        <div class="home-head home-head-row">
+          <h2 id="events-title">{HOME.events.title}</h2>
+          <a class="home-more" href="/events/">
+            {HOME.events.link}
+            <Icon name="arrow-right" size={16} />
+          </a>
+        </div>
+        <ul class="home-event-grid" data-list></ul>
       </div>
     </section>
 
@@ -113,19 +153,6 @@ const headline =
       </div>
     </section>
 
-    <section class="home-section" data-live="events" aria-labelledby="events-title" hidden>
-      <div class="wrap">
-        <div class="home-head home-head-row">
-          <h2 id="events-title">{HOME.events.title}</h2>
-          <a class="home-more" href="/events/">
-            {HOME.events.link}
-            <Icon name="arrow-right" size={16} />
-          </a>
-        </div>
-        <ul class="job-list" data-list></ul>
-      </div>
-    </section>
-
     {
       latest.length > 0 && (
         <section class="home-section" aria-labelledby="blog-title">
@@ -157,6 +184,26 @@ const headline =
         </section>
       )
     }
+
+    <section class="home-section" aria-labelledby="audience-title">
+      <div class="wrap">
+        <div class="home-head">
+          <p class="home-eyebrow">{HOME.audience.eyebrow}</p>
+          <h2 id="audience-title">{HOME.audience.title}</h2>
+        </div>
+        <div class="home-audience">
+          {
+            HOME.audience.cards.map(card => (
+              <div class="home-audience-card">
+                <h3>{card.title}</h3>
+                <p>{withName(card.body, name)}</p>
+                <a class="button ghost" href={card.href} data-astro-prefetch={card.href.startsWith('/events') ? undefined : ''}>{card.cta}</a>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
 
     <section class="home-section" aria-labelledby="faq-title">
       <div class="wrap home-faq-grid">
@@ -198,8 +245,7 @@ const headline =
 </Base>
 
 <script>
-  import {formatEventTime} from '../lib/format';
-  import type {EventsPage} from '../lib/types';
+    import type {EventsPage} from '../lib/types';
 
   // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
   // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
@@ -227,19 +273,40 @@ const headline =
     }
 
     void live<EventsPage>('events', '/site-api/events', (data, list) => {
-      for (const event of data.events.slice(0, 3)) {
-        const row = el('a', 'job-row');
-        row.href = `/events/${encodeURIComponent(event.slug)}/`;
+      const shown = data.events.slice(0, 8);
+      shown.forEach((event, i) => {
+        let zone = 'UTC';
+        try {
+          new Intl.DateTimeFormat('en', {timeZone: event.timezone});
+          zone = event.timezone;
+        } catch {
+          // Unknown zone: UTC.
+        }
+        const when = new Intl.DateTimeFormat('en', {weekday: 'short', day: 'numeric', month: 'short', timeZone: zone}).format(new Date(event.startAt));
+        const art = el('div', 'home-event-art');
+        art.dataset.pal = String(i % 4);
+        art.append(el('span', 'home-event-date', when));
+        if (event.coverImageUrl) {
+          const img = el('img');
+          img.src = event.coverImageUrl;
+          img.alt = '';
+          img.loading = 'lazy';
+          art.append(img);
+        } else {
+          art.append(el('span', 'home-event-name', event.title));
+        }
+        const where = event.format === 'online' ? 'Online' : (event.venueName ?? (event.format === 'hybrid' ? 'Hybrid' : 'In person'));
+        const price = event.fromPrice ? (event.free ? 'Free' : 'Tickets') : '';
         const text = el('div');
-        text.append(el('h3', 'job-title', event.title), el('p', 'muted', formatEventTime(event.startAt, event.timezone)));
-        row.append(text);
-        if (event.venueName) row.append(el('span', 'muted small', event.venueName));
+        text.append(el('h3', '', event.title), el('p', '', new Intl.DateTimeFormat('en', {hour: 'numeric', minute: '2-digit', timeZone: zone}).format(new Date(event.startAt)) + ' · ' + where), ...(price ? [el('p', '', price)] : []));
+        const row = el('a', 'home-event');
+        row.href = `/events/${encodeURIComponent(event.slug)}/`;
+        row.append(art, text);
         const item = el('li');
         item.append(row);
         list.append(item);
-      }
-      return Math.min(3, data.events.length);
+      });
+      return shown.length;
     });
-
   });
 </script>

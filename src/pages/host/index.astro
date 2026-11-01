@@ -17,11 +17,13 @@ import {pageContext} from '../../server/page';
 
 const before = Astro.url.searchParams.get('before') ?? undefined;
 const api = backend(Astro.request);
-const [{site, viewer}, result, brand] = await Promise.all([
+const [{site, viewer}, result, brand, pastResult] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  read<EventsPage>(api.events.$get({query: {before}})),
+  read<EventsPage>(api.events.$get({query: {before, q: undefined, format: undefined, when: undefined}})),
   read<{brandColor: string | null; fontPreset: string}>(api['event-settings'].brand.$get()),
+  before ? Promise.resolve(null) : read<EventsPage>(api.events.past.$get()),
 ]);
+const past = pastResult?.events ?? [];
 const events = result?.events ?? [];
 if (!result) Astro.response.status = 503;
 const color = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : null;
@@ -56,6 +58,16 @@ const name = site?.name ?? 'Our events';
               {events.map(e => <li><EventCard event={e} /></li>)}
             </ul>
           </section>
+        )
+      }
+      {
+        past.length > 0 && (
+          <details class="g-list-section g-past">
+            <summary>{guestCopy.hostPage.past}</summary>
+            <ul class="g-grid">
+              {past.map(e => <li><EventCard event={e} /></li>)}
+            </ul>
+          </details>
         )
       }
       {

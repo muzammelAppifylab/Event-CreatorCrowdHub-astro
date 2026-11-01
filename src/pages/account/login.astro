@@ -10,6 +10,7 @@
  * step directly (a one-click sign-in from the dashboard, owner.ts). `?notice=` explains
  * why the visitor landed here (a dashboard link that expired).
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -19,13 +20,12 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex title="Sign in">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="login" name={site?.name}>
       <h1 id="login-title">Sign in</h1>
       <p class="notice notice-error" id="login-notice" role="alert" hidden></p>
 
       <!-- 1. The usual way: a code by email (no password needed). -->
-      <form id="email-form" class="auth-form" novalidate>
+      <form id="email-form" class="auth-form" novalidate hidden>
         <p class="muted" id="email-lead">Enter your email and we'll send you a 6-digit code. No password needed.</p>
         <div class="field">
           <label for="login-email">Email</label>
@@ -51,8 +51,8 @@ const {site, viewer} = await staticContext(Astro.request);
         </p>
       </form>
 
-      <!-- Or a password, for an account that set one. -->
-      <form id="login-form" class="auth-form" novalidate hidden>
+      <!-- The default: email and password (an account that set one). -->
+      <form id="login-form" class="auth-form" novalidate>
         <div class="field">
           <label for="login-password-email">Email</label>
           <input id="login-password-email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@example.com" />
@@ -80,15 +80,14 @@ const {site, viewer} = await staticContext(Astro.request);
       </form>
 
       <p class="auth-links" id="login-links">
-        <button class="button link" type="button" id="use-password">Use a password instead</button>
-        <button class="button link" type="button" id="use-code" hidden>Email me a code instead</button>
+        <button class="button link" type="button" id="use-password" hidden>Use a password instead</button>
+        <button class="button link" type="button" id="use-code">Email me a code instead</button>
         <span aria-hidden="true">·</span>
         <a href="/account/forgot/">Forgot your password?</a>
         <span aria-hidden="true">·</span>
         <a href="/account/register/" data-keep-next>Create an account</a>
       </p>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>
@@ -200,7 +199,7 @@ const {site, viewer} = await staticContext(Astro.request);
     $('code-other-email').addEventListener('click', () => show(emailForm, 'Sign in', 'login-email'));
     $('use-password').addEventListener('click', () => {
       $<HTMLInputElement>('login-password-email').value = $<HTMLInputElement>('login-email').value;
-      show(loginForm, 'Sign in with your password', 'login-password-email');
+      show(loginForm, 'Sign in','login-password-email');
     });
     $('use-code').addEventListener('click', () => {
       $<HTMLInputElement>('login-email').value = $<HTMLInputElement>('login-password-email').value;

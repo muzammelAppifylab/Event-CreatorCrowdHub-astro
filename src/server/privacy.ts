@@ -1,6 +1,7 @@
 import {hashToken, newToken} from '../domain/secureToken';
 import {signToken, verifyToken} from '../domain/tokens';
 import type {PrismaClient} from '../generated/prisma/client';
+import {emitWebhook, rsvpPayload} from './webhook-emit';
 import type {ConsentState, GuestPrivacySummary, PrivacyEventBrief} from '../lib/privacy-types';
 
 /**
@@ -299,7 +300,12 @@ export async function eraseRsvp(db: PrismaClient, rsvpId: string): Promise<'eras
 
 export async function eraseByManageToken(db: PrismaClient, token: string) {
   const rsvp = await findByManageToken(db, token);
-  return rsvp ? eraseRsvp(db, rsvp.id) : ('not_found' as const);
+  if (!rsvp) return 'not_found' as const;
+  const result = await eraseRsvp(db, rsvp.id);
+  if (result === 'erased') {
+    emitWebhook(null, db, 'rsvp.removed', rsvpPayload({id: rsvp.id, eventId: rsvp.eventId, status: rsvp.status, response: rsvp.response}));
+  }
+  return result;
 }
 
 /** One bounded batch of RSVPs whose event ended over `RETENTION_DAYS` ago and are not yet anonymised (for a background job). */

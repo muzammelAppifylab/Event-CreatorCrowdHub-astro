@@ -20,6 +20,7 @@
  */
 import '../styles/global.css';
 import '../styles/public.css';
+import '../styles/poster.css';
 
 import {ClientRouter} from 'astro:transitions';
 
@@ -65,8 +66,10 @@ interface Props {
    * `?embed=1` drops that chrome too (the iframe embed).
    */
   guest?: boolean;
+  /** A guest page that wants no "Powered by / Privacy" footer (the live poll, used on a phone in the room). */
+  noFooter?: boolean;
   /** The public brand; a guest page that did not fetch it gets it here (in-process). */
-  brand?: {brandColor: string | null; fontPreset: string} | null;
+  brand?: {brandColor: string | null; fontPreset: string; logoUrl?: string | null} | null;
 }
 
 const {
@@ -84,14 +87,17 @@ const {
   secretInUrl = false,
   jsonLd,
   guest = false,
+  noFooter = false,
   brand: brandProp,
 } = Astro.props;
 // Guest pages wear the host's brand colour and font preset (applied in the script below).
-const brand = brandProp !== undefined ? brandProp : guest ? await read<{brandColor: string | null; fontPreset: string}>(backend(Astro.request)['event-settings'].brand.$get()) : null;
+const brand = brandProp !== undefined ? brandProp : guest ? await read<{brandColor: string | null; fontPreset: string; logoUrl?: string | null}>(backend(Astro.request)['event-settings'].brand.$get()) : null;
 const brandColor = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : undefined;
 const fontPreset = brand?.fontPreset === 'serif' || brand?.fontPreset === 'rounded' ? brand.fontPreset : undefined;
 const embed = guest && Astro.url.searchParams.get('embed') === '1';
-const name = site?.name ?? 'My site';
+// The host's own logo (a public file on this site), else the site logo; shown in the guest header.
+const guestLogo = brand?.logoUrl?.startsWith('/__platform/files/') ? brand.logoUrl : (site?.logo ?? null);
+const name = site?.name ?? 'CreatorCrowdHub';
 const fullTitle = title ? `${title} · ${name}` : name;
 const description = pageDescription ?? withName(SITE.description, name);
 const path = Astro.url.pathname;
@@ -147,14 +153,23 @@ const structured = indexable
         portal has no router, so a link to it is a normal page load. Page scripts run on `astro:page-load`. */}
     <ClientRouter />
 
-    <script>
-      // The theme chosen in the dashboard (same key as App.astro), restored on every public page.
-      try {
-        const theme = localStorage.getItem('site:theme');
-        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
-      } catch {
-        // Storage blocked: the device's theme.
-      }
+    <script is:inline>
+      // The theme chosen in the dashboard (same key as App.astro); light unless dark was chosen, so
+      // the public pages never flip with the device. ClientRouter replaces <html>'s attributes on
+      // every navigation, so the choice is put on the incoming document before each swap too.
+      (function () {
+        function theme() {
+          try {
+            return localStorage.getItem('site:theme') === 'dark' ? 'dark' : 'light';
+          } catch {
+            return 'light';
+          }
+        }
+        document.documentElement.dataset.theme = theme();
+        document.addEventListener('astro:before-swap', function (event) {
+          event.newDocument.documentElement.dataset.theme = theme();
+        });
+      })();
     </script>
   </head>
   <body class:list={['pub', {'pub-guest': guest}]} data-viewer={viewer.state} data-static={hydrate ? '1' : undefined}>
@@ -166,53 +181,71 @@ const structured = indexable
           <BrandMark site={site} />
           <span class="brand-name" data-brand-text="{name}" data-built-name={name}>{name}</span>
         </a>
-        <nav class="site-nav" aria-label="Main">
-          {NAV.map(item => (
+        <div class="site-menu" id="site-menu">
+          <nav class="site-nav" aria-label="Main">
+            {NAV.map(item => (
+              <a
+                href={item.href}
+                class:list={{active: active(item.href)}}
+                aria-current={active(item.href) ? 'page' : undefined}
+                data-astro-prefetch={item.prefetch === false ? undefined : 'viewport'}>
+                {item.label}
+              </a>
+            ))}
             <a
-              href={item.href}
-              class:list={{active: active(item.href)}}
-              data-astro-prefetch={item.prefetch === false ? undefined : 'viewport'}>
-              {item.label}
+              href="/dashboard"
+              class:list={{active: active('/dashboard')}}
+              data-user-only
+              hidden={viewer.state !== 'user'}>
+              Dashboard
             </a>
-          ))}
-          <a
-            href="/dashboard"
-            class:list={{active: active('/dashboard')}}
-            data-user-only
-            hidden={viewer.state !== 'user'}>
-            Dashboard
-          </a>
-        </nav>
-        <div class="session" data-session>
-          {viewer.state === 'user' ? (
-            <>
-              <span class="viewer" title={viewer.name ?? ''}>
-                <span class="avatar-fallback" aria-hidden="true">
-                  {initials(viewer.name ?? '')}
-                </span>
-              </span>
-              <button class="button link small-button" type="button" data-logout>
-                Sign out
-              </button>
-            </>
-          ) : (
-            <>
-              <a class="button link small-button" href={`/account/login/?next=${back}`} data-astro-prefetch>
-                Sign in
-              </a>
-              <a class="button small-button" href={`/account/register/?next=${back}`} data-astro-prefetch>
-                Create account
-              </a>
-            </>
-          )}
+          </nav>
+          <div class="session" data-session>
+            {viewer.state === 'user' ? (
+              <>
+                <a class="viewer" href="/dashboard" title="Open dashboard" aria-label="Open dashboard">
+                  <span class="avatar-fallback" aria-hidden="true">
+                    {initials(viewer.name ?? '')}
+                  </span>
+                </a>
+                <button class="button link small-button" type="button" data-logout>
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <>
+                <a class="button link small-button" href={`/account/login/?next=${back}`} data-astro-prefetch>
+                  Sign in
+                </a>
+                <a class="button small-button" href={`/account/register/?next=${back}`} data-astro-prefetch>
+                  Create account
+                </a>
+              </>
+            )}
+          </div>
         </div>
+        <button class="menu-toggle" type="button" aria-label="Open menu" aria-expanded="false" aria-controls="site-menu" data-menu-toggle>
+          <svg class="menu-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path class="menu-bar-top" d="M4 8h16"></path>
+            <path class="menu-bar-mid" d="M4 12h16"></path>
+            <path class="menu-bar-bot" d="M4 16h16"></path>
+          </svg>
+        </button>
       </div>
     </header>
     )}
 
+    {guest && !embed && guestLogo && (
+      <header class="g-brand">
+        <div class="page-container">
+          <a href="/" data-astro-prefetch><img class="g-brand-logo" src={guestLogo} alt={name} height="36" /></a>
+        </div>
+      </header>
+    )}
+
     <slot />
 
-    {guest && !embed && (
+    {guest && !embed && !noFooter && (
       <footer class="g-footer">
         <div class="page-container g-footer-in">
           <span>Powered by <a href="/" data-astro-prefetch>{name}</a></span>
@@ -229,6 +262,14 @@ const structured = indexable
             <span class="footer-brand-name" data-brand-text="{name}">{name}</span>
           </a>
           <p data-brand-text={SITE.description}>{withName(SITE.description, name)}</p>
+          <div class="footer-cta">
+            <a class="button small-button" data-guest-only hidden={viewer.state === 'user'} href={`/account/register/?next=${back}`} data-astro-prefetch>
+              Create an event
+            </a>
+            <a class="button small-button" data-user-only hidden={viewer.state !== 'user'} href="/dashboard">
+              Open dashboard
+            </a>
+          </div>
         </div>
         <nav class="footer-col" aria-label="Footer">
           <p class="footer-title">Explore</p>
@@ -240,9 +281,6 @@ const structured = indexable
                 </a>
               </li>
             ))}
-            <li>
-              <a href="/rss.xml">RSS</a>
-            </li>
           </ul>
         </nav>
         <nav class="footer-col" aria-label="Account">
@@ -257,14 +295,15 @@ const structured = indexable
             <li data-user-only hidden={viewer.state !== 'user'}>
               <a href="/dashboard">Dashboard</a>
             </li>
-            <li>
-              <a href="/account/forgot/" data-astro-prefetch>Forgot your password?</a>
-            </li>
           </ul>
         </nav>
       </div>
       <div class="wrap site-footer-bottom">
         <span data-brand-text="© {year} {name}">© {new Date().getUTCFullYear()} {name}</span>
+        <nav class="footer-legal" aria-label="Legal links">
+          <a href="/privacy/" data-astro-prefetch>Privacy</a>
+          <a href="/rss.xml">RSS</a>
+        </nav>
       </div>
     </footer>
     )}
@@ -283,11 +322,54 @@ const structured = indexable
       };
 
       // Each page, the first load and every client navigation (ClientRouter): the body is new.
+      let menuListeners: AbortController | undefined;
       document.addEventListener('astro:page-load', () => {
         applyPageBrand();
+
+        // Mobile menu: the button opens the panel; a link, Escape or a tap outside closes it.
+        // The document outlives each page, so the previous page's listeners are dropped first.
+        menuListeners?.abort();
+        menuListeners = new AbortController();
+        const {signal} = menuListeners;
+        const header = document.querySelector<HTMLElement>('.site-header');
+        const toggle = header?.querySelector<HTMLButtonElement>('[data-menu-toggle]');
+        if (header && toggle) {
+          const setOpen = (open: boolean) => {
+            header.toggleAttribute('data-open', open);
+            toggle.setAttribute('aria-expanded', String(open));
+            toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+          };
+          toggle.addEventListener('click', () => setOpen(!header.hasAttribute('data-open')));
+          header.querySelector('.site-menu')?.addEventListener('click', event => {
+            if ((event.target as HTMLElement).closest('a')) setOpen(false);
+          });
+          document.addEventListener('keydown', event => event.key === 'Escape' && setOpen(false), {signal});
+          document.addEventListener('click', event => !header.contains(event.target as Node) && setOpen(false), {signal});
+        }
         // Back from the payment provider INSIDE the payment window: tell the checkout page, close.
         notifyPaymentOpener();
         if (document.body.dataset.static === '1') void hydrateStaticPage();
+
+        // The avatar opens the dashboard. Static pages draw it after hydration as a plain
+        // <span> (managed code), so swap it for a link whenever it appears.
+        const session = document.querySelector('[data-session]');
+        if (session) {
+          const linkAvatar = () => {
+            const span = session.querySelector<HTMLElement>('span.viewer');
+            if (!span) return;
+            const link = document.createElement('a');
+            link.className = span.className;
+            link.href = '/dashboard';
+            link.title = 'Open dashboard';
+            link.setAttribute('aria-label', 'Open dashboard');
+            link.append(...span.childNodes);
+            span.replaceWith(link);
+          };
+          linkAvatar();
+          const watcher = new MutationObserver(linkAvatar);
+          watcher.observe(session, {childList: true});
+          signal.addEventListener('abort', () => watcher.disconnect());
+        }
 
         // The server saw an expired access token but a refresh cookie: refresh
         // ONCE in the browser (the server never rotates it), then re-render signed in.

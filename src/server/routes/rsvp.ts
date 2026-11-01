@@ -32,6 +32,8 @@ import {problem, withDb} from '../../platform/guards';
 import {sendClaimEmail} from '../claim-mail';
 import {sendConsentEmail} from '../consent-mail';
 import {canSendEventEmail, sendEventEmail} from '../mailer';
+import {confirmationRuleFor} from '../jobs/guest-emails';
+import {MAX_PUBLIC_ATTENDEES, shapeAttendees} from '../../lib/guest-list';
 import {emitPromoted, emitWebhook, rsvpPayload} from '../webhook-emit';
 
 /**
@@ -163,6 +165,7 @@ const eventSelect = {
   allowMaybe: true,
   maxPlusOnes: true,
   thankYouLink: true,
+  showGuestList: true,
   rsvpQuestions: {select: {id: true, label: true, type: true, options: true, required: true}, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]},
   ticketTypes: {select: {id: true, name: true, priceCents: true, currency: true, quantity: true, salesEndAt: true}, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]},
 } satisfies Prisma.EventSelect;
@@ -239,6 +242,18 @@ async function seatCounts(db: PrismaClient | Tx, eventId: string) {
 async function buildView(db: PrismaClient | Tx, event: EventRow, now: Date): Promise<RsvpEventView> {
   const counts = await seatCounts(db, event.id);
   const left = seatsRemaining(event.capacity, counts.total);
+  // Public guest list: only when the host switched it on; first names of confirmed, going guests (explicit select, bounded).
+  let attendees: {name: string; initials: string}[] | null = null;
+  let goingCount = 0;
+  if (event.showGuestList) {
+    const where = {eventId: event.id, response: 'going', status: 'confirmed'} as const;
+    const [rows, going] = await Promise.all([
+      db.rsvp.findMany({where, orderBy: [{confirmedAt: 'asc'}, {createdAt: 'asc'}], take: MAX_PUBLIC_ATTENDEES, select: {name: true}}),
+      db.rsvp.aggregate({where, _sum: {seats: true}}),
+    ]);
+    attendees = shapeAttendees(rows.map(r => r.name));
+    goingCount = going._sum.seats ?? 0;
+  }
   return {
     id: event.id,
     slug: event.slug,
@@ -253,6 +268,9 @@ async function buildView(db: PrismaClient | Tx, event: EventRow, now: Date): Pro
     waitlistEnabled: event.waitlistEnabled,
     closed: now >= event.endAt || (event.rsvpDeadline !== null && now > event.rsvpDeadline),
     seatsLeft: Number.isFinite(left) ? left : null,
+    showGuestList: event.showGuestList,
+    goingCount,
+    attendees,
     questions: questionsOf(event),
     ticketTypes: event.ticketTypes.map(t => ({
       id: t.id,
@@ -638,7 +656,7 @@ export async function confirmRsvpPayment(
       token = newToken();
       await db.rsvp.update({where: {id: rsvpId}, data: {manageToken: hashToken(token)}, select: {id: true}});
     }
-    await sendGuestEmail(db, origin, out.event, out.rsvp, token, confirmationEmail);
+    await sendConfirmation(db, origin, out.event, out.rsvp, token);
   }
   await sendPromotions(db, origin, out.event, out.promoted);
   return {seated};
@@ -744,13 +762,28 @@ async function sendGuestEmail(
   await sendEventEmail({to: rsvp.email, content: template(data), fromName: data.brand.senderName, replyTo: data.brand.replyToEmail});
 }
 
+/**
+ * The confirmation email, honouring the event's `confirmation` rule: nothing when the host turned it
+ * off, their edited copy when set. Only a confirmed guest is governed by the rule; waitlist, pending
+ * and awaiting-payment mails explain the guest's status and always go out.
+ */
+async function sendConfirmation(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow, token: string) {
+  let copy: {subject: string; body: string} | null = null;
+  if (rsvp.status === 'confirmed') {
+    const rule = await confirmationRuleFor(db, event.id);
+    if (rule.skip) return;
+    copy = rule.copy;
+  }
+  await sendGuestEmail(db, origin, event, rsvp, token, data => confirmationEmail(data, copy));
+}
+
 const sendPromotions = (db: PrismaClient, origin: string, event: EventRow, changed: Changed[]) =>
   Promise.all<unknown>(
     changed.flatMap((c): Promise<unknown>[] =>
       c.claim
         ? [sendClaimEmail(db, c.rsvp.id, {origin})]
         : c.token
-          ? [sendGuestEmail(db, origin, event, c.rsvp, c.token, confirmationEmail)]
+          ? [sendConfirmation(db, origin, event, c.rsvp, c.token)]
           : []
     )
   );
@@ -883,7 +916,7 @@ export const rsvpRoutes = new Hono()
 
     hit(`mail:${event.id}:${rsvp.email}`, EMAIL_CAP.limit, EMAIL_CAP.windowMs);
     // No confirmation yet for a guest who still has to pay: the paid confirmation follows the payment.
-    if (rsvp.status !== 'awaiting_payment') background(c, sendGuestEmail(db, origin, event, rsvp, token, confirmationEmail));
+    if (rsvp.status !== 'awaiting_payment') background(c, sendConfirmation(db, origin, event, rsvp, token));
     if (rsvp.marketingConsent) background(c, sendConsentEmail(db, rsvp.id, {origin}));
     background(c, sendPromotions(db, origin, event, out.promoted));
     emitWebhook(c, db, 'rsvp.created', rsvpPayload(rsvp));
@@ -1011,7 +1044,7 @@ export const rsvpRoutes = new Hono()
       emitPromoted(c, db, out.promoted);
       // Tell the guest when their status changed (a new seat, the waitlist, awaiting approval). Same link.
       if (out.rsvp.status !== out.previous.status && out.rsvp.status !== 'awaiting_payment') {
-        background(c, sendGuestEmail(db, originOf(c), found.event, out.rsvp, c.req.valid('param').token, confirmationEmail));
+        background(c, sendConfirmation(db, originOf(c), found.event, out.rsvp, c.req.valid('param').token));
       }
       return c.json({ok: true, status: out.rsvp.status, checkoutUrl});
     } catch (err) {

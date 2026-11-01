@@ -170,3 +170,17 @@ describe("dueReminders (US-20)", () => {
     expect(pairs(due)).toEqual(["g1/r1"])
   })
 })
+
+describe("STARTER_REMINDER_RULES", () => {
+  it("has 24h and 1h reminders that use only known merge tags and mention the poll link", async () => {
+    const { STARTER_REMINDER_RULES } = await import("./reminders")
+    const { renderTemplate } = await import("./mergeTags")
+    const offsets = STARTER_REMINDER_RULES.filter((r) => r.kind === "reminder").map((r) => r.offsetMinutes)
+    expect(offsets).toEqual([-1440, -60])
+    for (const r of STARTER_REMINDER_RULES) {
+      expect(renderTemplate(r.subject, {}).unknownTags).toEqual([])
+      expect(renderTemplate(r.body, {}).unknownTags).toEqual([])
+    }
+    expect(STARTER_REMINDER_RULES.find((r) => r.offsetMinutes === -1440)!.body).toContain("{{poll.join_url}}")
+  })
+})

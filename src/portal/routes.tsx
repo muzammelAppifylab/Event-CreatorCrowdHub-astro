@@ -34,6 +34,7 @@ import {
 import {doorEventsQuery, doorListQuery} from './checkin-queries';
 import {eventsListQuery, eventSettingsQuery} from './events-queries';
 import {presenterPollsQuery} from './polls-queries';
+import {firstSettingsPath, isSettingsPath, SettingsLayout} from './settings-layout';
 import {useMe, useSite} from './shared';
 import {webhooksQuery} from './webhooks-queries';
 import {
@@ -45,7 +46,6 @@ import {
   Icon,
   IconButton,
   type IconName,
-  initials,
   LoadingBlock,
   Menu,
   ToastProvider,
@@ -134,34 +134,16 @@ type NavItem = {to: string; label: string; icon: IconName; exact?: boolean; abil
  */
 const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
   {
-    label: 'Workspace',
+    label: '',
     items: [
       {to: '/', label: 'Overview', icon: 'dashboard', exact: true},
-      {to: '/account', label: 'Your account', icon: 'user'},
-    ],
-  },
-  {
-    label: 'Events',
-    items: [
-      {to: '/events', label: 'Events', icon: 'clock', ability: 'manageEvents'},
+      {to: '/events', label: 'Events', icon: 'calendar', ability: 'manageEvents'},
       {to: '/checkin', label: 'Check-in', icon: 'check-circle', ability: 'checkinGuests'},
       {to: '/contacts', label: 'Contacts', icon: 'users', ability: 'manageEvents'},
-      {to: '/event-settings', label: 'Event settings', icon: 'pencil', ability: 'manageEvents'},
-      {to: '/integrations', label: 'Integrations', icon: 'zap', ability: 'manageIntegrations'},
     ],
   },
-  {
-    label: 'Manage',
-    items: [
-      {to: '/users', label: 'Users', icon: 'users', ability: 'manageUsers'},
-      {to: '/roles', label: 'Roles', icon: 'shield', ability: 'manageRoles'},
-      {to: '/activity', label: 'Activity', icon: 'activity', ability: 'readAudit'},
-    ],
-  },
-  // Only in the Preview and `npm run dev` (never in a build): the UI kit, on screen.
-  ...(import.meta.env.DEV
-    ? [{label: 'Build', items: [{to: '/components', label: 'Components', icon: 'layers' as const, ability: 'manageUsers' as const}]}]
-    : []),
+  // Settings, Account, Users, Roles, Activity and Integrations are ONE sidebar entry (below) with a
+  // secondary nav: src/portal/settings-layout.tsx.
 ];
 
 /** The screen's title for the top bar and the tab: the deepest route's `staticData.title`. */
@@ -181,7 +163,7 @@ function useNavigationFocus(title: string, siteName: string | undefined) {
   const resolved = useRouterState({select: s => s.resolvedLocation?.pathname});
   const first = useRef(true);
   // "<title> · <site>", as App.astro writes it on the first load.
-  const [fallbackName] = useState(() => document.title.split(' · ').slice(1).join(' · ') || 'My site');
+  const [fallbackName] = useState(() => document.title.split(' · ').slice(1).join(' · ') || 'CreatorCrowdHub');
   useEffect(() => {
     document.title = `${title} · ${siteName ?? fallbackName}`;
   }, [title, siteName, fallbackName]);
@@ -264,6 +246,8 @@ function Shell() {
   const siteName = site.data?.site?.name;
   const {heading, resolved} = useNavigationFocus(title, siteName);
   const [open, setOpen] = useState(false);
+  const pathname = useRouterState({select: s => s.location.pathname});
+  const inSettings = isSettingsPath(pathname);
   const [theme, setTheme] = useTheme();
   // `logout()` reloads the page when it is done, so pending never needs resetting.
   const [signingOut, setSigningOut] = useState(false);
@@ -287,13 +271,11 @@ function Shell() {
   }, [open]);
   if (signedOut) return null;
 
-  const name = siteName ?? 'My site';
-  const logo = site.data?.site?.logo;
+  const name = siteName ?? 'CreatorCrowdHub';
   return (
     <div className="app-shell" data-nav-open={open ? '' : undefined}>
       <aside className="app-sidebar" aria-label="Sidebar">
         <a className="app-brand" href="/">
-          <span className="app-brand-mark">{logo ? <img src={logo} alt="" /> : initials(name) || '·'}</span>
           <span className="app-brand-name">{name}</span>
         </a>
         <nav className="app-nav" aria-label="Dashboard">
@@ -302,7 +284,7 @@ function Shell() {
             if (!items.length) return null;
             return (
               <div className="app-nav-group" key={group.label}>
-                <p className="app-nav-label">{group.label}</p>
+                {group.label && <p className="app-nav-label">{group.label}</p>}
                 {items.map(item => (
                   <Link key={item.to} to={item.to} className="app-nav-link" activeOptions={{exact: item.exact ?? false}}>
                     <Icon name={item.icon} size={18} />
@@ -314,6 +296,10 @@ function Shell() {
           })}
         </nav>
         <div className="app-sidebar-foot">
+          <Link to={firstSettingsPath(abilities)} className="app-nav-link" data-active={inSettings ? '' : undefined}>
+            <Icon name="settings" size={18} />
+            Settings
+          </Link>
           <a className="app-nav-link" href="/">
             <Icon name="arrow-left" size={18} />
             Back to the website
@@ -373,7 +359,13 @@ function Shell() {
           </div>
         </header>
         <main className="app-content" id="main">
-          <Outlet />
+          {inSettings ? (
+            <SettingsLayout>
+              <Outlet />
+            </SettingsLayout>
+          ) : (
+            <Outlet />
+          )}
         </main>
       </div>
     </div>
@@ -386,6 +378,11 @@ const overviewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   staticData: {title: 'Overview'},
+  // Door staff (check in guests, cannot manage events) land on the door screen, as in the original.
+  beforeLoad: async ({context: {queryClient}}) => {
+    const me = await queryClient.ensureQueryData(meQuery).catch(() => null);
+    if (me?.abilities?.checkinGuests && !me.abilities.manageEvents) throw redirect({to: '/checkin'});
+  },
   loader: async ({context: {queryClient}}) => {
     // The tiles the visitor may see, as the screen's `enabled` flags decide.
     const [me] = await Promise.all([queryClient.ensureQueryData(meQuery).catch(() => null), warm(queryClient.ensureQueryData(healthQuery), queryClient.ensureQueryData(twoFactorQuery), queryClient.ensureQueryData(siteQuery))]);
@@ -479,6 +476,13 @@ const contactsRoute = createRoute({
   staticData: {title: 'Contacts'},
   component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
 });
+const contactDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/contacts/$email',
+  beforeLoad: needs('manageEvents'),
+  staticData: {title: 'Contact'},
+  component: lazyRouteComponent(() => import('./screens/contact-detail'), 'ContactDetailPage'),
+});
 const eventSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/event-settings',
@@ -533,21 +537,6 @@ const integrationsRoute = createRoute({
   component: lazyRouteComponent(() => import('./screens/refunds'), 'Refunds'),
 });
 
-// The UI kit on screen, for the owner and their agent. Dev only: the whole route (and its
-// chunk) is left out of a build, because `import.meta.env.DEV` is `false` there.
-const devRoutes = import.meta.env.DEV
-  ? [
-      createRoute({
-        getParentRoute: () => rootRoute,
-        path: '/components',
-        // Admin-only like Users: the template's admin-only screens use manageUsers.
-        beforeLoad: needs('manageUsers'),
-        staticData: {title: 'Components'},
-        component: lazyRouteComponent(() => import('./screens/components'), 'Components'),
-      }),
-    ]
-  : [];
-
 export const routeTree = rootRoute.addChildren([
   overviewRoute,
   accountRoute,
@@ -560,10 +549,10 @@ export const routeTree = rootRoute.addChildren([
   eventHubRoute,
   eventSettingsRoute,
   contactsRoute,
+  contactDetailRoute,
   checkinRoute,
   checkinCodeRoute,
   checkinEventRoute,
   pollPresenterRoute,
   integrationsRoute,
-  ...devRoutes,
 ]);

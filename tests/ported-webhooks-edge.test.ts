@@ -2,7 +2,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {DontRetry} from '../src/platform/background';
 
-const sent: Array<{url: string; list: string; data: {endpointId: string; event: string; deliveryId: string; body: string}; opts: {key?: string}}> = [];
+const sent: Array<{url: string; list: string; data: {items: Array<{id: string; event: string; body: string; endpointIds: string[]}>}; opts: {key?: string}}> = [];
 const sendJobImpl = vi.hoisted(() => ({fn: null as null | ((...a: unknown[]) => Promise<unknown>)}));
 vi.mock('../src/platform/background', async orig => ({
   ...(await orig<typeof import('../src/platform/background')>()),
@@ -25,18 +25,19 @@ beforeEach(() => {
 });
 
 describe('dispatchWebhook', () => {
-  it('queues one job per subscribed endpoint, each with its own delivery id and idempotency key', async () => {
+  it('queues ONE job per event carrying every subscribed endpoint, with a delivery id and idempotency key', async () => {
     const n = await dispatchWebhook(dbOf([{id: 'a', events: ['order.paid']}, {id: 'b', events: ['order.paid', 'rsvp.created']}, {id: 'c', events: ['rsvp.created']}]), 'order.paid', {rsvpId: 'r'});
-    expect(n).toBe(2);
-    expect(sent.map(s => s.data.endpointId)).toEqual(['a', 'b']);
-    expect(new Set(sent.map(s => s.data.deliveryId)).size).toBe(2);
-    for (const s of sent) {
-      expect(s.list).toBe('webhook-deliveries');
-      expect(s.opts.key).toBe(`wh-${s.data.deliveryId}`);
-      const body = JSON.parse(s.data.body);
-      expect(body).toMatchObject({id: s.data.deliveryId, event: 'order.paid', data: {rsvpId: 'r'}});
-      expect(Number.isNaN(Date.parse(body.createdAt))).toBe(false);
-    }
+    expect(n).toBe(1);
+    expect(sent).toHaveLength(1);
+    const [job] = sent;
+    expect(job.list).toBe('webhook-deliveries');
+    expect(job.data.items).toHaveLength(1);
+    const [item] = job.data.items;
+    expect(item.endpointIds).toEqual(['a', 'b']);
+    expect(job.opts.key).toBe(`wh-${item.id}`);
+    const body = JSON.parse(item.body);
+    expect(body).toMatchObject({id: item.id, event: 'order.paid', data: {rsvpId: 'r'}});
+    expect(Number.isNaN(Date.parse(body.createdAt))).toBe(false);
   });
 
   it('ignores garbage in the stored events column', async () => {
@@ -51,11 +52,11 @@ describe('dispatchWebhook', () => {
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({where: {active: true}}));
   });
 
-  it('never throws: a failing db or a refused job returns 0 / a partial count', async () => {
+  it('never throws: a failing db returns 0; a refused job (and no outbox) is logged, not thrown', async () => {
     const bad = {webhookEndpoint: {findMany: async () => Promise.reject(new Error('db down'))}} as never;
     expect(await dispatchWebhook(bad, 'rsvp.created', {})).toBe(0);
     sendJobImpl.fn = async () => Promise.reject(new Error('platform refused'));
-    expect(await dispatchWebhook(dbOf([{id: 'a', events: ['rsvp.created']}]), 'rsvp.created', {})).toBe(0);
+    await expect(dispatchWebhook(dbOf([{id: 'a', events: ['rsvp.created']}]), 'rsvp.created', {})).resolves.toBe(1);
   });
 
   it('skips an oversized payload instead of queueing it', async () => {

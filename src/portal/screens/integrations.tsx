@@ -2,7 +2,7 @@ import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {useState} from 'react';
 
 import {ApiError} from '../api';
-import {contactsExportUrl, downloadExport} from '../guests-queries';
+import {contactsExportUrl, downloadExport, EMPTY_CONTACT_FILTER} from '../guests-queries';
 import {
   createWebhook,
   deleteWebhook,
@@ -46,7 +46,7 @@ export function Integrations() {
   const exportContacts = async () => {
     setExporting(true);
     try {
-      await downloadExport(contactsExportUrl({q: '', consent: ''}), 'contacts.csv');
+      await downloadExport(contactsExportUrl(EMPTY_CONTACT_FILTER), 'contacts.csv');
       toast.success('Contacts exported.');
     } catch (err) {
       toast.danger(err instanceof Error ? err.message : 'The export failed.');
@@ -194,8 +194,7 @@ export function Integrations() {
           }>
           <code>{secret}</code>
           <br />
-          It is shown only once. Verify each delivery by comparing the <code>X-Ezy-Signature</code> header with <code>sha256=</code> and the
-          HMAC-SHA256 of the raw body using this secret.{' '}
+          It is shown only once. Use it to verify each delivery (see "Verify deliveries" below).{' '}
           <Button variant="secondary" size="sm" onClick={() => setSecret(null)}>
             I saved it
           </Button>
@@ -226,7 +225,33 @@ export function Integrations() {
           }
         />
       </Card>
-      <p className="muted">Failed deliveries are retried by the platform and listed in its Jobs tab.</p>
+      <p className="muted">
+        A delivery that cannot be sent right away, or that a receiver refuses with a temporary error, is kept and retried with growing delays for up to a
+        day. Each try is signed again. Final refusals are listed in the platform's Jobs tab.
+      </p>
+
+      <Card title="Verify deliveries" description="Check every request before you trust it. The secret is the one shown when you added the webhook.">
+        <ol>
+          <li>
+            Read the raw request body exactly as received (before any JSON parsing) and the <code>X-Ezy-Timestamp</code> header (unix seconds).
+          </li>
+          <li>
+            Reject the request when the timestamp is more than 5 minutes away from your clock. This stops someone replaying a captured request later.
+          </li>
+          <li>
+            Compute the HMAC-SHA256 of <code>timestamp + "." + raw body</code> with your secret, as hex, and prefix it with <code>v2=</code>. Compare it
+            with the <code>X-Ezy-Signature-V2</code> header in constant time (for example <code>crypto.timingSafeEqual</code>), never with <code>==</code>.
+          </li>
+          <li>
+            Remember each <code>X-Ezy-Delivery</code> id for a day and ignore one you have already processed. A delivery can arrive twice and is
+            retried with the same id.
+          </li>
+        </ol>
+        <p className="muted">
+          The older <code>X-Ezy-Signature</code> header (<code>sha256=</code> and the HMAC of the body alone) is still sent, but it does not protect
+          against replay: prefer the V2 header.
+        </p>
+      </Card>
 
       <Drawer
         open={open}

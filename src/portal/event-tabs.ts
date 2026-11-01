@@ -1,18 +1,19 @@
 import type {ComponentType} from 'react';
 
+import type {IconName} from './ui';
+
 /**
  * Event hub tab registry. Tabs are resolved by FILE NAME through import.meta.glob, so a tab whose
  * screen has not been written yet is simply absent (the hub shows "Coming soon") instead of a build error.
  * A module may export the component as default or under a conventional named export.
  */
 export const HUB_TABS = [
-  {id: 'overview', label: 'Overview'},
-  {id: 'guests', label: 'Guests', file: 'guests'},
-  {id: 'invites', label: 'Invites', file: 'invites'},
-  {id: 'messages', label: 'Messages', file: 'messages'},
-  {id: 'polls', label: 'Polls', file: 'polls'},
-  {id: 'checkin', label: 'Check-in', file: 'checkin-tab'},
-  {id: 'analytics', label: 'Analytics', file: 'event-analytics'},
+  {id: 'overview', label: 'Overview', icon: 'dashboard' as IconName},
+  {id: 'guests', label: 'Guests', icon: 'users' as IconName, file: 'guests-invites'},
+  {id: 'messages', label: 'Messages', icon: 'inbox' as IconName, file: 'messages'},
+  {id: 'polls', label: 'Polls', icon: 'activity' as IconName, file: 'polls'},
+  {id: 'checkin', label: 'Check-in', icon: 'check-circle' as IconName, file: 'checkin-tab'},
+  {id: 'analytics', label: 'Analytics', icon: 'trending-up' as IconName, file: 'event-analytics'},
 ] as const;
 export type HubTabId = (typeof HUB_TABS)[number]['id'];
 export type TabProps = {eventId: string};

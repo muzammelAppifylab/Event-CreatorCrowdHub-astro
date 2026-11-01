@@ -1,6 +1,7 @@
 import {appConfig} from '../../config/app.config';
 import {addMinutes} from '../../domain/time';
 import type {PrismaClient} from '../../generated/prisma/client';
+import {emitCancelledIds, emitSeated} from '../webhook-emit';
 import {queueGuestEmail} from './guest-emails';
 import {lockEvent} from './shared';
 import {promoteWaitlist} from './waitlist';
@@ -36,7 +37,11 @@ export async function releaseHold(db: PrismaClient, rsvpId: string, now = new Da
       promoted: promotions.map(p => ({rsvpId: p.rsvpId, kind: p.kind, ...(p.kind === 'offer_claim' ? {claimExpiresAt: p.claimExpiresAt} : {})})),
     } as ReleaseResult;
   });
-  if (outcome.released) await notifyAfterRelease(rsvpId, outcome.promoted);
+  if (outcome.released) {
+    emitCancelledIds(db, found.eventId, [rsvpId]);
+    emitSeated(db, found.eventId, outcome.promoted);
+    await notifyAfterRelease(rsvpId, outcome.promoted);
+  }
   return outcome;
 }
 

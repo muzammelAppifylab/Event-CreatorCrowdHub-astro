@@ -168,6 +168,20 @@ describe("brand button", () => {
   })
 })
 
+describe("masthead logo", () => {
+  it("shows an https logo with alt text and a max size", () => {
+    const html = confirmationEmail(data({ brand: { logoUrl: "https://x.example/logo.png" } })).html
+    expect(html).toContain('<img src="https://x.example/logo.png" alt="Clara Coaching"')
+    expect(html).toContain("max-width:200px")
+    expect(html).toContain("max-height:32px")
+  })
+  it("falls back to the sender name for relative or http logos", () => {
+    for (const logoUrl of ["/__platform/files/1/a.png", "http://x.example/a.png"]) {
+      expect(confirmationEmail(data({ brand: { logoUrl } })).html).not.toContain("<img")
+    }
+  })
+})
+
 describe("consent email", () => {
   it("carries the consent link as its one button, in html and text", () => {
     const mail = consentEmail(data({ guest: { consentUrl: "https://events.example/privacy/consent/tok.sig" } }))

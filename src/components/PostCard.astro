@@ -1,0 +1,36 @@
+---
+/** One story as a card: cover (or a brand-coloured tile), tags, title, description, byline. */
+import {type BlogPost, formatDate, postHref, readingMinutes} from '../lib/posts';
+import Cover from './Cover.astro';
+
+interface Props {
+  post: BlogPost;
+  /** The large card at the top of the blog: cover beside the text, loaded eagerly. */
+  featured?: boolean;
+}
+
+const {post, featured = false} = Astro.props;
+const {title, description, author, publishedAt, cover, coverAlt, tags} = post.data;
+---
+
+<a class:list={['bl-card', {'bl-card-featured': featured}]} href={postHref(post)} data-astro-prefetch>
+  <div class="bl-card-media">
+    {
+      cover ? (
+        <Cover src={cover} alt={coverAlt} width={1200} height={630} sizes={featured ? '(min-width: 900px) 560px, 100vw' : '(min-width: 900px) 360px, 100vw'} eager={featured} />
+      ) : (
+        <span class="bl-card-fallback" aria-hidden="true">{title.slice(0, 1)}</span>
+      )
+    }
+  </div>
+  <div class="bl-card-body">
+    {tags.length > 0 && <p class="bl-tags">{tags.slice(0, 2).map(tag => <span class="bl-tag">{tag}</span>)}</p>}
+    <h2 class="bl-card-title">{title}</h2>
+    <p class="bl-card-desc">{description}</p>
+    <p class="bl-meta">
+      {author && <span>{author}</span>}
+      <span>{formatDate(publishedAt)}</span>
+      <span>{readingMinutes(post.body)} min read</span>
+    </p>
+  </div>
+</a>

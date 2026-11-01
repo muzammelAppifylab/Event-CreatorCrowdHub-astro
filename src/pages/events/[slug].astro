@@ -39,7 +39,7 @@ const gone = copy.errors.eventNotFound;
 
 {
   event ? (
-    <Base site={site} viewer={viewer} guest title={event.title} description={descriptionExcerpt(event.description) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
+    <Base site={site} viewer={viewer} guest noindex={event.visibility !== 'public'} title={event.title} description={descriptionExcerpt(event.description) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
       <main id="main" tabindex="-1" class="g-main" data-event-slug={event.slug}>
         <EventView event={event} rsvp={rsvp} site={site} />
       </main>

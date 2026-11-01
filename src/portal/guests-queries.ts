@@ -102,7 +102,8 @@ export const guestQuery = (eventId: string, rsvpId: string) =>
   });
 
 export const guestsExportUrl = (eventId: string, filter: GuestFilter) => `${ADMIN}/events/${eventId}/guests/export.csv${qs(filter)}`;
-export const contactsExportUrl = (filter: ContactFilter) => `${ADMIN}/contacts/export.csv${qs({q: filter.q, consent: filter.consent})}`;
+export const contactsExportUrl = (filter: ContactFilter) =>
+  `${ADMIN}/contacts/export.csv${qs({q: filter.q, consent: filter.consent, repeat: filter.repeat, attended: filter.attended, event: filter.event})}`;
 
 /* ── Contacts ───────────────────────────────────────────────────────── */
 
@@ -112,16 +113,48 @@ export type ContactRow = {
   eventCount: number;
   lastEvent: {id: string; title: string; startAt: string};
   marketingConsent: boolean;
+  attendedCount: number;
+  firstSeenAt: string;
 };
-export type ContactFilter = {q: string; consent: 'yes' | ''};
+export type ContactFilter = {q: string; consent: 'yes' | ''; repeat: 'yes' | ''; attended: 'yes' | ''; event: string};
+export const EMPTY_CONTACT_FILTER: ContactFilter = {q: '', consent: '', repeat: '', attended: '', event: ''};
+export const CONTACT_PAGE_SIZES = [25, 50, 100] as const;
 
-export const contactsQuery = (filter: ContactFilter) =>
+export const contactsQuery = (filter: ContactFilter, limit: number = CONTACT_PAGE_SIZES[1]) =>
   infiniteQueryOptions({
-    queryKey: ['contacts', filter],
+    queryKey: ['contacts', filter, limit],
     initialPageParam: undefined as string | undefined,
     queryFn: ({pageParam}) =>
-      getJson<{items: ContactRow[]; nextBefore: string | null}>(`/contacts${qs({q: filter.q, consent: filter.consent, before: pageParam})}`),
+      getJson<{items: ContactRow[]; nextBefore: string | null}>(
+        `/contacts${qs({q: filter.q, consent: filter.consent, repeat: filter.repeat, attended: filter.attended, event: filter.event, limit: String(limit), before: pageParam})}`
+      ),
     getNextPageParam: last => last.nextBefore ?? undefined,
+  });
+
+export type ContactDetail = {
+  contact: {email: string; name: string; eventCount: number; attendedCount: number; firstSeenAt: string; marketingConsent: boolean};
+  rsvps: {
+    id: string;
+    eventId: string;
+    eventTitle: string;
+    startAt: string;
+    timezone: string;
+    response: GuestResponse;
+    status: string;
+    seats: number;
+    plusOnes: number;
+    ticketCode: string;
+    checkedInAt: string | null;
+    attended: boolean | null;
+    source: string;
+    createdAt: string;
+  }[];
+};
+
+export const contactDetailQuery = (email: string) =>
+  queryOptions({
+    queryKey: ['contacts', 'detail', email],
+    queryFn: () => getJson<ContactDetail>(`/contacts/detail${qs({email})}`),
   });
 
 /* ── Invites ────────────────────────────────────────────────────────── */
@@ -200,7 +233,7 @@ export const DEFAULT_RULE_COPY: Record<ReminderKind, {offsetMinutes: number; sub
   reminder: {
     offsetMinutes: -24 * 60,
     subject: 'Tomorrow: {{event.title}}',
-    body: "Hi {{guest.first_name}},\n\nA quick reminder that {{event.title}} starts {{event.start_local}}.\n\nCan't make it any more? Update your RSVP: {{rsvp.manage_url}}",
+    body: "Hi {{guest.first_name}},\n\nA quick reminder that {{event.title}} starts {{event.start_local}}.\n\nTaking part in the live poll? Join with this link when we start: {{poll.join_url}}\n\nCan't make it any more? Update your RSVP: {{rsvp.manage_url}}",
   },
   live_now: {
     offsetMinutes: 0,

@@ -4,6 +4,7 @@
  * which always answers the same (it never says whether the email has an
  * account). The email itself is relayed by the platform.
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -13,8 +14,7 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex title="Reset your password">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="login" name={site?.name}>
       <h1>Reset your password</h1>
       <p class="muted">Enter your email and we will send you a link to choose a new password.</p>
       <form id="forgot-form" class="auth-form" novalidate>
@@ -26,8 +26,7 @@ const {site, viewer} = await staticContext(Astro.request);
         <button class="button" type="submit">Send the link</button>
       </form>
       <p class="auth-links"><a href="/account/login/">Back to sign in</a></p>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>

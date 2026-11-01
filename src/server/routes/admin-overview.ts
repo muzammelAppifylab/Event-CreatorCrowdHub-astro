@@ -12,6 +12,19 @@ import {PERMISSIONS} from '../permissions';
 export const UPCOMING_LIMIT = 10;
 export const RECENT_LIMIT = 8;
 
+export const WINDOW_DAYS = 30;
+/** The events the 30-day card looks at: the newest by start, so every count stays on an index prefix (event_id). */
+export const METRIC_EVENT_LIMIT = 100;
+
+export type PeriodMetrics = {rsvps: number; views: number; checkins: number};
+
+/** The two windows ending at `now`: the last N days and the N before. Pure. */
+export function periodWindows(now: Date, days = WINDOW_DAYS) {
+  const ms = days * 86_400_000;
+  const t = now.getTime();
+  return {current: {from: new Date(t - ms), to: new Date(t)}, previous: {from: new Date(t - 2 * ms), to: new Date(t - ms)}};
+}
+
 export type StatusGroup = {eventId: string; status: string; guests: number; seats: number};
 
 /** Fold groupBy rows into per-event and total numbers. Pure, so it is unit-tested. */
@@ -43,6 +56,20 @@ export const adminOverviewRoutes = new Hono().get('/', withViewer, requireAuth, 
     select: {id: true, title: true, startAt: true, timezone: true, capacity: true},
   });
   const ids = upcoming.map(e => e.id);
+  const win = periodWindows(new Date());
+  const metricEvents = await db.event.findMany({where: {deletedAt: null}, orderBy: {startAt: 'desc'}, take: METRIC_EVENT_LIMIT, select: {id: true}});
+  const metricIds = metricEvents.map(e => e.id);
+  const period = async (w: {from: Date; to: Date}): Promise<PeriodMetrics> => {
+    if (!metricIds.length) return {rsvps: 0, views: 0, checkins: 0};
+    const range = {gte: w.from, lt: w.to};
+    const [rsvps, views, checkins] = await Promise.all([
+      db.rsvp.count({where: {eventId: {in: metricIds}, createdAt: range}}),
+      db.pageView.count({where: {eventId: {in: metricIds}, createdAt: range}}),
+      db.rsvp.count({where: {eventId: {in: metricIds}, checkedInAt: range}}),
+    ]);
+    return {rsvps, views, checkins};
+  };
+  const [metricsNow, metricsBefore] = await Promise.all([period(win.current), period(win.previous)]);
   const [groups, recent] = ids.length
     ? await Promise.all([
         db.rsvp.groupBy({by: ['eventId', 'status'], where: {eventId: {in: ids}}, _count: {_all: true}, _sum: {seats: true}}),
@@ -59,6 +86,7 @@ export const adminOverviewRoutes = new Hono().get('/', withViewer, requireAuth, 
   );
   const titles = new Map(upcoming.map(e => [e.id, e.title]));
   return c.json({
+    last30: {windowDays: WINDOW_DAYS, current: metricsNow, previous: metricsBefore},
     totals: {upcomingEvents: upcoming.length, hasMore: upcoming.length === UPCOMING_LIMIT, ...totals},
     events: upcoming.map(e => ({
       id: e.id,

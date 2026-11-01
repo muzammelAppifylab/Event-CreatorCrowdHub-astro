@@ -46,6 +46,8 @@ import {
   useConfirm,
   useForm,
   useToast,
+  BulkAction as BarAction,
+  BulkBar,
 } from '../ui';
 
 const STATUS_TONES: Record<GuestStatus, Tone> = {
@@ -277,7 +279,7 @@ export function GuestsTab({eventId}: {eventId: string}) {
   const ids = [...selected];
   const counts = first?.statusCounts ?? {};
   return (
-    <div className="app-page screen-guests">
+    <div className="app-page screen-guests" data-selecting={selected.size > 0 ? '' : undefined}>
       <div className="grid-3">
         <Stat label="Confirmed" value={first ? String(counts.confirmed ?? 0) : null} icon="check-circle" />
         <Stat label="Pending approval" value={first ? String(counts.pending ?? 0) : null} icon="clock" />
@@ -329,34 +331,13 @@ export function GuestsTab({eventId}: {eventId: string}) {
         </div>
       </div>
 
-      {selected.size > 0 && (
-        <Notice
-          title={`${guestCount(selected.size)} selected`}
-          action={
-            <div className="toolbar-group">
-              <Button size="sm" icon="check" disabled={bulk.isPending} onClick={() => ask('approve', ids)}>
-                Approve
-              </Button>
-              <Button size="sm" variant="secondary" disabled={bulk.isPending} onClick={() => ask('decline', ids)}>
-                Decline
-              </Button>
-              <Button size="sm" variant="secondary" disabled={bulk.isPending} onClick={() => ask('promote', ids)}>
-                Promote
-              </Button>
-              <Menu
-                label="More bulk actions"
-                disabled={bulk.isPending}
-                items={[
-                  {label: 'Remove', icon: 'trash', danger: true, onSelect: () => ask('remove', ids)},
-                  {label: 'Erase personal data', icon: 'lock', danger: true, onSelect: () => ask('erase', ids)},
-                  'separator',
-                  {label: 'Clear selection', icon: 'x', onSelect: () => setSelected(new Set())},
-                ]}
-              />
-            </div>
-          }
-        />
-      )}
+      <BulkBar count={selected.size} noun={selected.size === 1 ? 'guest selected' : 'guests selected'} onClear={() => setSelected(new Set())}>
+        <BarAction icon="check" label="Approve" disabled={bulk.isPending} onClick={() => ask('approve', ids)} />
+        <BarAction icon="x" label="Decline" disabled={bulk.isPending} onClick={() => ask('decline', ids)} />
+        <BarAction icon="arrow-right" label="Promote" disabled={bulk.isPending} onClick={() => ask('promote', ids)} />
+        <BarAction icon="trash" label="Remove" danger disabled={bulk.isPending} onClick={() => ask('remove', ids)} />
+        <BarAction icon="lock" label="Erase data" danger disabled={bulk.isPending} onClick={() => ask('erase', ids)} />
+      </BulkBar>
 
       <Card flush>
         <DataTable
@@ -423,7 +404,9 @@ function GuestDrawer({
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) => sendJson<unknown>('PATCH', `/events/${eventId}/guests/${rsvpId}`, body),
     onSuccess: (_data, body) => {
-      toast.success(body.checkedIn === undefined ? 'Guest updated.' : body.checkedIn ? 'Checked in.' : 'Check-in undone.');
+      toast.success(
+        body.attended !== undefined ? 'Attendance updated.' : body.checkedIn === undefined ? 'Guest updated.' : body.checkedIn ? 'Checked in.' : 'Check-in undone.'
+      );
       return queryClient.invalidateQueries({queryKey: ['guests', eventId]});
     },
     onError: err => err instanceof ApiError && form.setServerErrors(err.fields),
@@ -497,10 +480,47 @@ function GuestDrawer({
           <h3>Details</h3>
           <DefinitionList
             items={[
+              {
+                label: 'Ticket code',
+                value: (
+                  <span className="toolbar-group">
+                    <code>{guest.ticketCode}</code>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon="copy"
+                      onClick={() =>
+                        void navigator.clipboard
+                          .writeText(guest.ticketCode)
+                          .then(() => toast.success('Ticket code copied'))
+                          .catch(() => undefined)
+                      }>
+                      Copy code
+                    </Button>
+                  </span>
+                ),
+              },
               {label: 'Response', value: RESPONSE_LABELS[guest.response]},
               {label: 'Seats', value: guest.seats},
               {label: 'Ticket', value: guest.ticketTypeName ?? 'Free'},
               {label: 'Payment', value: guest.paymentStatus ?? '—'},
+              {label: 'Marketing consent', value: guest.marketingConsent ? 'Yes' : 'No'},
+              {
+                label: 'Attended online',
+                value: (
+                  <Select
+                    aria-label="Attended online"
+                    value={guest.attended === null ? '' : guest.attended ? 'yes' : 'no'}
+                    disabled={save.isPending}
+                    onChange={ev => save.mutate({attended: ev.target.value === '' ? null : ev.target.value === 'yes'})}
+                    options={[
+                      {value: '', label: 'Not recorded'},
+                      {value: 'yes', label: 'Yes'},
+                      {value: 'no', label: 'No'},
+                    ]}
+                  />
+                ),
+              },
               {label: 'Source', value: guest.source},
               {label: 'Checked in', value: guest.checkedInAt ? when(guest.checkedInAt) : 'No'},
               ...(guest.status === 'waitlisted' ? [{label: 'Waitlist position', value: guest.waitlistPosition ?? '—'}] : []),
@@ -543,6 +563,9 @@ function GuestDrawer({
             </Button>
             <Button variant="danger" icon="trash" onClick={() => onAction('remove', guest.id)}>
               Remove
+            </Button>
+            <Button variant="danger" icon="trash" onClick={() => onAction('erase', guest.id)}>
+              Erase personal data
             </Button>
           </div>
         </>

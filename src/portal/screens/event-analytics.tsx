@@ -8,6 +8,8 @@ const dayLabel = (iso: string) => new Intl.DateTimeFormat('en-GB', {day: 'numeri
 
 type SourceRow = {source: string | null; views: number; rsvps: number};
 
+type StatusRow = {label: string; count: number; share: number};
+
 type Revenue = {currency: string; amountCents: number; orders: number};
 function money(r: Revenue): string {
   try {
@@ -37,6 +39,20 @@ export function EventAnalytics({eventId}: {eventId: string}) {
     {key: 'source', header: 'Source', cell: s => <span className="cell-title">{s.source ?? 'Direct or shared link'}</span>},
     {key: 'views', header: 'Views', width: 'shrink', align: 'end', cell: s => s.views},
     {key: 'rsvps', header: 'RSVPs', width: 'shrink', align: 'end', cell: s => s.rsvps},
+    {key: 'conversion', header: 'Conversion', width: 'shrink', align: 'end', cell: s => (s.views > 0 ? `${Math.round((s.rsvps / s.views) * 100)}%` : '—')},
+  ];
+  const statusRows: StatusRow[] =
+    data && data.rsvps.total > 0
+      ? [
+          {label: 'Going', count: data.rsvps.going},
+          {label: 'Maybe', count: data.rsvps.maybe},
+          {label: 'Waitlisted', count: data.rsvps.waitlisted},
+        ].map(r => ({...r, share: Math.round((r.count / data.rsvps.total) * 100)}))
+      : [];
+  const statusColumns: Column<StatusRow>[] = [
+    {key: 'label', header: 'Status', cell: r => <span className="cell-title">{r.label}</span>},
+    {key: 'count', header: 'RSVPs', width: 'shrink', align: 'end', cell: r => r.count},
+    {key: 'share', header: 'Share', width: 'shrink', align: 'end', cell: r => `${r.share}%`},
   ];
 
   return (
@@ -72,6 +88,22 @@ export function EventAnalytics({eventId}: {eventId: string}) {
         ) : (
           <LoadingBlock rows={3} />
         )}
+      </Card>
+
+      <Card flush title="RSVPs by status">
+        <DataTable
+          caption="RSVPs by status"
+          columns={statusColumns}
+          rows={data ? statusRows : undefined}
+          rowKey={r => r.label}
+          loading={query.isPending}
+          error={query.error}
+          empty={
+            <EmptyState icon="users" title="No RSVPs yet">
+              Responses appear here once guests RSVP.
+            </EmptyState>
+          }
+        />
       </Card>
 
       <Card flush title="Top sources" description="By the utm_source of the link they used.">

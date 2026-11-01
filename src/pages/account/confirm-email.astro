@@ -5,6 +5,7 @@
  * not the page load, uses the token: email scanners open links too. Confirming
  * signs every device out; the person signs in again with the new address.
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -14,16 +15,14 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Confirm your new email">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="login" name={site?.name}>
       <h1>Confirm your new email</h1>
       <form id="confirm-form" class="auth-form" novalidate>
         <p class="muted">Your account will sign in with this address from now on. Every device is signed out once you confirm.</p>
         <p class="notice" data-form-status hidden></p>
         <button class="button" type="submit">Confirm my new email</button>
       </form>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>

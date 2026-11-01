@@ -79,3 +79,28 @@ export function verifyTokenWithExpiry<T = unknown>(
   if (body.e !== undefined && Math.floor(now.getTime() / 1000) >= body.e) return null
   return { data: body.d, expiresAt: body.e ?? null }
 }
+
+/**
+ * Stateless poll guest identity for links in EMAILS (the manage token is stored hashed, so an
+ * email cannot carry it). `pg_` + a signed "poll" token over {rsvpId, eventId}. The prefix tells
+ * it apart from a raw manage token (`newToken()` is base64url, never contains a ".").
+ */
+export const POLL_GUEST_PREFIX = "pg_"
+export const POLL_GUEST_TTL_SECONDS = 180 * 24 * 60 * 60
+
+export function pollGuestToken(rsvpId: string, eventId: string, secret: string, now: Date = new Date()): string {
+  return POLL_GUEST_PREFIX + signToken("poll", { r: rsvpId, e: eventId }, secret, { expiresInSeconds: POLL_GUEST_TTL_SECONDS, now })
+}
+
+/** `{rsvpId, eventId}` for a valid, unexpired signed poll guest token; null otherwise (never throws). */
+export function verifyPollGuestToken(value: string, secret: string, now: Date = new Date()): { rsvpId: string; eventId: string } | null {
+  if (typeof value !== "string" || !value.startsWith(POLL_GUEST_PREFIX)) return null
+  const d = verifyToken<{ r?: unknown; e?: unknown }>(value.slice(POLL_GUEST_PREFIX.length), "poll", secret, now)
+  return d && typeof d.r === "string" && typeof d.e === "string" ? { rsvpId: d.r, eventId: d.e } : null
+}
+
+/** `<base>/p/<code>/` plus `?g=<signed>` when a secret is available. Keeps the trailing slash. */
+export function pollLinkFor(base: string, code: string, rsvpId: string, eventId: string, secret: string | null | undefined, now?: Date): string {
+  const url = `${base.replace(/\/+$/, "")}/p/${encodeURIComponent(code)}/`
+  return secret ? `${url}?g=${encodeURIComponent(pollGuestToken(rsvpId, eventId, secret, now))}` : url
+}

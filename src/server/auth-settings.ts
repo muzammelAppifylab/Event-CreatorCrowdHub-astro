@@ -13,7 +13,8 @@ import {type AuthSettings, DEFAULT_AUTH_SETTINGS} from '../platform/auth';
 export const authSettings: AuthSettings = {
   ...DEFAULT_AUTH_SETTINGS,
   // registration: 'open',
-  // requireEmailVerification: true,
+  // LOCAL DEV ONLY (no email is delivered without a Site Key). Remove before publishing.
+  requireEmailVerification: false,
   // ownerEmails: ['owner@example.com'],
   // afterSignInPath: '/dashboard',
 };

@@ -373,7 +373,7 @@ export const adminMessageRoutes = new Hono()
       ticketCode: 'AB23CD45',
       waitlistPosition: null,
     };
-    const data = emailDataFor(publicBase(c.req.url), event, guest, await loadBrand(db));
+    const data = emailDataFor(publicBase(c.req.url), event, guest, await loadBrand(db, c.req.url));
     const copy: CreatorCopy = {subject: input.subject, body: input.body};
     // Unknown tags do not fail a preview: the editor shows them as a warning while typing.
     const unknownTags = [...new Set([...renderTemplate(copy.subject, {}).unknownTags, ...renderTemplate(copy.body, {}).unknownTags])];
@@ -477,7 +477,7 @@ export const adminMessageRoutes = new Hono()
     await db.messageDelivery.createMany({
       data: recipients.map(g => ({rsvpId: g.id, messageId: message.id, status: 'queued' as const})),
     });
-    const brand = await loadBrand(db);
+    const brand = await loadBrand(db, c.req.url);
     const base = publicBase(c.req.url);
     const copy: CreatorCopy = {subject: input.subject, body: input.body};
     let sent = 0;

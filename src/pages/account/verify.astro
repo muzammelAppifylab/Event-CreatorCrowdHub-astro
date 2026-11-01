@@ -5,6 +5,7 @@
  * emails are often opened by scanners, which must not use the token up.
  * An expired link offers to send a new one.
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -14,8 +15,7 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Confirm your email">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="login" name={site?.name}>
       <h1>Confirm your email</h1>
       <form id="verify-form" class="auth-form" novalidate>
         <p class="muted">One click and your account is ready.</p>
@@ -31,8 +31,7 @@ const {site, viewer} = await staticContext(Astro.request);
         <p class="notice" data-form-status hidden></p>
         <button class="button ghost" type="submit">Send a new link</button>
       </form>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>

@@ -6,6 +6,7 @@ import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/
 const A = '/site-api/admin-events';
 
 describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () => {
+  let owner: Browser;
   let admin: Browser;
   let staff: Browser;
   let member: Browser;
@@ -16,6 +17,7 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
     await resetDatabase();
     await resetEvents();
     await userWith('first@example.test', ['owner'], '203.0.113.1'); // throwaway: takes the owner slot
+    owner = await userWith('owner@example.test', ['owner'], '203.0.113.5');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.2');
     staff = await userWith('staff@example.test', ['checkin_staff'], '203.0.113.3');
     member = await userWith('member@example.test', ['member'], '203.0.113.4');
@@ -98,9 +100,11 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
     expect((await staff.post(`/site-api/checkin/codes/${row.ticketCode}`, {checkedIn: true})).status).toBe(409);
   });
 
-  it('webhooks: managers only, and private or unsafe URLs are refused (SSRF)', async () => {
+  it('webhooks: owner only (admin 403), and private or unsafe URLs are refused (SSRF)', async () => {
     const W = '/site-api/webhook-endpoints';
     expect((await staff.get(W)).status).toBe(403);
+    expect((await admin.get(W)).status).toBe(403);
+    expect((await owner.get(W)).status).toBe(200);
     for (const url of [
       'http://example.com/hook',
       'https://127.0.0.1/hook',
@@ -114,13 +118,13 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
       'https://intranet/hook',
       'https://printer.local/hook',
     ]) {
-      const res = await admin.post(W, {url, events: ['rsvp.created']});
+      const res = await owner.post(W, {url, events: ['rsvp.created']});
       expect(res.status, url).toBe(422);
     }
     expect(await db.webhookEndpoint.count()).toBe(0);
     // A row planted in the database (older data) is still never fetched.
     const planted = await db.webhookEndpoint.create({data: {url: 'https://127.0.0.1/x', events: ['webhook.test'], secret: 'whsec_x', active: true}});
-    const t = await admin.post(`${W}/${planted.id}/test`);
+    const t = await owner.post(`${W}/${planted.id}/test`);
     expect(t.status).toBe(200);
     expect(t.json.ok).toBe(false);
     expect(t.json.status).toBeNull();

@@ -44,6 +44,12 @@ export interface RsvpEventView {
   closed: boolean;
   /** Free seats (`null` = unlimited). */
   seatsLeft: number | null;
+  /** The host's "Show guest list" switch; when off `attendees` is null. */
+  showGuestList?: boolean;
+  /** Confirmed going seats (0 unless the guest list is on). */
+  goingCount?: number;
+  /** First name + initials only, bounded; null unless the guest list is on. */
+  attendees?: {name: string; initials: string}[] | null;
   questions: RsvpQuestion[];
   ticketTypes: RsvpTicketType[];
 }

@@ -9,7 +9,7 @@ import {hubEventQuery} from '../overview-queries';
 import {type AdminEventDetail} from '../../lib/event-schemas';
 import {HubActions, PublishProblems} from './event-hub-actions';
 import {RefundsCard} from './refunds-card';
-import {Badge, Button, buttonClass, Card, DefinitionList, EmptyState, ErrorNote, Icon, LoadingBlock, Notice, PageHeader, Stat, Tabs, useToast} from '../ui';
+import {Badge, buttonClass, Card, DefinitionList, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, ProgressBar, Stat, Tabs, useToast} from '../ui';
 
 const STATUS_TONES = {draft: 'neutral', published: 'success', cancelled: 'danger'} as const;
 const STATUS_LABELS = {draft: 'Draft', published: 'Published', cancelled: 'Cancelled'} as const;
@@ -30,19 +30,23 @@ function tabComponent(id: HubTabId): ComponentType<TabProps> | null {
 const initialTab = (): HubTabId => {
   try {
     const t = new URLSearchParams(window.location.search).get('tab');
+    if (t === 'invites') return 'guests';
     return HUB_TABS.find(x => x.id === t)?.id ?? 'overview';
   } catch {
     return 'overview';
   }
 };
 
-function HubOverview({eventId}: TabProps) {
+type HubOverviewProps = TabProps & {onTab: (tab: HubTabId, view?: string) => void};
+
+/** The first thing a host sees: seats and what is waiting, the next things to do, then how the page performs. */
+function HubOverview({eventId, onTab}: HubOverviewProps) {
   const event = useQuery(hubEventQuery(eventId));
   const e = event.data as HubDetail | undefined;
   const counts = e?.counts;
   const analytics = useQuery(eventAnalyticsQuery(eventId));
   const a = analytics.data;
-  const seats = counts ? (e?.capacity ? `${counts.confirmed} of ${e.capacity}` : String(counts.confirmed)) : null;
+  const toast = useToast();
   const where = e?.format === 'online' ? FORMAT_LABELS.online : [e?.venueName, e?.venueAddress].filter(Boolean).join(', ');
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
   const items: {label: string; value: React.ReactNode}[] = [];
@@ -51,28 +55,61 @@ function HubOverview({eventId}: TabProps) {
   if (e?.slug) items.push({label: 'Public link', value: <span className="break-all">{`${origin}/events/${e.slug}/`}</span>});
   if (e?.joinUrl) items.push({label: 'Join link (confirmed guests only)', value: <span className="break-all">{e.joinUrl}</span>});
   if (e?.pollJoinCode) items.push({label: 'Poll join code', value: <code>{e.pollJoinCode}</code>});
+  const copyLink = () =>
+    e &&
+    void navigator.clipboard
+      .writeText(`${window.location.origin}/events/${e.slug}/`)
+      .then(() => toast.success('Event link copied'))
+      .catch(() => undefined);
   return (
-    <>
+    <div className="hub-stack">
       {event.error && <ErrorNote error={event.error} />}
-      <div className="stat-grid">
-        <Stat label="Going" icon="check" value={counts ? String(counts.confirmed) : null} />
-        <Stat label="Maybe" icon="info" value={a ? String(a.rsvps.maybe) : null} />
-        <Stat label="Waitlisted" icon="clock" value={counts ? String(counts.waitlisted) : null} />
-        <Stat label="Pending approval" icon="inbox" value={counts ? String(counts.pending) : null} />
-        <Stat label="Seats taken" icon="users" value={seats} />
+      <Card>
+        <div className="hub-glance">
+          <div className="hub-glance-head">
+            <p className="hub-glance-count">
+              {counts ? counts.confirmed : '–'}
+              <span className="muted"> {e?.capacity ? `of ${e.capacity} going` : 'going'}</span>
+            </p>
+            <div className="hub-glance-flags">
+              {counts && counts.pending > 0 && <Badge tone="warning">{counts.pending} awaiting approval</Badge>}
+              {counts && counts.waitlisted > 0 && <Badge tone="warning">{counts.waitlisted} waitlisted</Badge>}
+              {a && a.rsvps.maybe > 0 && <Badge>{a.rsvps.maybe} maybe</Badge>}
+            </div>
+          </div>
+          {counts && e?.capacity ? <ProgressBar value={counts.confirmed} max={e.capacity} label={`${counts.confirmed} of ${e.capacity} seats taken`} /> : null}
+        </div>
+      </Card>
+      <div className="hub-quick">
+        <QuickTile icon="user-plus" title="Invite guests" sub="Send personal invites" onClick={() => onTab('guests', 'invites')} />
+        <QuickTile icon="check-circle" title="Check in guests" sub="Open the door list" onClick={() => onTab('checkin')} />
+        <QuickTile icon="mail" title="Message guests" sub="Email an update" onClick={() => onTab('messages')} />
+        <QuickTile icon="copy" title="Copy event link" sub="Share the public page" onClick={copyLink} disabled={!e} />
       </div>
       <RefundsCard eventId={eventId} />
-      <Card title="Summary">
-        <div className="stat-grid">
-          <Stat label="Page views" icon="search" value={a ? String(a.views) : null} />
-          <Stat label="RSVPs" icon="inbox" value={a ? String(a.rsvps.total) : null} />
-          <Stat label="Conversion" icon="refresh" value={a ? (a.conversion.value === null ? '—' : `${Math.round(a.conversion.value * 100)}%`) : null} />
-          <Stat label="Checked in" icon="check" value={a ? String(a.rsvps.checkedIn) : null} />
-        </div>
-        {analytics.error && <ErrorNote error={analytics.error} />}
-      </Card>
+      <div className="stat-grid">
+        <Stat label="Page views" icon="search" value={a ? String(a.views) : null} />
+        <Stat label="RSVPs" icon="inbox" value={a ? String(a.rsvps.total) : null} />
+        <Stat label="Conversion" icon="refresh" value={a ? (a.conversion.value === null ? '—' : `${Math.round(a.conversion.value * 100)}%`) : null} />
+        <Stat label="Checked in" icon="check" value={a ? String(a.rsvps.checkedIn) : null} />
+      </div>
+      {analytics.error && <ErrorNote error={analytics.error} />}
       <Card title="Details">{items.length ? <DefinitionList items={items} /> : <LoadingBlock rows={3} />}</Card>
-    </>
+    </div>
+  );
+}
+
+function QuickTile({icon, title, sub, onClick, disabled}: {icon: IconName; title: string; sub: string; onClick: () => void; disabled?: boolean}) {
+  return (
+    <button type="button" className="hub-quick-tile" onClick={onClick} disabled={disabled}>
+      <span className="hub-quick-icon">
+        <Icon name={icon} size={18} />
+      </span>
+      <span>
+        {title}
+        <span className="hub-quick-sub">{sub}</span>
+      </span>
+    </button>
   );
 }
 
@@ -89,17 +126,18 @@ export function EventHub({eventId}: {eventId: string}) {
   const [tab, setTab] = useState<HubTabId>(initialTab);
   const event = useQuery(hubEventQuery(eventId));
   const e = event.data;
-  const toast = useToast();
   const [problem, setProblem] = useState<ApiError | null>(null);
   const current = HUB_TABS.find(t => t.id === tab)!;
-  const Tab = tab === 'overview' ? HubOverview : tabComponent(tab);
+  const Tab = tab === 'overview' ? null : tabComponent(tab);
 
-  const select = (next: HubTabId) => {
+  const select = (next: HubTabId, view?: string) => {
     setTab(next);
     try {
       const url = new URL(window.location.href);
       url.searchParams.set('tab', next);
-      window.history.replaceState(null, '', url);
+      if (view) url.searchParams.set('view', view);
+      else url.searchParams.delete('view');
+      window.history.replaceState(window.history.state, '', url);
     } catch {
       /* the URL is a convenience only */
     }
@@ -107,40 +145,27 @@ export function EventHub({eventId}: {eventId: string}) {
 
   return (
     <div className="app-page screen-event-hub">
-      <PageHeader
-        title={e?.title ?? 'Event'}
-        description={
-          e ? (
-            <span className="badges">
-              <Badge tone={STATUS_TONES[e.status] ?? 'neutral'}>{STATUS_LABELS[e.status] ?? e.status}</Badge>
-              {(e as HubDetail).visibility && <Badge>{VISIBILITY_LABELS[(e as HubDetail).visibility!]}</Badge>}
-              {(e as HubDetail).format && <Badge>{FORMAT_LABELS[(e as HubDetail).format!]}</Badge>}
-            </span>
-          ) : undefined
-        }
-        actions={
-          <>
-            <Link className={buttonClass({variant: 'ghost'})} to={'/events' as never}>
-              <Icon name="arrow-left" size={18} />
-              All events
-            </Link>
+      <header className="hub-head">
+        <Link className="hub-crumb" to={'/events' as never}>
+          <Icon name="arrow-left" size={16} />
+          Events
+        </Link>
+        <div className="hub-title-row">
+          <div>
+            <h2>{e?.title ?? 'Event'}</h2>
             {e && (
-              <Button
-                variant="secondary"
-                icon="copy"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(`${window.location.origin}/events/${e.slug}/`)
-                    .then(() => toast.success('Event link copied'))
-                    .catch(() => undefined)
-                }>
-                Copy link
-              </Button>
+              <span className="badges">
+                <Badge tone={STATUS_TONES[e.status] ?? 'neutral'}>{STATUS_LABELS[e.status] ?? e.status}</Badge>
+                {(e as HubDetail).visibility && <Badge>{VISIBILITY_LABELS[(e as HubDetail).visibility!]}</Badge>}
+                {(e as HubDetail).format && <Badge>{FORMAT_LABELS[(e as HubDetail).format!]}</Badge>}
+              </span>
             )}
+          </div>
+          <div className="hub-actions">
             {e && e.status === 'published' && (
-              <a className={buttonClass({variant: 'secondary'})} href={`/events/${e.slug}/`} target="_blank" rel="noopener">
+              <a className={buttonClass({variant: 'secondary'})} href={`/events/${e.slug}/`} target="_blank" rel="noopener noreferrer">
                 <Icon name="external" size={18} />
-                View public page
+                Event page
               </a>
             )}
             {e && e.status !== 'cancelled' && (
@@ -155,16 +180,24 @@ export function EventHub({eventId}: {eventId: string}) {
                 onPublishProblem={setProblem}
               />
             )}
-          </>
-        }
-      />
+          </div>
+        </div>
+      </header>
       {event.error && <ErrorNote error={event.error} />}
       {problem && <PublishProblems error={problem} />}
       {e?.status === 'draft' && <Notice tone="warning">This is a draft. Guests can't open the link until you publish.</Notice>}
       {e?.status === 'cancelled' && <Notice tone="danger">This event is cancelled. Its page shows a Cancelled banner.</Notice>}
-      <Tabs label="Event sections" items={HUB_TABS.map(t => ({value: t.id, label: t.label}))} value={tab} onChange={select}>
+      <Tabs label="Event sections" items={HUB_TABS.map(t => ({
+          value: t.id,
+          label: (
+            <span className="tab-label">
+              <Icon name={t.icon} size={16} />
+              {t.label}
+            </span>
+          ),
+        }))} value={tab} onChange={next => select(next)}>
         <Suspense fallback={<LoadingBlock rows={4} />}>
-          {Tab ? <Tab eventId={eventId} /> : <Card><ComingSoon label={current.label} /></Card>}
+          {tab === 'overview' ? <HubOverview eventId={eventId} onTab={select} /> : Tab ? <Tab eventId={eventId} /> : <Card><ComingSoon label={current.label} /></Card>}
         </Suspense>
       </Tabs>
     </div>

@@ -16,6 +16,10 @@ import {pageContext} from '../../server/page';
 export const prerender = false;
 
 const code = normalizeJoinCode(Astro.params.code ?? '');
+// `?g=<manage token>`: lets a non-anonymous poll link the vote to the guest. A credential: kept out of Referer and the index.
+const rawGuest = Astro.url.searchParams.get('g') ?? '';
+const guestToken = rawGuest.length > 0 && rawGuest.length <= 400 ? rawGuest : '';
+if (guestToken) Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 const {site, viewer} = await pageContext(Astro.request, Astro.response);
 let initial: unknown = null;
 let missing = !code;
@@ -43,7 +47,7 @@ const shownCode = clean.length === 6 ? `${clean.slice(0, 3)}-${clean.slice(3)}` 
       <ErrorScreen poster={['No poll', 'with that code']} description="Check the code on the host's screen and try again." action={{href: '/', label: 'Go to the start'}} />
     </Base>
   ) : (
-    <Base site={site} viewer={viewer} title={title ? `Vote: ${title}` : 'Live poll'} noindex guest>
+    <Base site={site} viewer={viewer} title={title ? `Vote: ${title}` : 'Live poll'} noindex secretInUrl={!!guestToken} guest noFooter>
       <main id="main" tabindex="-1" class="g-main">
         <div class="g-poll">
           <header class="g-poll-head">
@@ -52,7 +56,7 @@ const shownCode = clean.length === 6 ? `${clean.slice(0, 3)}-${clean.slice(3)}` 
               <span class="g-poll-code type-code" aria-label={`Code ${clean.split('').join(' ')}`}>{shownCode}</span>
             </div>
           </header>
-          <div id="poll-root" data-code={code}>
+          <div id="poll-root" data-code={code} data-guest={guestToken || undefined}>
             <noscript>
               <p>Voting needs JavaScript.</p>
             </noscript>

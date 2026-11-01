@@ -43,15 +43,21 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = {}, ...
 }
 
 /** Bars + numbers for any poll type (the numbers are text, so colour is never the only signal). */
-export function renderResults(results: Results): HTMLElement {
+export function renderResults(results: Results, mine: string[] = []): HTMLElement {
   const box = h('div', {class: 'poll-results'});
-  const bar = (label: string, count: number, percent: number) => {
+  const bar = (label: string, count: number, percent: number, yours = false) => {
     const fill = h('span', {class: 'poll-bar-fill'});
     fill.style.width = `${percent}%`; // via the element, which the CSP allows
-    return h('div', {class: 'poll-row'}, h('div', {class: 'poll-row-head'}, h('span', {}, label), h('strong', {}, `${percent}% · ${count}`)), h('span', {class: 'poll-bar', 'aria-hidden': 'true'}, fill));
+    return h(
+      'div',
+      {class: 'poll-row', 'data-mine': yours ? '' : undefined},
+      h('div', {class: 'poll-row-head'}, h('span', {}, label, yours ? h('em', {class: 'poll-mine'}, 'Your pick') : ''), h('strong', {}, `${percent}%`)),
+      h('span', {class: 'poll-bar', 'aria-hidden': 'true'}, fill),
+      h('span', {class: 'poll-count'}, `${count} ${count === 1 ? 'vote' : 'votes'}`)
+    );
   };
   if (results.options.length) {
-    for (const o of results.options) box.append(bar(o.label, o.count, o.percent));
+    for (const o of results.options) box.append(bar(o.label, o.count, o.percent, mine.includes(o.id)));
   } else if (results.rating) {
     const total = results.rating.count || 1;
     box.append(h('p', {class: 'poll-average'}, results.rating.average === null ? '–' : results.rating.average.toFixed(1), h('span', {class: 'muted'}, ' out of 5')));
@@ -63,12 +69,13 @@ export function renderResults(results: Results): HTMLElement {
   } else {
     box.append(h('p', {class: 'muted'}, 'No answers yet.'));
   }
-  box.append(h('p', {class: 'muted small'}, `${results.totalVoters} ${results.totalVoters === 1 ? 'answer' : 'answers'}`));
+  box.append(h('p', {class: 'poll-total'}, `${results.totalVoters} ${results.totalVoters === 1 ? 'answer' : 'answers'} so far`));
   return box;
 }
 
 export function mountPoll(root: HTMLElement): void {
   const code = root.dataset.code ?? '';
+  const guest = root.dataset.guest ?? ''; // manage token from `?g=`: sent in the POST body only, never in a requested URL
   const api = `/site-api/polls-public/${encodeURIComponent(code)}`;
   const initial = document.getElementById('poll-initial')?.textContent;
   let active: Active | null = initial ? (JSON.parse(initial) as Active) : null;
@@ -94,7 +101,7 @@ export function mountPoll(root: HTMLElement): void {
       const res = await siteFetch(`${api}/votes`, {
         method: 'POST',
         headers: {'content-type': 'application/json', accept: 'application/json'},
-        body: JSON.stringify({pollId: poll.id, type: poll.type, ...vote}),
+        body: JSON.stringify({pollId: poll.id, type: poll.type, ...vote, ...(guest ? {g: guest} : {})}),
       });
       const answer = (await res.json().catch(() => null)) as {message?: string; myVote?: MyVote; results?: Results | null} | null;
       if (!res.ok) throw new Error(answer?.message ?? 'Your answer was not sent. Try again.');
@@ -114,9 +121,16 @@ export function mountPoll(root: HTMLElement): void {
     const current: MyVote = draft ?? {optionIds: [...(mine?.optionIds ?? [])], ratingValue: mine?.ratingValue ?? null, textValue: mine?.textValue ?? null};
     draft = current;
     const f = h('form', {class: 'poll-form', novalidate: true});
+    const live = h('p', {class: 'poll-live'}, h('span', {class: 'poll-live-dot', 'aria-hidden': 'true'}), 'Live · answer now');
     const fieldset = h('fieldset', {class: 'poll-fieldset'}, h('legend', {class: 'poll-question'}, poll.question));
     const answered = mine && (mine.optionIds.length || mine.ratingValue !== null || mine.textValue);
-    const submit = h('button', {class: 'button button-lg button-block', type: 'submit'}, poll.type === 'short_text' ? 'Send answer' : answered ? 'Change answer' : 'Send answer');
+    const submit = h('button', {class: 'button button-lg button-block', type: 'submit'}, poll.type === 'short_text' ? 'Send answer' : answered ? 'Update answer' : 'Send answer');
+    // Nothing to send until something is chosen: the button says so instead of failing later.
+    const ready = () =>
+      poll.type === 'rating' ? current.ratingValue !== null : poll.type === 'short_text' ? Boolean(current.textValue?.trim()) : current.optionIds.length > 0;
+    const sync = () => {
+      submit.disabled = !ready() || Boolean(poll.type === 'short_text' && mine?.textValue);
+    };
 
     if (poll.type === 'single_choice' || poll.type === 'multi_choice') {
       const multi = poll.type === 'multi_choice';
@@ -124,26 +138,35 @@ export function mountPoll(root: HTMLElement): void {
         const input = h('input', {type: multi ? 'checkbox' : 'radio', name: 'option', value: o.id, checked: current.optionIds.includes(o.id)});
         input.addEventListener('change', () => {
           current.optionIds = multi ? [...f.querySelectorAll<HTMLInputElement>('input:checked')].map(i => i.value) : [o.id];
+          sync();
         });
         fieldset.append(h('label', {class: 'poll-choice'}, input, h('span', {}, o.label)));
       }
-      if (multi) fieldset.append(h('p', {class: 'muted small'}, 'Choose all that apply.'));
+      fieldset.append(h('p', {class: 'muted small'}, multi ? 'Choose all that apply.' : 'Choose one.'));
     } else if (poll.type === 'rating') {
       const row = h('div', {class: 'poll-rating'});
       for (let n = 1; n <= 5; n++) {
         const input = h('input', {type: 'radio', name: 'rating', value: n, checked: current.ratingValue === n, 'aria-label': `${n} out of 5`});
-        input.addEventListener('change', () => (current.ratingValue = n));
+        input.addEventListener('change', () => {
+          current.ratingValue = n;
+          sync();
+        });
         row.append(h('label', {class: 'poll-star'}, input, h('span', {}, String(n))));
       }
-      fieldset.append(row, h('p', {class: 'muted small'}, '1 is lowest, 5 is highest.'));
+      fieldset.append(row, h('p', {class: 'poll-scale muted small'}, h('span', {}, '1 · Lowest'), h('span', {}, 'Highest · 5')));
     } else {
       const area = h('textarea', {name: 'text', rows: 3, maxlength: TEXT_MAX, 'aria-label': 'Your answer', disabled: Boolean(mine?.textValue)});
       area.value = current.textValue ?? '';
-      area.addEventListener('input', () => (current.textValue = area.value));
-      fieldset.append(area, h('p', {class: 'muted small'}, mine?.textValue ? 'Thanks, your answer is in.' : `Up to ${TEXT_MAX} characters. One answer per device.`));
-      if (mine?.textValue) submit.disabled = true;
+      const count = h('span', {class: 'poll-counter'}, `${area.value.length}/${TEXT_MAX}`);
+      area.addEventListener('input', () => {
+        current.textValue = area.value;
+        count.textContent = `${area.value.length}/${TEXT_MAX}`;
+        sync();
+      });
+      fieldset.append(area, h('p', {class: 'poll-hint muted small'}, h('span', {}, mine?.textValue ? 'Thanks, your answer is in.' : 'One answer per device.'), count));
     }
-    f.append(fieldset, submit);
+    sync();
+    f.append(live, fieldset, h('div', {class: 'poll-actions'}, submit));
     f.addEventListener('submit', event => {
       event.preventDefault();
       void send(poll, current, submit);
@@ -161,7 +184,15 @@ export function mountPoll(root: HTMLElement): void {
     const nodes: Node[] = [];
     if (error) nodes.push(h('p', {class: 'notice', role: 'alert', 'data-tone': 'error'}, error));
     if (!poll || active.status === 'waiting') {
-      nodes.push(h('p', {class: 'lede'}, 'Waiting for the host to open a poll… Keep this page open. The question appears here as soon as the host opens it.'));
+      nodes.push(
+        h(
+          'div',
+          {class: 'g-poll-waiting'},
+          h('span', {class: 'poll-pulse', 'aria-hidden': 'true'}, h('i'), h('i'), h('i')),
+          h('p', {class: 'poll-wait-title'}, 'Waiting for the host'),
+          h('p', {class: 'muted'}, 'Keep this page open. The question appears here the moment the host opens it.')
+        )
+      );
     } else if (poll.status === 'open') {
       // Keep a form the voter is filling in: only rebuild it when the question changes or after a send.
       if (!force && key === formKey && body.querySelector('form')) {
@@ -172,7 +203,7 @@ export function mountPoll(root: HTMLElement): void {
       if (key !== formKey) draft = null;
       formKey = key;
       nodes.push(form(poll));
-      if (sent) nodes.push(h('p', {class: 'notice', 'data-tone': 'success'}, 'Thanks, your answer is in. You can change it while the poll is open.'));
+      if (sent) nodes.push(h('p', {class: 'poll-done', role: 'status'}, h('span', {class: 'poll-done-icon', 'aria-hidden': 'true'}), h('span', {}, h('strong', {}, 'Your answer is in. '), 'You can change it while the poll is open.')));
       body.replaceChildren(...nodes);
       renderLive(poll);
       return;
@@ -180,14 +211,14 @@ export function mountPoll(root: HTMLElement): void {
       formKey = key;
       nodes.push(h('h2', {class: 'poll-question'}, poll.question), h('p', {class: 'muted'}, 'This poll is closed.'));
     }
-    if (poll && poll.showResultsToVoters && (poll.status === 'closed' || active.myVote) && results) nodes.push(renderResults(results));
+    if (poll && poll.showResultsToVoters && (poll.status === 'closed' || active.myVote) && results) nodes.push(renderResults(results, active.myVote?.optionIds ?? []));
     body.replaceChildren(...nodes);
   }
 
   /** Results under an open poll's form, once the voter has answered. */
   function renderLive(poll: Poll) {
     body.querySelector('.poll-results')?.remove();
-    if (poll.showResultsToVoters && active?.myVote && results) body.append(renderResults(results));
+    if (poll.showResultsToVoters && active?.myVote && results) body.append(renderResults(results, active.myVote.optionIds));
   }
 
   async function refresh() {

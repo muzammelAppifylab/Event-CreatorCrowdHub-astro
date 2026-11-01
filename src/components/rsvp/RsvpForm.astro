@@ -4,12 +4,10 @@
  * Server-rendered from the RSVP view; the script below binds it with `bindForm` (in-place errors,
  * pending button, focus on the first wrong field) and talks to `/site-api/rsvp/*`. Honeypot:
  * `website` is hidden and must stay empty. Markup and copy follow the original app's RsvpForm
- * (response circles, "(required)" marks); the field names and ids are the API contract.
+ * ("(required)" marks; no Going/Maybe/Can’t go choice, an RSVP always means going); the field names and ids are the API contract.
  */
 import {formatMoney} from '../../lib/format';
-import type {GIconName} from '../../lib/guest-format';
 import type {AnswerValue, RsvpEventView} from '../../lib/rsvp-types';
-import GIcon from '../GIcon.astro';
 
 interface Props {
   view: RsvpEventView;
@@ -36,15 +34,9 @@ const editing = mode === 'edit';
 const id = editing ? 'rsvp-edit' : 'rsvp-create';
 const answers = values.answers ?? {};
 const anyPaid = view.ticketTypes.some(t => t.priceCents > 0);
-const response = values.response ?? 'going';
 const action = editing ? `/site-api/rsvp/manage/${token}` : `/site-api/rsvp/events/${view.slug}`;
 const questionMeta = view.questions.map(q => ({id: q.id, type: q.type, required: q.required}));
 const priceLabel = (cents: number, currency: string) => (cents > 0 ? formatMoney(cents, currency) : 'Free');
-const choices: {value: string; label: string; icon: GIconName; tone: string}[] = [
-  {value: 'going', label: 'Going', icon: 'check' as GIconName, tone: 'going'},
-  ...(view.allowMaybe ? [{value: 'maybe', label: 'Maybe', icon: 'minus' as GIconName, tone: 'maybe'}] : []),
-  {value: 'not_going', label: 'Can’t go', icon: 'x' as GIconName, tone: 'no'},
-];
 const full = view.seatsLeft === 0;
 const submitLabel = editing
   ? 'Save changes'
@@ -74,22 +66,7 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
   data-waitlist={full && view.waitlistEnabled ? '1' : ''}
   data-questions={JSON.stringify(questionMeta)}
 >
-  <fieldset class="g-fieldset g-response">
-    <legend>Are you coming?</legend>
-    <div class="g-choice-row" role="radiogroup" aria-label="Your RSVP">
-      {
-        choices.map(c => (
-          <label class={`g-choice g-choice-${c.tone}`}>
-            <input type="radio" name="response" value={c.value} checked={response === c.value} />
-            <span class="g-choice-dot">
-              <GIcon name={c.icon} />
-            </span>
-            <span class="g-choice-label">{c.label}</span>
-          </label>
-        ))
-      }
-    </div>
-  </fieldset>
+  <input type="hidden" name="response" value="going" />
 
   <div class="field">
     <label for={`${id}-name`}>Your name <span class="g-optional">(required)</span></label>

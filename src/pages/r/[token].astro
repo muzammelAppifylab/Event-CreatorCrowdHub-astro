@@ -16,6 +16,8 @@ import {rsvpRead} from '../../components/rsvp/server';
 import Base from '../../layouts/Base.astro';
 import {formatShortWhen, formatDay, formatRange, guestCopy, routeCopy} from '../../lib/guest-format';
 import type {AnswerValue, GuestRsvpView} from '../../lib/rsvp-types';
+import {app} from '../../server/app';
+import {inProcessHeaders} from '../../server/privacy';
 import {pageContext} from '../../server/page';
 
 const token = Astro.params.token ?? '';
@@ -45,6 +47,13 @@ const active = !!guest && guest.rsvp.status !== 'cancelled' && guest.rsvp.status
 const joinUrl = confirmed && guest && guest.event.format !== 'in_person' ? guest.event.joinUrl : null;
 const showTicket = confirmed && !!guest?.rsvp.ticketCode && guest.event.format !== 'online';
 const qr = guest && showTicket ? renderSVG(`${Astro.url.origin}/dashboard/checkin/code/${encodeURIComponent(guest.rsvp.ticketCode ?? '')}`, {border: 1}) : '';
+// The live-poll link carries the manage token (`?g=`) so a non-anonymous poll can list this guest; the
+// route answers only for a voting-eligible RSVP of a published event. This page is no-referrer.
+let pollPath: string | null = null;
+if (confirmed && token) {
+  const hit = await Promise.resolve(app.request(new URL(`/site-api/polls-public/guest-link/${encodeURIComponent(token)}`, Astro.url.origin).toString(), {headers: inProcessHeaders(Astro.request, ['cookie'])})).catch(() => null);
+  if (hit?.ok) pollPath = ((await hit.json().catch(() => null)) as {path?: string} | null)?.path ?? null;
+}
 const inPerson = guest ? guest.event.format !== 'online' : false;
 const place = guest
   ? guest.event.format === 'online'
@@ -207,6 +216,16 @@ const failed = routeCopy.loadFailed;
                       <GIcon name="arrow-up-right" />
                       <span class="sr-only">{guestCopy.location.opensNewTab}</span>
                     </a>
+                  </div>
+                </div>
+              )}
+
+              {pollPath && (
+                <div class="g-card">
+                  <div class="g-card-body">
+                    <h2 class="g-title-sm">Live poll</h2>
+                    <p class="g-body-sm g-muted">Join the poll during the event.</p>
+                    <a class="g-btn g-btn-lg g-fit" href={pollPath} data-astro-reload>Open the poll</a>
                   </div>
                 </div>
               )}

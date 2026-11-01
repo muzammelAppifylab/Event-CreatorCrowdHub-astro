@@ -256,12 +256,15 @@ describe('ticket types', () => {
 describe('event settings', () => {
   it('serves the public brand without a row', async () => {
     const res = await json('/event-settings/brand', 'GET');
-    expect(await res.json()).toEqual({brandColor: null, fontPreset: 'inter'});
+    expect(await res.json()).toEqual({brandColor: null, fontPreset: 'inter', logoUrl: null});
   });
 
   it('returns defaults when nothing was saved', async () => {
     const out = await (await json('/event-settings', 'GET')).json();
-    expect(out.settings).toMatchObject({fontPreset: 'inter', defaultTimezone: 'UTC', updatedAt: null, defaultReminderRules: []});
+    expect(out.settings).toMatchObject({fontPreset: 'inter', defaultTimezone: 'UTC', updatedAt: null});
+    expect(out.settings.defaultReminderRules.map((r: {kind: string}) => r.kind)).toEqual(
+      expect.arrayContaining(['confirmation', 'reminder', 'live_now', 'thank_you']),
+    );
   });
 
   it('PATCH 422s bad values and saves only the keys sent', async () => {

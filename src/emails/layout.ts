@@ -116,8 +116,10 @@ export interface LayoutInput {
 
 export function renderLayout(input: LayoutInput): string {
   const { brand } = input
-  const masthead = brand.logoUrl
-    ? `<img src="${esc(brand.logoUrl)}" alt="${esc(brand.senderName)}" height="32" style="display:block;height:32px;width:auto;border:0;">`
+  // Mail clients need an absolute URL; the caller resolves a relative logo against the site address (only absolute https is used; anything else falls back to the sender name).
+  const logoSrc = brand.logoUrl && /^https:\/\//i.test(brand.logoUrl) ? brand.logoUrl : null
+  const masthead = logoSrc
+    ? `<img src="${esc(logoSrc)}" alt="${esc(brand.senderName)}" height="32" style="display:block;height:32px;width:auto;max-width:200px;max-height:32px;border:0;outline:none;">`
     : `<span style="font-family:${FONT};font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${MARQUEE.ink};">${esc(brand.senderName)}</span>`
   const manage = input.manageUrl
     ? ` ${link("Manage your RSVP", input.manageUrl)}.`

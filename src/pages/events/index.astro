@@ -1,9 +1,11 @@
 ---
 /**
- * Upcoming events, rendered on the server from `GET /site-api/events` (in-process).
- * "Later events" follows the keyset cursor (`?before=`). The poster-first tile grid of the original
- * app's host page.
+ * Browse events, rendered on the server from `GET /site-api/events` (in-process).
+ * A GET search form and filter chips (`?q=&format=&when=`) keep every view a plain, shareable link;
+ * "Later events" follows the keyset cursor (`?before=`) and keeps the filters.
  */
+import '../../styles/browse.css';
+
 import EventCard from '../../components/EventCard.astro';
 import GIcon from '../../components/GIcon.astro';
 import Base from '../../layouts/Base.astro';
@@ -12,21 +14,79 @@ import type {EventsPage} from '../../lib/types';
 import {backend, read} from '../../server/backend';
 import {pageContext} from '../../server/page';
 
-const before = Astro.url.searchParams.get('before') ?? undefined;
-const [{site, viewer}, result] = await Promise.all([
+const params = Astro.url.searchParams;
+const before = params.get('before') ?? undefined;
+const q = (params.get('q') ?? '').trim().slice(0, 80);
+const format = ['in_person', 'online', 'hybrid'].includes(params.get('format') ?? '') ? params.get('format')! : '';
+const when = ['week', 'month'].includes(params.get('when') ?? '') ? params.get('when')! : '';
+const filtered = !!(q || format || when);
+
+const api = backend(Astro.request);
+const [{site, viewer}, result, pastResult] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  read<EventsPage>(backend(Astro.request).events.$get({query: {before}})),
+  read<EventsPage>(
+    api.events.$get({query: {before, q: q || undefined, format: (format || undefined) as 'online' | undefined, when: (when || undefined) as 'week' | undefined}}),
+  ),
+  before || filtered ? Promise.resolve(null) : read<EventsPage>(api.events.past.$get()),
 ]);
 const events = result?.events ?? [];
+const past = pastResult?.events ?? [];
 if (!result) Astro.response.status = 503;
+
+/** A link to this page with one filter changed (the others kept, paging reset). */
+function link(change: Record<string, string>): string {
+  const next = new URLSearchParams();
+  const state: Record<string, string> = {q, format, when, ...change};
+  for (const [key, value] of Object.entries(state)) if (value) next.set(key, value);
+  const text = next.toString();
+  return text ? `/events/?${text}` : '/events/';
+}
+const moreHref = result?.next ? `${link({})}${filtered ? '&' : '?'}before=${encodeURIComponent(result.next)}` : '';
+
+const formats = [
+  {value: '', label: 'All events'},
+  {value: 'in_person', label: 'In person'},
+  {value: 'online', label: 'Online'},
+  {value: 'hybrid', label: 'Hybrid'},
+];
+const windows = [
+  {value: '', label: 'Any date'},
+  {value: 'week', label: 'This week'},
+  {value: 'month', label: 'This month'},
+];
 ---
 
-<Base site={site} viewer={viewer} guest title="Events" description={`Upcoming events from ${site?.name ?? 'our site'}.`}>
-  <main id="main" tabindex="-1" class="g-main">
-    <div class="page-container g-host-page">
-      <header class="g-host-head">
-        <h1 class="type-display g-display">Upcoming events</h1>
-      </header>
+<Base site={site} viewer={viewer} title="Events" description={`Upcoming events from ${site?.name ?? 'our site'}: search by name, in person or online.`}>
+  <main id="main" tabindex="-1" class="browse">
+    <section class="browse-hero">
+      <div class="wrap">
+        <p class="browse-eyebrow">Events</p>
+        <h1>Find your next event</h1>
+        <p class="browse-lede">Search upcoming events, filter by format or date, then RSVP in under 30 seconds. No account needed.</p>
+        <form class="browse-search" action="/events/" method="get" role="search">
+          {format && <input type="hidden" name="format" value={format} />}
+          {when && <input type="hidden" name="when" value={when} />}
+          <label class="sr-only" for="event-search">Search events</label>
+          <svg class="browse-search-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
+          <input id="event-search" class="browse-search-input" type="search" name="q" value={q} maxlength="80" placeholder="Search events by name" autocomplete="off" />
+          <button class="button" type="submit">Search</button>
+        </form>
+      </div>
+    </section>
+
+    <div class="wrap browse-body">
+      <div class="browse-filters" aria-label="Filter events">
+        <ul class="browse-chips" aria-label="Format">
+          {formats.map(f => (
+            <li><a class="browse-chip" href={link({format: f.value})} aria-current={format === f.value ? 'true' : undefined}>{f.label}</a></li>
+          ))}
+        </ul>
+        <ul class="browse-chips" aria-label="Date">
+          {windows.map(w => (
+            <li><a class="browse-chip" href={link({when: w.value})} aria-current={when === w.value ? 'true' : undefined}>{w.label}</a></li>
+          ))}
+        </ul>
+      </div>
 
       {
         !result ? (
@@ -35,13 +95,14 @@ if (!result) Astro.response.status = 503;
           <div class="g-empty">
             <span class="g-empty-icon"><GIcon name="calendar-x" class="g-icon-5" /></span>
             <div class="g-empty-text">
-              <p class="g-title-sm">{guestCopy.hostPage.emptyTitle}</p>
-              <p class="g-body-sm g-muted">{guestCopy.hostPage.emptyBody}</p>
+              <p class="g-title-sm">{filtered ? 'No events match' : guestCopy.hostPage.emptyTitle}</p>
+              <p class="g-body-sm g-muted">{filtered ? 'Try a different word, or clear the filters.' : guestCopy.hostPage.emptyBody}</p>
+              {filtered && <a class="browse-clear" href="/events/">Clear filters</a>}
             </div>
           </div>
         ) : (
           <section aria-labelledby="events-upcoming" class="g-list-section">
-            <h2 id="events-upcoming">{guestCopy.hostPage.upcoming}</h2>
+            <h2 id="events-upcoming">{q ? `Results for “${q}”` : guestCopy.hostPage.upcoming}</h2>
             <ul class="g-grid">
               {events.map(e => <li><EventCard event={e} /></li>)}
             </ul>
@@ -49,13 +110,23 @@ if (!result) Astro.response.status = 503;
         )
       }
       {
-        result?.next && (
+        moreHref && (
           <nav class="g-pager" aria-label="More events">
-            <a class="g-btn g-btn-outline g-btn-lg" href={`/events/?before=${encodeURIComponent(result.next)}`} data-astro-prefetch>
+            <a class="g-btn g-btn-outline g-btn-lg" href={moreHref} data-astro-prefetch>
               Later events
               <GIcon name="arrow-right" />
             </a>
           </nav>
+        )
+      }
+      {
+        past.length > 0 && (
+          <details class="g-list-section g-past">
+            <summary>{guestCopy.hostPage.past}</summary>
+            <ul class="g-grid">
+              {past.map(e => <li><EventCard event={e} /></li>)}
+            </ul>
+          </details>
         )
       }
     </div>

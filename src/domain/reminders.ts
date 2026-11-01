@@ -136,3 +136,52 @@ export function dueReminders(input: DueRemindersInput): DueReminder[] {
   }
   return due
 }
+
+/**
+ * Rules a new event starts with when the host has not saved any defaults (PRD US-20): a
+ * confirmation, reminders 24h and 1h before, "we're live" and a thank-you. The reminders mention
+ * the live poll link ({{poll.join_url}}, which carries the poll code).
+ */
+export const STARTER_REMINDER_RULES: ReadonlyArray<{
+  kind: ReminderKind
+  offsetMinutes: number
+  enabled: boolean
+  subject: string
+  body: string
+}> = [
+  {
+    kind: "confirmation",
+    offsetMinutes: 0,
+    enabled: true,
+    subject: "You're in: {{event.title}}",
+    body: "Hi {{guest.first_name}},\n\nThanks for your RSVP. We've saved your place for {{event.start_local}}.",
+  },
+  {
+    kind: "reminder",
+    offsetMinutes: -24 * 60,
+    enabled: true,
+    subject: "Tomorrow: {{event.title}}",
+    body: "Hi {{guest.first_name}},\n\nA quick reminder that {{event.title}} starts {{event.start_local}}.\n\nTaking part in the live poll? Join with this link when we start: {{poll.join_url}}\n\nCan't make it any more? Update your RSVP: {{rsvp.manage_url}}",
+  },
+  {
+    kind: "reminder",
+    offsetMinutes: -60,
+    enabled: true,
+    subject: "Starting in 1 hour: {{event.title}}",
+    body: "Hi {{guest.first_name}},\n\n{{event.title}} starts at {{event.start_local}}. Join here: {{event.join_url}}\n\nLive poll link: {{poll.join_url}}",
+  },
+  {
+    kind: "live_now",
+    offsetMinutes: 0,
+    enabled: true,
+    subject: "We're live: {{event.title}}",
+    body: "Hi {{guest.first_name}},\n\nWe're starting now. Join here: {{event.join_url}}\n\nLive poll: {{poll.join_url}}",
+  },
+  {
+    kind: "thank_you",
+    offsetMinutes: 120,
+    enabled: true,
+    subject: "Thanks for coming to {{event.title}}",
+    body: "Hi {{guest.first_name}},\n\nThank you for joining us. We'd love your feedback.",
+  },
+]

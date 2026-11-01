@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import {createPortal} from 'react-dom';
 
 import {Button, IconButton} from './button';
 import {Notice} from './display';
@@ -312,7 +313,7 @@ export function Menu({
   const focusItem = (index: number) => {
     const nodes = list.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
     if (!nodes?.length) return;
-    nodes[(index + nodes.length) % nodes.length]?.focus();
+    nodes[(index + nodes.length) % nodes.length]?.focus({preventScroll: true});
   };
   const close = (refocus = true) => {
     setOpen(false);
@@ -335,13 +336,17 @@ export function Menu({
       if (!list.current?.contains(event.target as Node) && !button.current?.contains(event.target as Node)) close(false);
     };
     const away = () => close(false);
+    // A scroll inside the menu itself (focus moving between items) must not close it.
+    const scrolled = (event: Event) => {
+      if (!list.current?.contains(event.target as Node)) close(false);
+    };
     document.addEventListener('pointerdown', outside);
     window.addEventListener('resize', away);
-    window.addEventListener('scroll', away, true);
+    window.addEventListener('scroll', scrolled, true);
     return () => {
       document.removeEventListener('pointerdown', outside);
       window.removeEventListener('resize', away);
-      window.removeEventListener('scroll', away, true);
+      window.removeEventListener('scroll', scrolled, true);
     };
   }, [open, align]);
 
@@ -378,7 +383,10 @@ export function Menu({
         }}>
         {trigger ?? <Icon name="more" size={16} />}
       </button>
-      {open && (
+      {open &&
+        // In a portal on <body>: an ancestor with `backdrop-filter` / `transform` (the top bar)
+        // would otherwise become the containing block of this `fixed` menu and misplace it.
+        createPortal(
         <div ref={list} id={id} className="menu" role="menu" aria-label={label} onKeyDown={onKeyDown}>
           {items.map((item, i) =>
             item === 'separator' ? (
@@ -400,8 +408,9 @@ export function Menu({
               </button>
             )
           )}
-        </div>
-      )}
+        </div>,
+        document.body
+        )}
     </>
   );
 }

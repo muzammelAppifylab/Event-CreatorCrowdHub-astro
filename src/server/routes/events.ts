@@ -1,4 +1,5 @@
 import {Hono} from 'hono';
+import {validator} from 'hono/validator';
 
 import {problem, withDb} from '../../platform/guards';
 
@@ -14,6 +15,7 @@ import {problem, withDb} from '../../platform/guards';
  */
 const PAGE_SIZE = 20;
 const SITEMAP_LIMIT = 1000;
+const PAST_LIMIT = 12;
 
 const summarySelect = {
   id: true,
@@ -37,9 +39,24 @@ function parseCursor(raw: string | undefined): {startAt: Date; id: string} | nul
   return id && /^[0-9a-f-]{36}$/.test(id) && !Number.isNaN(startAt.getTime()) ? {startAt, id} : null;
 }
 
+const FORMATS = ['in_person', 'online', 'hybrid'] as const;
+const WINDOW_DAYS = {week: 7, month: 30} as const;
+const DAY_MS = 86_400_000;
+
+/** Optional list filters: title search, format and a rolling date window. Anything else is ignored. */
+const listQuery = validator('query', value => {
+  const one = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  const q = (one(value.q) ?? '').trim().slice(0, 80);
+  const format = FORMATS.find(f => f === one(value.format));
+  const w = one(value.when);
+  const when = w === 'week' || w === 'month' ? w : undefined;
+  return {before: one(value.before), q: q || undefined, format, when};
+});
+
 export const eventRoutes = new Hono()
-  .get('/', withDb, async c => {
-    const cursor = parseCursor(c.req.query('before'));
+  .get('/', listQuery, withDb, async c => {
+    const {before, q, format, when} = c.req.valid('query');
+    const cursor = parseCursor(before);
     const rows = await c.var.db.event.findMany({
       select: summarySelect,
       where: {
@@ -47,6 +64,9 @@ export const eventRoutes = new Hono()
         visibility: 'public',
         deletedAt: null,
         endAt: {gte: new Date()},
+        ...(q ? {title: {contains: q, mode: 'insensitive' as const}} : {}),
+        ...(format ? {format} : {}),
+        ...(when ? {startAt: {lte: new Date(Date.now() + WINDOW_DAYS[when === 'week' ? 'week' : 'month'] * DAY_MS)}} : {}),
         ...(cursor
           ? {OR: [{startAt: {gt: cursor.startAt}}, {startAt: cursor.startAt, id: {gt: cursor.id}}]}
           : {}),
@@ -80,6 +100,20 @@ export const eventRoutes = new Hono()
         free: !paid.has(e.id),
       })),
       next: rows.length > PAGE_SIZE && last ? `${last.startAt.toISOString()}_${last.id}` : null,
+    });
+  })
+
+  // The host page's collapsed "Past events": latest first, one bounded page, no cursor. Before `/:slug`.
+  .get('/past', withDb, async c => {
+    const rows = await c.var.db.event.findMany({
+      select: summarySelect,
+      where: {status: 'published', visibility: 'public', deletedAt: null, endAt: {lt: new Date()}},
+      orderBy: [{startAt: 'desc'}, {id: 'desc'}],
+      take: PAST_LIMIT,
+    });
+    return c.json({
+      events: rows.map(e => ({...e, startAt: e.startAt.toISOString(), endAt: e.endAt.toISOString(), fromPrice: null, free: true})),
+      next: null,
     });
   })
 

@@ -1,7 +1,9 @@
 import type {Prisma, PrismaClient} from '../../generated/prisma/client';
 import {config} from '../../platform/config';
 import {formatInZone} from '../../domain/time';
+import {pollLinkFor} from '../../domain/tokens';
 import type {EmailData} from '../../emails';
+import {loadBrand} from '../guest-mail';
 
 /** The client or a transaction's client: helpers work with either. */
 export type Db = PrismaClient | Prisma.TransactionClient;
@@ -52,7 +54,7 @@ export async function loadGuestMail(db: Db, rsvpId: string, now = new Date()): P
   const rsvp = await db.rsvp.findUnique({
     where: {id: rsvpId},
     select: {
-      id: true, name: true, email: true, response: true, status: true, ticketCode: true, waitlistPosition: true,
+      id: true, eventId: true, name: true, email: true, response: true, status: true, ticketCode: true, waitlistPosition: true,
       event: {
         select: {
           title: true, slug: true, startAt: true, endAt: true, timezone: true, format: true, venueName: true,
@@ -62,20 +64,17 @@ export async function loadGuestMail(db: Db, rsvpId: string, now = new Date()): P
     },
   });
   if (!rsvp || rsvp.event.deletedAt) return null;
-  const settings = await db.eventSettings.findUnique({
-    where: {id: 1},
-    select: {senderName: true, replyToEmail: true, brandColor: true},
-  });
   const base = siteBase();
+  const brand = await loadBrand(db, base);
   const pageUrl = `${base}/e/${encodeURIComponent(rsvp.event.slug)}/`;
   const {event} = rsvp;
   return {
     to: rsvp.email,
-    replyTo: settings?.replyToEmail || undefined,
+    replyTo: brand.replyToEmail ?? undefined,
     eventStatus: event.status,
     data: {
       now,
-      brand: {senderName: settings?.senderName || 'The host', replyToEmail: settings?.replyToEmail || null, brandColor: settings?.brandColor ?? null},
+      brand,
       event: {
         title: event.title,
         startAt: event.startAt,
@@ -88,7 +87,7 @@ export async function loadGuestMail(db: Db, rsvpId: string, now = new Date()): P
         mapUrl: event.mapUrl,
         joinUrl: event.joinUrl,
         pageUrl,
-        pollUrl: `${base}/p/${encodeURIComponent(event.pollJoinCode)}/`,
+        pollUrl: pollLinkFor(base, event.pollJoinCode, rsvp.id, rsvp.eventId, config.jwtSecret, now),
         thankYouLink: event.thankYouLink,
       },
       guest: {

@@ -34,6 +34,15 @@ export const CATALOGUE = definePermissions({
     ability: 'checkinGuests',
     roles: ['admin'],
   },
+  /** Outbound webhooks and other integrations: Owner only (PRD roles matrix). No default role: only `owner` (`*`). */
+  EVENT_INTEGRATIONS: {
+    codename: 'site:event:integrations',
+    title: 'Manage integrations',
+    description: 'Create, edit, test and delete outbound webhook endpoints. Owner only by default.',
+    group: 'Events',
+    ability: 'manageIntegrations',
+    roles: [],
+  },
 });
 
 /** Codenames by key: `PERMISSIONS.EVENT_MANAGE` is `'site:event:manage'`. */

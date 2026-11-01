@@ -199,7 +199,7 @@ async function sendInvites(
   invites: {id: string; name: string | null; email: string; token: string}[]
 ): Promise<string[]> {
   if (!invites.length) return [];
-  const brand = await loadBrand(db);
+  const brand = await loadBrand(db, base);
   const accepted: string[] = [];
   for (const invite of invites) {
     const content = inviteEmail(event, brand, invite, inviteLink(base, invite.token, event.slug));

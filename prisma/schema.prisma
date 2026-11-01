@@ -642,7 +642,27 @@ model WebhookEndpoint {
   lastStatus  Int?      @map("last_status")
   lastDeliveryAt DateTime? @map("last_delivery_at") @db.Timestamptz(6)
 
+  outbox      WebhookOutbox[]
+
   @@map("webhook_endpoints")
+}
+
+/// Webhook deliveries the platform refused to queue (job rate limit) or a receiver failed: the
+/// `event-scheduler` tick drains it (`src/server/webhook-outbox.ts`). `body` is the exact signed bytes.
+model WebhookOutbox {
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  endpointId    String          @map("endpoint_id") @db.Uuid
+  event         String          @db.VarChar(40)
+  deliveryId    String          @map("delivery_id") @db.VarChar(64)
+  body          String
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime        @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  endpoint      WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@unique([endpointId, deliveryId])
+  @@index([nextAttemptAt])
+  @@map("webhook_outbox")
 }
 
 enum DeliveryStatus {
@@ -782,6 +802,9 @@ model EventSettings {
   allowMaybeDefault    Boolean    @default(true) @map("allow_maybe_default")
   showGuestListDefault Boolean    @default(false) @map("show_guest_list_default")
   defaultCoverPoster   String?    @map("default_cover_poster")
+  /// The creator's logo: a PUBLIC platform file (files.md). Null = fall back to the site logo.
+  logoFileId           String?    @map("logo_file_id") @db.VarChar(40)
+  logoName             String?    @map("logo_name") @db.VarChar(200)
   updatedAt            DateTime   @default(now()) @updatedAt @map("updated_at")
 
   @@map("event_settings")

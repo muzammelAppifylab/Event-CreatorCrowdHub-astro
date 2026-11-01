@@ -1,5 +1,6 @@
 import {useInfiniteQuery, useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {useState} from 'react';
+import {encode} from 'uqr';
 
 import {ApiError} from '../api';
 import {QrCode} from '../qr';
@@ -43,6 +44,25 @@ const STATUS_TONES: Record<InviteRow['status'], Tone> = {queued: 'warning', sent
 const STATUS_LABELS: Record<InviteRow['status'], string> = {queued: 'Queued', sent: 'Sent', bounced: 'Bounced', responded: 'Responded'};
 const RESPONSE_LABELS = {going: 'Going', maybe: 'Maybe', not_going: 'Can’t go'} as const;
 
+const EMAIL_SHAPE = /^[^\s@<>",;]+@[^\s@<>",;.]+(?:\.[^\s@<>",;.]+)+$/;
+const NAMED_ADDRESS = /(?<=^|[,;\n])\s*(?:"[^"]*"|[^,;<>\n"@]*?)\s*<([^<>\s]*)>/g;
+/** Live count of valid and invalid entries in the paste box (the server parses the same way). */
+function countPasted(input: string): {valid: number; invalid: number} {
+  const seen = new Set<string>();
+  let invalid = 0;
+  const check = (raw: string) => {
+    const email = raw.replace(/^<|>$/g, '').trim().toLowerCase();
+    if (!EMAIL_SHAPE.test(email) || email.length > 254) invalid++;
+    else seen.add(email);
+  };
+  const rest = input.replace(NAMED_ADDRESS, (_m, address: string) => {
+    check(address);
+    return '\n';
+  });
+  for (const raw of rest.split(/[\s,;]+/)) if (raw) check(raw);
+  return {valid: seen.size, invalid};
+}
+
 const PASTE_RULES = {emails: [rules.required('Paste at least one email address.'), rules.maxLength(200_000)]};
 
 async function copyText(text: string, toast: ReturnType<typeof useToast>, what: string) {
@@ -52,6 +72,33 @@ async function copyText(text: string, toast: ReturnType<typeof useToast>, what: 
   } catch {
     toast.danger('Copying is blocked here. Select the text and copy it by hand.');
   }
+}
+
+/** Draws the QR on a 1024 px canvas (white quiet zone) and saves it as a PNG. */
+function downloadQrPng(value: string, fileName: string): boolean {
+  const {data, size} = encode(value, {border: 2});
+  const px = 1024;
+  const canvas = document.createElement('canvas');
+  canvas.width = px;
+  canvas.height = px;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return false;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, px, px);
+  ctx.fillStyle = '#000';
+  const cell = px / size;
+  data.forEach((row, y) =>
+    row.forEach((on, x) => {
+      if (on) ctx.fillRect(Math.floor(x * cell), Math.floor(y * cell), Math.ceil(cell), Math.ceil(cell));
+    })
+  );
+  const link = document.createElement('a');
+  link.href = canvas.toDataURL('image/png');
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  return true;
 }
 
 /**
@@ -65,6 +112,7 @@ export function InvitesTab({eventId}: {eventId: string}) {
   const [inviting, setInviting] = useState(false);
   const [result, setResult] = useState<CreateInvitesResult | null>(null);
   const form = useForm({emails: ''}, PASTE_RULES);
+  const pasted = countPasted(form.values.emails);
 
   const invites = useInfiniteQuery(invitesQuery(eventId));
   const preview = useQuery(resendPreviewQuery(eventId));
@@ -246,7 +294,11 @@ export function InvitesTab({eventId}: {eventId: string}) {
           </Notice>
         )}
         {create.error && !(create.error instanceof ApiError && Object.keys(create.error.fields).length) && <ErrorNote error={create.error} />}
-        <Field label="Emails" id="f-emails" error={form.error('emails')} hint="Up to 200 people at a time.">
+        <Field
+          label="Emails"
+          id="f-emails"
+          error={form.error('emails')}
+          hint={`Up to 200 people at a time.${pasted.valid + pasted.invalid > 0 ? ` ${pasted.valid} valid${pasted.invalid ? `, ${pasted.invalid} invalid` : ''}.` : ''}`}>
           <textarea rows={6} placeholder={'sam@example.com\nAnn Lee <ann@example.com>'} {...form.field('emails')} />
         </Field>
       </Modal>
@@ -260,7 +312,7 @@ function ShareKit({eventId}: {eventId: string}) {
   const kit = useQuery(shareKitQuery(eventId));
   const data = kit.data;
   return (
-    <Card title="Share kit" description="Share the public event page, not a personal invite.">
+    <Card title="Share" description="Share the public event page, not a personal invite.">
       {kit.isPending && <LoadingBlock rows={2} />}
       {kit.error && <ErrorNote error={kit.error} />}
       {data && (
@@ -289,6 +341,12 @@ function ShareKit({eventId}: {eventId: string}) {
             ))}
           </div>
           <QrCode value={data.eventUrl} label={`QR code for ${data.title}`} />
+          <Button
+            variant="secondary"
+            icon="file"
+            onClick={() => (downloadQrPng(data.eventUrl, `${data.slug}-qr.png`) ? toast.success('QR code downloaded.') : toast.danger('Your browser could not draw the QR code.'))}>
+            Download QR (PNG)
+          </Button>
           <Field label="Embed on your site" id="share-embed" hint="Shows the RSVP page without its header.">
             <textarea id="share-embed" rows={3} readOnly value={embedCode(data.base, data.slug, data.title)} onFocus={event => event.target.select()} />
           </Field>

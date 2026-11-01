@@ -1,4 +1,4 @@
-import {Hono} from 'hono';
+import {Hono, type Context} from 'hono';
 import {validator} from 'hono/validator';
 
 import {appConfig} from '../../config/app.config';
@@ -13,6 +13,7 @@ import {attachmentHeader, type CsvValue, toCsv} from '../csv';
 import {eventMailSelect, type GuestNotice, type MailEvent, notifyGuests, publicBase} from '../guest-mail';
 import {exportFilename, guestExportById} from '../privacy';
 import {PERMISSIONS} from '../permissions';
+import {checkedInPayload, emitWebhook, emitWebhooks, rsvpPayload} from '../webhook-emit';
 import {isUuid, normalizeEmail} from './admin-invites';
 import {escapeLike} from '../like';
 
@@ -26,7 +27,8 @@ import {escapeLike} from '../like';
  *   GET    /events/:eventId/guests/:rsvpId     detail (answers, timeline, questions)
  *   PATCH  /events/:eventId/guests/:rsvpId     edit name, email, plus-ones, consent, attended, checked in
  *   DELETE /events/:eventId/guests/:rsvpId     remove (frees the seat; refused when the guest has an order: erase)
- *   GET    /contacts?q&consent&before          everyone who RSVP'd to any event, once per email
+ *   GET    /contacts?q&consent&repeat&attended&event&limit&before   everyone who RSVP'd to any event, once per email
+ *   GET    /contacts/detail?email              one person: their profile and every RSVP they made
  *   GET    /contacts/export.csv?q&consent      the same as CSV
  *
  * A malformed or unknown event or guest id is a 404. Seat changes run in a
@@ -410,7 +412,9 @@ async function releaseAndPromote(tx: Tx, event: MailEvent, was: {status: string;
   return (await promoteFromWaitlist(tx, event, now)).notices;
 }
 
-async function removeGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date): Promise<GuestNotice[]> {
+type Removal = {notices: GuestNotice[]; removed: {id: string; status: string; response: string}};
+
+async function removeGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date): Promise<Removal> {
   const current = await tx.rsvp.findFirst({
     where: {id: rsvpId, eventId: event.id},
     select: {id: true, email: true, status: true, response: true, _count: {select: {ticketOrders: true}}},
@@ -421,7 +425,7 @@ async function removeGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date):
   await tx.pollVote.updateMany({where: {rsvpId}, data: {rsvpId: null}});
   await tx.rsvp.delete({where: {id: rsvpId}, select: {id: true}});
   await tx.invite.deleteMany({where: {eventId: event.id, email: current.email}});
-  return releaseAndPromote(tx, event, current, now);
+  return {notices: await releaseAndPromote(tx, event, current, now), removed: current};
 }
 
 /**
@@ -429,7 +433,7 @@ async function removeGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date):
  * order rows and amounts stay for accounting; refunds remain a separate decision.
  * The manage token becomes the hash of a value nobody sees, so old links stop working.
  */
-async function eraseGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date): Promise<GuestNotice[]> {
+async function eraseGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date): Promise<Removal> {
   const current = await tx.rsvp.findFirst({
     where: {id: rsvpId, eventId: event.id},
     select: {id: true, email: true, status: true, response: true},
@@ -457,16 +461,45 @@ async function eraseGuest(tx: Tx, event: MailEvent, rsvpId: string, now: Date): 
     },
     select: {id: true},
   });
-  return releaseAndPromote(tx, event, current, now);
+  return {notices: await releaseAndPromote(tx, event, current, now), removed: current};
+}
+
+/** Most webhooks one request may queue: a removal can promote a long waitlist. */
+export const ADMIN_EMIT_CAP = 200;
+
+type WebhookChange = {name: 'rsvp.updated' | 'rsvp.removed'; payload: ReturnType<typeof rsvpPayload>};
+
+/**
+ * One webhook per guest whose state the host changed: `rsvp.updated` for an approval, decline or a
+ * waitlist promotion that confirmed a seat (an offer alone changes no status), `rsvp.removed` for
+ * a deleted or erased guest (payload: their last status). Bounded; never throws into the request.
+ */
+export function webhookChangesFor(eventId: string, notices: GuestNotice[], removed: {id: string; status: string; response: string}[] = []): WebhookChange[] {
+  const changes: WebhookChange[] = [];
+  for (const r of removed) changes.push({name: 'rsvp.removed', payload: rsvpPayload({...r, eventId})});
+  for (const n of notices) {
+    if (n.kind === 'waitlist_offer') continue;
+    changes.push({name: 'rsvp.updated', payload: rsvpPayload({id: n.guest.id, eventId, status: n.guest.status, response: n.guest.response})});
+  }
+  return changes.slice(0, ADMIN_EMIT_CAP);
+}
+
+function emitGuestChanges(c: Context | null, db: PrismaClient, changes: WebhookChange[]) {
+  try {
+    emitWebhooks(c, db, changes.map(ch => ({event: ch.name, payload: ch.payload}))); // one job for the whole bulk action
+  } catch {
+    // A webhook problem never fails the host's action.
+  }
 }
 
 type BulkResult = {action: BulkAction; succeeded: string[]; failed: {rsvpId: string; reason: string}[]};
 
 /** One outcome per id; a failure never aborts the batch. Emails go out after each commit. */
-async function runBulk(db: PrismaClient, base: string, event: MailEvent, action: BulkAction, rawIds: string[]): Promise<BulkResult> {
+async function runBulk(db: PrismaClient, base: string, event: MailEvent, action: BulkAction, rawIds: string[], c: Context | null = null): Promise<BulkResult> {
   const ids = [...new Set(rawIds)];
   const result: BulkResult = {action, succeeded: [], failed: []};
   const notices: GuestNotice[] = [];
+  const removedGuests: Removal['removed'][] = [];
   const now = new Date();
   const reasonOf = (err: unknown) => {
     if (err instanceof Refused) return err.reason;
@@ -494,13 +527,18 @@ async function runBulk(db: PrismaClient, base: string, event: MailEvent, action:
         });
         result.succeeded.push(rsvpId);
         // Removed and erased guests are not emailed; promotions their seat triggers are.
-        notices.push(...out);
+        if (Array.isArray(out)) notices.push(...out);
+        else {
+          notices.push(...out.notices);
+          removedGuests.push(out.removed);
+        }
       } catch (err) {
         result.failed.push({rsvpId, reason: reasonOf(err)});
       }
     }
   }
   await notifyGuests(db, base, event, notices);
+  emitGuestChanges(c, db, webhookChangesFor(event.id, notices, removedGuests));
   return result;
 }
 
@@ -583,10 +621,17 @@ type ContactRaw = {
   last_event_title: string;
   last_event_start_at: Date | string;
   marketing_consent: boolean;
+  attended_count: number;
+  first_seen_at: Date | string;
 };
 
-async function queryContacts(db: PrismaClient, opts: {q: string; consentOnly: boolean; after: string; limit: number}) {
+type ContactOpts = {q: string; consentOnly: boolean; repeatOnly: boolean; attendedOnly: boolean; eventId: string; after: string; limit: number};
+
+async function queryContacts(db: PrismaClient, opts: ContactOpts) {
   const having: Prisma.Sql[] = [Prisma.sql`lower(r.email) > ${opts.after}`];
+  if (opts.repeatOnly) having.push(Prisma.sql`count(DISTINCT r.event_id) >= 2`);
+  if (opts.attendedOnly) having.push(Prisma.sql`bool_or(r.attended IS TRUE OR r.checked_in_at IS NOT NULL)`);
+  if (opts.eventId) having.push(Prisma.sql`bool_or(r.event_id = ${opts.eventId}::uuid)`);
   if (opts.q) {
     const pattern = likePattern(opts.q);
     having.push(Prisma.sql`bool_or(r.email ILIKE ${pattern} OR r.name ILIKE ${pattern})`);
@@ -601,7 +646,9 @@ async function queryContacts(db: PrismaClient, opts: {q: string; consentOnly: bo
       (array_agg(e.id ORDER BY e.start_at DESC))[1]::text AS last_event_id,
       (array_agg(e.title ORDER BY e.start_at DESC))[1] AS last_event_title,
       (array_agg(e.start_at ORDER BY e.start_at DESC))[1] AS last_event_start_at,
-      (array_agg((r.marketing_consent AND r.consent_confirmed_at IS NOT NULL) ORDER BY r.created_at DESC))[1] AS marketing_consent
+      (array_agg((r.marketing_consent AND r.consent_confirmed_at IS NOT NULL) ORDER BY r.created_at DESC))[1] AS marketing_consent,
+      (count(DISTINCT r.event_id) FILTER (WHERE r.attended IS TRUE OR r.checked_in_at IS NOT NULL))::int AS attended_count,
+      min(r.created_at) AS first_seen_at
     FROM rsvps r
     INNER JOIN events e ON e.id = r.event_id
     WHERE e.deleted_at IS NULL AND r.email NOT LIKE 'removed+%@invalid'
@@ -615,13 +662,29 @@ async function queryContacts(db: PrismaClient, opts: {q: string; consentOnly: bo
     eventCount: r.event_count,
     lastEvent: {id: r.last_event_id, title: r.last_event_title, startAt: new Date(r.last_event_start_at).toISOString()},
     marketingConsent: r.marketing_consent,
+    attendedCount: r.attended_count,
+    firstSeenAt: new Date(r.first_seen_at).toISOString(),
   }));
 }
 
-const contactsQuery = validator('query', value => ({
-  q: typeof value.q === 'string' ? value.q.trim().slice(0, 120) : '',
-  consentOnly: value.consent === 'yes',
-  before: typeof value.before === 'string' ? value.before.toLowerCase().slice(0, 254) : '',
+const CONTACT_PAGE_SIZES = [25, 50, 100] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const contactsQuery = validator('query', value => {
+  const limit = Number(value.limit);
+  return {
+    q: typeof value.q === 'string' ? value.q.trim().slice(0, 120) : '',
+    consentOnly: value.consent === 'yes',
+    repeatOnly: value.repeat === 'yes',
+    attendedOnly: value.attended === 'yes',
+    eventId: typeof value.event === 'string' && UUID.test(value.event) ? value.event.toLowerCase() : '',
+    before: typeof value.before === 'string' ? value.before.toLowerCase().slice(0, 254) : '',
+    limit: (CONTACT_PAGE_SIZES as readonly number[]).includes(limit) ? limit : CONTACTS_PAGE_SIZE,
+  };
+});
+
+const contactDetailQuery = validator('query', value => ({
+  email: typeof value.email === 'string' ? value.email.trim().toLowerCase().slice(0, 254) : '',
 }));
 
 const auditRemoval = (db: PrismaClient, actor: number | null | undefined, eventId: string, action: 'remove' | 'erase', done: number, failed: number) =>
@@ -669,7 +732,7 @@ export const adminGuestRoutes = new Hono()
     const event = await loadEvent(c.var.db, c.req.param('eventId'));
     if (!event) return c.json(notFound('Event'), 404);
     const {action, rsvpIds} = c.req.valid('json');
-    const result = await runBulk(c.var.db, publicBase(c.req.url), event, action, rsvpIds);
+    const result = await runBulk(c.var.db, publicBase(c.req.url), event, action, rsvpIds, c);
     if (action === 'remove' || action === 'erase') await auditRemoval(c.var.db, c.var.viewer.id, event.id, action, result.succeeded.length, result.failed.length);
     return c.json(result);
   })
@@ -715,6 +778,7 @@ export const adminGuestRoutes = new Hono()
     const now = new Date();
     try {
       const notices: GuestNotice[] = [];
+      let newlyCheckedIn = false;
       const row = await withEventLock(db, event.id, async (tx, locked) => {
         const current = await tx.rsvp.findFirst({
           where: {id: rsvpId, eventId: locked.id},
@@ -733,6 +797,7 @@ export const adminGuestRoutes = new Hono()
         if (patch.checkedIn !== undefined) {
           if (patch.checkedIn && current.status !== 'confirmed') throw new Refused('not_confirmed');
           data.checkedInAt = patch.checkedIn ? (current.checkedInAt ?? now) : null;
+          newlyCheckedIn = patch.checkedIn && current.checkedInAt === null;
         }
         let released = false;
         if (patch.plusOnes !== undefined && patch.plusOnes !== current.plusOnes) {
@@ -750,6 +815,8 @@ export const adminGuestRoutes = new Hono()
         return updated;
       });
       await notifyGuests(db, publicBase(c.req.url), event, notices);
+      emitGuestChanges(c, db, webhookChangesFor(event.id, notices));
+      if (newlyCheckedIn) emitWebhook(c, db, 'guest.checked_in', checkedInPayload({id: row.id, eventId: event.id, checkedInAt: now}));
       return c.json(await detailOf(db, event.id, row));
     } catch (err) {
       if (err instanceof Refused) {
@@ -770,7 +837,7 @@ export const adminGuestRoutes = new Hono()
     const event = await loadEvent(db, c.req.param('eventId'));
     const rsvpId = c.req.param('rsvpId');
     if (!event || !isUuid(rsvpId)) return c.json(notFound('Guest'), 404);
-    const result = await runBulk(db, publicBase(c.req.url), event, 'remove', [rsvpId]);
+    const result = await runBulk(db, publicBase(c.req.url), event, 'remove', [rsvpId], c);
     const failure = result.failed[0];
     if (!failure) {
       await auditRemoval(db, c.var.viewer.id, event.id, 'remove', 1, 0);
@@ -813,14 +880,14 @@ export const adminGuestRoutes = new Hono()
   })
 
   .get('/contacts/export.csv', contactsQuery, ...guard, async c => {
-    const {q, consentOnly} = c.req.valid('query');
-    const rows = await queryContacts(c.var.db, {q, consentOnly, after: '', limit: EXPORT_MAX_ROWS + 1});
+    const {q, consentOnly, repeatOnly, attendedOnly, eventId} = c.req.valid('query');
+    const rows = await queryContacts(c.var.db, {q, consentOnly, repeatOnly, attendedOnly, eventId, after: '', limit: EXPORT_MAX_ROWS + 1});
     const truncated = rows.length > EXPORT_MAX_ROWS;
     const body: CsvValue[][] = rows.slice(0, EXPORT_MAX_ROWS).map(r => [
-      r.name, r.email, r.eventCount, r.lastEvent.title, r.lastEvent.startAt, r.marketingConsent ? 'Yes' : 'No',
+      r.name, r.email, r.eventCount, r.attendedCount, r.lastEvent.title, r.lastEvent.startAt, r.firstSeenAt, r.marketingConsent ? 'Yes' : 'No',
     ]);
     await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'contacts_exported', meta: {rows: body.length}});
-    const header: CsvValue[] = ['Name', 'Email', 'Events', 'Last event', 'Last event date', 'Marketing consent'];
+    const header: CsvValue[] = ['Name', 'Email', 'Events', 'Attended', 'Last event', 'Last event date', 'First seen', 'Marketing consent'];
     return c.body(toCsv([header, ...body]), 200, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': attachmentHeader(`contacts-${new Date().toISOString().slice(0, 10)}.csv`),
@@ -830,9 +897,55 @@ export const adminGuestRoutes = new Hono()
   })
 
   .get('/contacts', contactsQuery, ...guard, async c => {
-    const {q, consentOnly, before} = c.req.valid('query');
-    const rows = await queryContacts(c.var.db, {q, consentOnly, after: before, limit: CONTACTS_PAGE_SIZE + 1});
-    const items = rows.slice(0, CONTACTS_PAGE_SIZE);
-    return c.json({items, nextBefore: rows.length > CONTACTS_PAGE_SIZE ? items.at(-1)!.email : null});
+    const {limit, before, ...filter} = c.req.valid('query');
+    const rows = await queryContacts(c.var.db, {...filter, after: before, limit: limit + 1});
+    const items = rows.slice(0, limit);
+    return c.json({items, nextBefore: rows.length > limit ? items.at(-1)!.email : null});
+  })
+
+  // One person across every event: who they are, and each RSVP they made, newest first.
+  .get('/contacts/detail', contactDetailQuery, ...guard, async c => {
+    const {email} = c.req.valid('query');
+    if (!email || email.startsWith('removed+')) return c.json(notFound('Contact'), 404);
+    const rsvps = await c.var.db.rsvp.findMany({
+      where: {email, event: {deletedAt: null}},
+      select: {
+        id: true, name: true, response: true, status: true, seats: true, plusOnes: true, ticketCode: true, checkedInAt: true,
+        attended: true, source: true, createdAt: true, marketingConsent: true, consentConfirmedAt: true,
+        event: {select: {id: true, title: true, startAt: true, timezone: true}},
+      },
+      orderBy: [{createdAt: 'desc'}, {id: 'desc'}],
+      take: 200,
+    });
+    const latest = rsvps[0];
+    if (!latest) return c.json(notFound('Contact'), 404);
+    const eventIds = new Set(rsvps.map(r => r.event.id));
+    const attendedIds = new Set(rsvps.filter(r => r.attended === true || r.checkedInAt).map(r => r.event.id));
+    return c.json({
+      contact: {
+        email,
+        name: latest.name,
+        eventCount: eventIds.size,
+        attendedCount: attendedIds.size,
+        firstSeenAt: rsvps.at(-1)!.createdAt.toISOString(),
+        marketingConsent: Boolean(latest.marketingConsent && latest.consentConfirmedAt),
+      },
+      rsvps: rsvps.map(r => ({
+        id: r.id,
+        eventId: r.event.id,
+        eventTitle: r.event.title,
+        startAt: r.event.startAt.toISOString(),
+        timezone: r.event.timezone,
+        response: r.response,
+        status: r.status,
+        seats: r.seats,
+        plusOnes: r.plusOnes,
+        ticketCode: r.ticketCode,
+        checkedInAt: r.checkedInAt?.toISOString() ?? null,
+        attended: r.attended,
+        source: r.source,
+        createdAt: r.createdAt.toISOString(),
+      })),
+    });
   });
 

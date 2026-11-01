@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 
 import {checkedInPayload, emitWebhook, pollClosedPayload, rsvpPayload} from '../src/server/webhook-emit';
 
-const sent: {list: string; data: {event: string; body: string}}[] = [];
+const sent: {list: string; data: {items: {event: string; body: string}[]}}[] = [];
 import {vi} from 'vitest';
 vi.mock('../src/platform/background', async orig => ({
   ...(await orig<typeof import('../src/platform/background')>()),
@@ -19,7 +19,7 @@ const run = async (event: Parameters<typeof emitWebhook>[2], payload: unknown) =
   sent.length = 0;
   emitWebhook(null, fakeDb([event]), event, payload);
   await new Promise(r => setTimeout(r, 20));
-  return sent.map(s => JSON.parse(s.data.body));
+  return sent.flatMap(s => s.data.items.map(i => JSON.parse(i.body)));
 };
 
 describe('webhook emit payloads', () => {

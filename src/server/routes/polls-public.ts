@@ -3,8 +3,11 @@ import {getCookie, setCookie} from 'hono/cookie';
 
 import {aggregateResults, applyVote, canVote, type PollResults, type PollType, type VoteError} from '../../domain/polls';
 import {CODE_ALPHABET, POLL_JOIN_CODE_LENGTH} from '../../domain/codes';
+import {hashToken} from '../../domain/secureToken';
+import {POLL_GUEST_PREFIX, verifyPollGuestToken} from '../../domain/tokens';
 import type {PrismaClient} from '../../generated/prisma/client';
 import {attempt, keysFor, type Ctx} from '../../platform/auth/kit';
+import {subjectHash} from '../../platform/auth/keys';
 import {RATE_LIMITS, type AttemptKind, type KindPolicy} from '../../platform/auth/rate-limit';
 import {config} from '../../platform/config';
 import {problem, withAuthCore, withDb} from '../../platform/guards';
@@ -36,6 +39,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const VOTE_KIND = 'vote' as AttemptKind;
 (RATE_LIMITS as Record<string, KindPolicy>)['vote'] ??= {
   ip: {windowSeconds: 10 * 60, free: 600, baseDelaySeconds: 10, maxDelaySeconds: 10 * 60, counts: 'all'},
+};
+
+/** PRD: 30 votes a minute per DEVICE (the cookie token), on top of the per-IP ceiling above. */
+const DEVICE_KIND = 'vote_device' as AttemptKind;
+(RATE_LIMITS as Record<string, KindPolicy>)['vote_device'] ??= {
+  subject: {windowSeconds: 60, free: 30, baseDelaySeconds: 10, maxDelaySeconds: 5 * 60, counts: 'all'},
 };
 
 const LOOKUP_KIND = 'poll_lookup' as AttemptKind;
@@ -253,6 +262,34 @@ async function lookupLimited(c: Context): Promise<Response | null> {
   return stop;
 }
 
+/** RSVP statuses that may attach their identity to a vote (a seat holder, not a cancelled or waitlisted guest). */
+export const VOTING_ELIGIBLE_STATUSES = ['confirmed'] as const;
+const GUEST_TOKEN_MAX = 400;
+
+/**
+ * The RSVP a `g` (raw manage token, or a signed `pg_` token from an email) names, for THIS event and a voting-eligible status; else null.
+ * Silent by design: a wrong, stale or oversized token never fails a vote. The token is hashed
+ * before the lookup and is never stored or logged.
+ */
+export async function guestRsvpId(db: PrismaClient, eventId: string, raw: unknown): Promise<string | null> {
+  if (typeof raw !== 'string' || !raw || raw.length > GUEST_TOKEN_MAX) return null;
+  const eligible = {eventId, status: {in: [...VOTING_ELIGIBLE_STATUSES]}, response: {not: 'not_going' as const}};
+  if (raw.startsWith(POLL_GUEST_PREFIX) && config.jwtSecret) {
+    // Signed form (from emails): HMAC verified timing-safe in verifyToken; must name THIS event.
+    const signed = verifyPollGuestToken(raw, config.jwtSecret);
+    if (signed) {
+      if (signed.eventId !== eventId) return null;
+      const hit = await db.rsvp.findFirst({where: {id: signed.rsvpId, ...eligible}, select: {id: true}});
+      return hit?.id ?? null;
+    }
+  }
+  const row = await db.rsvp.findFirst({
+    where: {manageToken: hashToken(raw), ...eligible},
+    select: {id: true},
+  });
+  return row?.id ?? null;
+}
+
 const NOT_FOUND = problem('not_found', "We couldn't find a poll with that code.");
 
 export const pollPublicRoutes = new Hono()
@@ -291,14 +328,36 @@ export const pollPublicRoutes = new Hono()
     });
   })
 
+  // The manage page's poll link: `/p/<code>?g=<manage token>` for a voting-eligible guest, else 404.
+  .get('/guest-link/:token', withDb, async c => {
+    const token = c.req.param('token');
+    const rsvp =
+      token.length <= GUEST_TOKEN_MAX
+        ? await c.var.db.rsvp.findFirst({
+            where: {manageToken: hashToken(token), status: {in: [...VOTING_ELIGIBLE_STATUSES]}, response: {not: 'not_going'}, event: {deletedAt: null, status: 'published'}},
+            select: {event: {select: {pollJoinCode: true}}},
+          })
+        : null;
+    if (!rsvp) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
+    return c.json({path: `/p/${rsvp.event.pollJoinCode}?g=${encodeURIComponent(token)}`});
+  })
+
   .post('/:code/votes', withAuthCore, async c => {
     const ctx = c as unknown as Ctx;
     const db = c.var.db;
     // Cheapest check first: the rate limit writes a row, so it comes after the code check.
     const event = await eventByCode(db, c.req.param('code'));
     if (!event) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
-    const limited = await attempt(ctx, VOTE_KIND, await keysFor(ctx, null));
+    const ipKeys = await keysFor(ctx, null);
+    const limited = await attempt(ctx, VOTE_KIND, ipKeys);
     if (limited.stop) return limited.stop;
+    // One device, one cookie token (hashed like an email for the limiter): 30 votes a minute.
+    const token = ensureVoterToken(c);
+    const secret = ctx.var.secret;
+    if (secret) {
+      const device = await attempt(ctx, DEVICE_KIND, {...ipKeys, emailHash: await subjectHash(secret, 'email', token)});
+      if (device.stop) return device.stop;
+    }
 
     const raw = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!raw || typeof raw !== 'object') return c.json(problem('invalid_vote', 'Send your answer as JSON.'), 400);
@@ -319,7 +378,6 @@ export const pollPublicRoutes = new Hono()
       return c.json(problem('poll_changed', 'This question has changed. Refresh to see the new one.'), 409);
     }
 
-    const token = ensureVoterToken(c);
     const [options, existing] = await Promise.all([
       optionsOf(db, [poll.id]),
       db.pollVote.findUnique({where: {pollId_voterToken: {pollId: poll.id, voterToken: token}}}),
@@ -332,11 +390,14 @@ export const pollPublicRoutes = new Hono()
 
     const v = decided.vote;
     const data = {optionIds: v.optionIds, ratingValue: v.ratingValue, textValue: v.textValue};
+    // Identity only when the poll is NOT anonymous and the guest link was valid; otherwise the vote stays anonymous.
+    const rsvpId = poll.anonymous ? null : await guestRsvpId(db, event.id, raw.g);
+    const identity = rsvpId ? {rsvpId} : {};
     // Choice and rating overwrite; a short answer is one per device (the domain refused a second).
     await db.pollVote.upsert({
       where: {pollId_voterToken: {pollId: poll.id, voterToken: token}},
-      create: {pollId: poll.id, voterToken: token, ...data},
-      update: poll.type === 'short_text' ? {} : data,
+      create: {pollId: poll.id, voterToken: token, ...data, ...identity},
+      update: poll.type === 'short_text' ? identity : {...data, ...identity},
     });
     invalidateResults(poll.id);
     return c.json({

@@ -7,7 +7,7 @@ import {attemptDelivery, envelope, isWebhookEvent, newSecret, webhookUrlProblem,
 import {eventsOf, MAX_ENDPOINTS} from '../webhooks';
 
 /**
- * Outbound webhooks, admin side (ported from CreatorCrowdHub `team.ts`). Holders of `site:event:manage`.
+ * Outbound webhooks, admin side (ported from CreatorCrowdHub `team.ts`). Holders of `site:event:integrations` (owner only by default).
  * Mount: `.route('/webhook-endpoints', adminWebhookRoutes)` (NOT under `/webhooks`: that prefix is for inbound calls).
  *
  *   GET    /webhook-endpoints            list (secret never returned, only its last 4 characters)
@@ -61,7 +61,7 @@ export function parseEndpointInput(value: unknown, partial: boolean): Parsed {
 const body = (c: {req: {json: () => Promise<unknown>}}) => c.req.json().catch(() => null);
 
 export const adminWebhookRoutes = new Hono()
-  .use('*', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb)
+  .use('*', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_INTEGRATIONS), withDb)
 
   .get('/', async c => {
     const rows = await c.var.db.webhookEndpoint.findMany({select, orderBy: {id: 'asc'}, take: MAX_ENDPOINTS + 1});

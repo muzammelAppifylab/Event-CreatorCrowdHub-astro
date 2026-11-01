@@ -17,7 +17,7 @@ import {runScheduler} from './jobs/run';
  * Handlers re-check the rows they act on and are safe to run twice (message_deliveries has
  * unique(rsvp_id, reminder_rule_id); every status change is conditional).
  */
-const KINDS: ReadonlySet<string> = new Set<GuestEmailKind>(['confirmation', 'waitlist_offer', 'hold_expired']);
+const KINDS: ReadonlySet<string> = new Set<GuestEmailKind>(['confirmation', 'waitlist_offer', 'hold_expired', 'event_cancelled']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const background = defineBackground({

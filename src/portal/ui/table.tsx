@@ -1,7 +1,9 @@
-import type {ReactNode} from 'react';
+import {type ReactNode, useEffect} from 'react';
+import {createPortal} from 'react-dom';
 
 import {Button} from './button';
 import {ErrorNote, Skeleton} from './display';
+import {Icon, type IconName} from './icon';
 
 export type Column<Row> = {
   /** Unique per table. */
@@ -125,5 +127,41 @@ export function LoadMore({
         Load more
       </Button>
     </div>
+  );
+}
+
+/**
+ * The bar that floats at the bottom of the screen while rows are selected (YNAB, ClickUp, folk,
+ * Aboard): the count, the few actions that matter as `BulkAction`s, a Clear. It sits over the
+ * page, so nothing above or below it moves when it appears. Esc clears the selection.
+ */
+export function BulkBar({count, noun = 'selected', onClear, children}: {count: number; noun?: string; onClear: () => void; children: ReactNode}) {
+  useEffect(() => {
+    if (count === 0) return;
+    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClear();
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [count, onClear]);
+  if (count === 0 || typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="bulk-bar" role="region" aria-label="Bulk actions">
+      <p className="bulk-bar-count" aria-live="polite">
+        <strong>{count}</strong> {noun}
+      </p>
+      <div className="bulk-bar-actions">{children}</div>
+      <button type="button" className="bulk-action bulk-clear" aria-label="Clear selection" title="Clear selection (Esc)" onClick={onClear}>
+        <Icon name="x" size={16} />
+      </button>
+    </div>,
+    document.body
+  );
+}
+
+export function BulkAction({icon, label, onClick, disabled, danger, pending}: {icon: IconName; label: string; onClick: () => void; disabled?: boolean; danger?: boolean; pending?: boolean}) {
+  return (
+    <button type="button" className="bulk-action" data-danger={danger ? '' : undefined} aria-label={label} title={label} disabled={disabled || pending} aria-busy={pending || undefined} onClick={onClick}>
+      {pending ? <span className="spinner" aria-hidden="true" /> : <Icon name={icon} size={16} />}
+      <span className="bulk-action-label">{label}</span>
+    </button>
   );
 }

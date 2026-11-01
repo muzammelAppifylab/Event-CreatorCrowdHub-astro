@@ -4,6 +4,7 @@ import type {SendFn} from './deliveries';
 import {queueGuestEmail} from './guest-emails';
 import {expireCheckoutHolds} from './holds';
 import {type ReminderRun, runReminders} from './reminders';
+import {drainWebhookOutbox} from '../webhooks';
 import {eventsWithLapsedClaims, expireEventClaims} from './waitlist';
 
 export const RUN_DEADLINE_MS = 45_000;
@@ -13,6 +14,7 @@ export interface SchedulerSummary {
   reminders: ReminderRun;
   waitlist: {lapsed: number; offered: number};
   holds: {expired: number};
+  webhooks: {sent: number; dropped: number};
   errors: string[];
 }
 
@@ -34,6 +36,7 @@ export async function runScheduler(
     reminders: {due: 0, sent: 0, failed: 0, skipped: 0, errors: []},
     waitlist: {lapsed: 0, offered: 0},
     holds: {expired: 0},
+    webhooks: {sent: 0, dropped: 0},
     errors: [],
   };
 
@@ -66,6 +69,10 @@ export async function runScheduler(
   } catch (error) {
     summary.errors.push(`holds: ${why(error)}`);
   }
+
+  // Webhook deliveries the platform would not queue (rate limit) or a receiver refused: bounded, never throws.
+  const outbox = await drainWebhookOutbox(db, now);
+  summary.webhooks = {sent: outbox.sent, dropped: outbox.dropped};
 
   return summary;
 }

@@ -3,7 +3,7 @@ import {useParams} from '@tanstack/react-router';
 import {useCallback, useEffect} from 'react';
 
 import {nextPollToOpen} from '../../domain/polls';
-import {type AdminPoll, closePoll, exportPollCsv, openPoll, presenterPollsQuery} from '../polls-queries';
+import {type AdminPoll, closePoll, exportPollCsv, formatJoinCode, openPoll, presenterPollsQuery} from '../polls-queries';
 import {QrCode} from '../qr';
 import {BarChart, Button, EmptyState, ErrorNote, LoadingBlock, StatusBadge, Stat, useToast} from '../ui';
 
@@ -129,7 +129,7 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
         </section>
         <aside aria-label="How to join" className="poll-present-join">
           <span className="muted">Join at {window.location.host}</span>
-          <strong className="poll-present-code">{event.pollJoinCode}</strong>
+          <strong className="poll-present-code">{formatJoinCode(event.pollJoinCode)}</strong>
           <QrCode value={`${window.location.origin}/p/${event.pollJoinCode}`} label="QR code to join the poll" size={192} />
           <span className="muted poll-present-url">{voteUrl}</span>
         </aside>

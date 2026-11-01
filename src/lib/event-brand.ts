@@ -97,3 +97,30 @@ export function applyPageBrand(root: HTMLElement = document.documentElement) {
   const preset = root.dataset.fontPreset
   if (preset === "serif" || preset === "rounded") applyFontPreset(preset, root)
 }
+
+// ------------------------------------------------------------------- logo --
+
+/** Logo uploads: raster images only (SVG always downloads on the platform, so it cannot show in an <img>). */
+export const LOGO_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"] as const
+export const LOGO_MAX_BYTES = 2 * 1024 * 1024
+export const LOGO_RULE = "Use a PNG, JPEG, WebP, GIF or AVIF image up to 2 MB."
+export const LOGO_FILE_ID = /^file_[0-9a-z]{26}$/
+
+export type LogoUpload = { name: string; contentType: (typeof LOGO_TYPES)[number]; size: number }
+
+/** The same check in the browser (before uploading) and in the route. */
+export function parseLogoUpload(raw: unknown): { ok: true; value: LogoUpload } | { ok: false; message: string } {
+  const v = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>
+  const name = typeof v.name === "string" ? v.name.trim().slice(0, 200) : ""
+  const contentType = typeof v.contentType === "string" ? v.contentType : ""
+  const size = typeof v.size === "number" && Number.isFinite(v.size) ? v.size : 0
+  if (!name) return { ok: false, message: "Pick an image file." }
+  if (!(LOGO_TYPES as readonly string[]).includes(contentType)) return { ok: false, message: LOGO_RULE }
+  if (!Number.isInteger(size) || size < 1 || size > LOGO_MAX_BYTES) return { ok: false, message: LOGO_RULE }
+  return { ok: true, value: { name, contentType: contentType as LogoUpload["contentType"], size } }
+}
+
+/** The stable public link of a stored logo (same shape as `publicFileUrl` in the managed files helper). */
+export function logoPath(file: { id: string; name: string } | null): string | null {
+  return file ? `/__platform/files/${file.id}/${encodeURIComponent(file.name)}` : null
+}

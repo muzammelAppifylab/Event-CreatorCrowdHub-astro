@@ -58,6 +58,32 @@ describe('public poll routes', () => {
     expect(state.db.pollVote.upsert.mock.calls[0][0].create).toMatchObject({pollId: POLL, optionIds: [O1]});
     expect((await res.json()).results).not.toBeNull();
   });
+  it('g: links the vote to a confirmed RSVP of this event, only when the poll is not anonymous', async () => {
+    state.db.rsvp = {findFirst: vi.fn(async () => ({id: 'rsvp-1'}))};
+    poll.anonymous = false;
+    expect((await post({pollId: POLL, optionIds: [O1], g: 'raw-manage-token'})).status).toBe(200);
+    const where = state.db.rsvp.findFirst.mock.calls[0][0].where;
+    expect(where).toMatchObject({eventId: 'e', status: {in: ['confirmed']}});
+    expect(where.manageToken).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(where)).not.toContain('raw-manage-token');
+    expect(state.db.pollVote.upsert.mock.calls[0][0].create).toMatchObject({rsvpId: 'rsvp-1'});
+    poll.anonymous = true;
+    state.db.pollVote.upsert.mockClear();
+    await post({pollId: POLL, optionIds: [O1], g: 'raw-manage-token'});
+    expect(state.db.pollVote.upsert.mock.calls[0][0].create).not.toHaveProperty('rsvpId');
+  });
+  it('g: an unknown token is ignored silently and the vote still works', async () => {
+    state.db.rsvp = {findFirst: vi.fn(async () => null)};
+    poll.anonymous = false;
+    expect((await post({pollId: POLL, optionIds: [O1], g: 'nope'})).status).toBe(200);
+    expect(state.db.pollVote.upsert.mock.calls[0][0].create).not.toHaveProperty('rsvpId');
+  });
+  it('guest-link: 404 for an unknown token, a /p link with g for a confirmed guest', async () => {
+    state.db.rsvp = {findFirst: vi.fn(async () => null)};
+    expect((await app.request('/p/guest-link/bad')).status).toBe(404);
+    state.db.rsvp.findFirst.mockResolvedValue({event: {pollJoinCode: 'K7Q42X'}});
+    expect(await (await app.request('/p/guest-link/tok')).json()).toEqual({path: '/p/K7Q42X?g=tok'});
+  });
   it('hides results when the host keeps them private', async () => {
     poll.showResultsToVoters = false;
     expect((await (await post({pollId: POLL, optionIds: [O1]})).json()).results).toBeNull();

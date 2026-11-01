@@ -246,6 +246,32 @@ const titleId = 'rsvp-sheet-title';
         )
       }
 
+      {
+        rsvp?.showGuestList && (
+          <section class="g-block" aria-labelledby="event-going">
+            <h2 id="event-going">Who's going</h2>
+            {(rsvp.attendees?.length ?? 0) > 0 ? (
+              <div class="g-going">
+                <ul class="g-going-list" aria-label="Guests who are going">
+                  {rsvp.attendees!.map(a => (
+                    <li>
+                      <span class="g-avatar" aria-hidden="true">{a.initials}</span>
+                      <span class="g-going-name">{a.name}</span>
+                    </li>
+                  ))}
+                  {(rsvp.goingCount ?? 0) > rsvp.attendees!.length && (
+                    <li class="g-going-more" data-numeric>+{(rsvp.goingCount ?? 0) - rsvp.attendees!.length} more going</li>
+                  )}
+                </ul>
+                <p class="g-strong-inherit" data-numeric>{rsvp.goingCount} going</p>
+              </div>
+            ) : (
+              <p>Be the first to RSVP.</p>
+            )}
+          </section>
+        )
+      }
+
       <section class="g-block" aria-labelledby="event-host">
         <h2 id="event-host">{guestCopy.sections.host}</h2>
         <div class="g-host">
@@ -432,3 +458,10 @@ const titleId = 'rsvp-sheet-title';
     document.addEventListener('astro:before-swap', () => window.clearTimeout(timer), {once: true});
   });
 </script>
+
+<style>
+  .g-going { display: flex; flex-direction: column; gap: 0.75rem; }
+  .g-going-list { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; margin: 0; padding: 0; list-style: none; align-items: center; }
+  .g-going-list li { display: flex; align-items: center; gap: 0.5rem; }
+  .g-going-name, .g-going-more { font-size: 0.875rem; }
+</style>

@@ -3,7 +3,10 @@ import {queryOptions} from '@tanstack/react-query';
 import {siteFetch} from '../platform/browser';
 import {read} from './api';
 
+export type PeriodMetrics = {rsvps: number; views: number; checkins: number};
+
 export type OverviewData = {
+  last30?: {windowDays: number; current: PeriodMetrics; previous: PeriodMetrics};
   totals: {upcomingEvents: number; hasMore: boolean; going: number; waitlisted: number; pending: number};
   events: {id: string; title: string; startAt: string; timezone: string; capacity: number | null; going: number; waitlisted: number; pending: number}[];
   recent: {id: string; eventId: string; eventTitle: string; name: string; status: string; response: string; seats: number; createdAt: string}[];

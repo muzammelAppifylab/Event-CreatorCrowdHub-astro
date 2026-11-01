@@ -7,6 +7,7 @@ import {
   type WaitlistEntry,
 } from '../../domain/waitlist';
 import type {PrismaClient} from '../../generated/prisma/client';
+import {emitCancelledIds} from '../webhook-emit';
 import {lockEvent, seatsTakenOf, type Db} from './shared';
 
 /** Waitlist rows are read this many at a time per event (a bounded read, never a whole table). */
@@ -74,7 +75,9 @@ export interface ClaimRun {
  * under the event lock. Idempotent: a second run finds nothing lapsed.
  */
 export async function expireEventClaims(db: PrismaClient, eventId: string, now: Date): Promise<ClaimRun> {
-  return db.$transaction(async tx => {
+  const lapsedIds: string[] = [];
+  const run = await db.$transaction(async tx => {
+    lapsedIds.length = 0;
     await lockEvent(tx, eventId);
     const event = await tx.event.findUnique({where: {id: eventId}, select: {capacity: true, status: true}});
     if (!event) return {lapsed: 0, offers: []};
@@ -83,6 +86,7 @@ export async function expireEventClaims(db: PrismaClient, eventId: string, now: 
     const available = event.status === 'published' ? seatsRemaining(event.capacity, taken) : 0;
     const result = expireClaims(entries, now, available);
     if (result.lapsed.length > 0) {
+      lapsedIds.push(...result.lapsed);
       await tx.rsvp.updateMany({
         where: {id: {in: result.lapsed}, status: 'waitlisted', claimExpiresAt: {lte: now}},
         data: {status: 'cancelled', claimExpiresAt: null, waitlistPosition: null},
@@ -95,6 +99,8 @@ export async function expireEventClaims(db: PrismaClient, eventId: string, now: 
       offers: offered.flatMap(p => (p.kind === 'offer_claim' ? [{rsvpId: p.rsvpId, claimExpiresAt: p.claimExpiresAt}] : [])),
     };
   });
+  emitCancelledIds(db, eventId, lapsedIds);
+  return run;
 }
 
 /** Events with a waitlisted guest whose claim lapsed. Bounded; the rest is due again next run. */

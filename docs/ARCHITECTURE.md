@@ -11,8 +11,9 @@ No workspaces, no teams: one site, one `event_settings` row (id 1). Catalogue in
 
 | Codename | Key (ability) | Gives | Default roles |
 | --- | --- | --- | --- |
-| `site:event:manage` | `EVENT_MANAGE` (`manageEvents`) | events, guests, invites, messages, polls, settings, analytics, webhooks | `admin` |
+| `site:event:manage` | `EVENT_MANAGE` (`manageEvents`) | events, guests, invites, messages, polls, settings, analytics | `admin` |
 | `site:event:checkin` | `EVENT_CHECKIN` (`checkinGuests`) | door check-in only | `admin` |
+| `site:event:integrations` | `EVENT_INTEGRATIONS` (`manageIntegrations`) | outbound webhooks (Integrations screen) | none: `owner` only (`*`) |
 
 - `owner` is the platform's all-powerful role; `admin` gets the catalogue defaults; `checkin_staff` is a
   non-system role created by the migration `prisma/migrations/20261030100000_checkin_role` holding only
@@ -41,7 +42,7 @@ Guest routes carry no session: access is by token in the path/body (or public).
 | `/checkin` | `routes/admin-checkin.ts` | events, event door list, code lookup/toggle: `EVENT_CHECKIN` or `EVENT_MANAGE`; attendees, attendance, attendance import: `EVENT_MANAGE` |
 | `/analytics` | `routes/admin-analytics.ts` | `EVENT_MANAGE`: `GET /events/:eventId` |
 | `/polls` | `routes/admin-polls.ts` | `EVENT_MANAGE`: CRUD, open/close, results, by-code |
-| `/webhook-endpoints` | `routes/admin-webhooks.ts` | `EVENT_MANAGE`: CRUD, test |
+| `/webhook-endpoints` | `routes/admin-webhooks.ts` | `EVENT_INTEGRATIONS` (owner only): CRUD, test |
 | `/rsvp` | `routes/rsvp.ts` | guest: event + invite lookup, RSVP, manage link, `/manage/:token` (get/patch/cancel/calendar.ics) |
 | `/event-checkout` | `routes/event-checkout.ts` | guest: POST `{token}` starts/resumes payment for a held RSVP |
 | `/polls-public` | `routes/polls-public.ts` | guest: active poll, vote, results (by join code) |
@@ -71,7 +72,7 @@ payments), plus template pages (`/`, `/about/`, `/blog/`, `/account/*`).
 - Events: `Event` (slug unique among non-deleted, soft delete, `pollJoinCode`), `TicketType`,
   `RsvpQuestion`, `Rsvp` (+ `RsvpAnswer`; email lower-cased; manage token stored hashed), `Invite`,
   `ReminderRule`, `Message` / `MessageDelivery`, `Poll` / `PollOption` / `PollVote`, `PageView`,
-  `WebhookEndpoint`, `EventSettings` (singleton, id 1), `TicketOrder` (platform `checkoutId`).
+  `WebhookEndpoint`, `WebhookOutbox` (`webhook_outbox`: deliveries waiting for a retry), `EventSettings` (singleton, id 1), `TicketOrder` (platform `checkoutId`).
   Enums cover event format/status/visibility, RSVP status/response/source, invite status, poll
   status/type, question type, reminder kind, delivery status, segment, font preset.
 
@@ -87,9 +88,13 @@ the editor/Preview. `refund_due` orders are refunded manually in the dashboard's
 ## Background jobs (`background.json`, `src/server/background.ts`, `src/server/jobs/`)
 
 - `event-scheduler`: cron `*/5 * * * *` UTC, concurrency 1; `runScheduler` does reminders, waitlist
-  claims and expired payment holds (bounded sweeps).
+  claims, expired payment holds and the webhook outbox drain (bounded sweeps).
 - `rsvp-emails`: confirmation, waitlist offer, hold expired (`queueGuestEmail`, retries 5).
-- `webhook-deliveries`: outbound webhooks (`src/server/webhook-delivery.ts`, retries 4).
+- `webhook-deliveries`: outbound webhooks (`src/server/webhook-delivery.ts`, retries 3). The platform allows ~10 job
+  sends a minute, so ONE job carries a whole emit (many events, each with its endpoint ids; the handler fans out)
+  and a refused send is parked in `webhook_outbox` (`webhook-outbox.ts`), which the scheduler tick drains (max 8
+  jobs per tick, exponential backoff, dropped after 8 tries or 24 h). Nothing is lost to the rate limit. Detail:
+  `docs/porting/webhooks.md`.
 
 Schedules do not tick locally: trigger with `sendJob(url, 'event-scheduler', {})`.
 

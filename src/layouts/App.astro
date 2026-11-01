@@ -12,6 +12,7 @@ import '../styles/global.css';
 import '../styles/app.css';
 import '../styles/events.css';
 import '../styles/screens.css';
+import '../styles/poster.css';
 import '../styles/kit-extra.css';
 
 import type {Site, Viewer} from '../lib/types';
@@ -25,7 +26,7 @@ interface Props {
 }
 
 const {site, viewer, title} = Astro.props;
-const name = site?.name ?? 'My site';
+const name = site?.name ?? 'CreatorCrowdHub';
 // The workspace brand, once per load, for signed-in screens (the source's useApplyWorkspaceBrand).
 const brand = viewer.state === 'user' ? await read<{brandColor: string | null; fontPreset: string}>(backend(Astro.request)['event-settings'].brand.$get()) : null;
 const brandColor = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : undefined;

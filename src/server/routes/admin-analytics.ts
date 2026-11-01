@@ -90,6 +90,9 @@ export const goingCount = (rows: RsvpAgg[]) =>
 export const maybeCount = (rows: RsvpAgg[]) =>
   rows.reduce((n, r) => (r.status === 'confirmed' && r.response === 'maybe' ? n + r.count : n), 0);
 
+/** Guests on the waitlist, whatever they answered. */
+export const waitlistedCount = (rows: RsvpAgg[]) => rows.reduce((n, r) => (r.status === 'waitlisted' ? n + r.count : n), 0);
+
 /** Checked in or marked attended ÷ going, once the event is over (before that, check-ins still arrive). */
 export function showRate(rows: RsvpAgg[], ended: boolean): Ratio {
   const going = goingCount(rows);
@@ -98,7 +101,7 @@ export function showRate(rows: RsvpAgg[], ended: boolean): Ratio {
   return ratio(showed, going, 'No confirmed going guests.');
 }
 
-/** Poll answers ÷ confirmed guests (one answer per voter per poll, so it can pass 100% with several polls). */
+/** Unique voters (devices that answered at least one poll) ÷ confirmed guests. Anonymous devices can include non-guests, so it may pass 100%. */
 export const pollParticipation = (votes: number, confirmedGuests: number) => ratio(votes, confirmedGuests, 'No confirmed guests.');
 
 export type RevenueRow = {currency: string; amountCents: number; orders: number};
@@ -148,7 +151,7 @@ export const adminAnalyticsRoutes = new Hono().get(
     const from = new Date(`${range.firstDay}T00:00:00Z`);
     const to = new Date(Date.parse(`${range.lastDay}T00:00:00Z`) + DAY_MS);
 
-    const [rsvpRows, views, daily, viewSources, rsvpSources, revenueRows, pollVotes] = await Promise.all([
+    const [rsvpRows, views, daily, viewSources, rsvpSources, revenueRows, voterRows] = await Promise.all([
       db.$queryRaw<RsvpAgg[]>`
         select response::text as response, status::text as status, count(*)::int as count,
                (count(*) filter (where checked_in_at is not null or attended = true))::int as "showedUp"
@@ -174,7 +177,11 @@ export const adminAnalyticsRoutes = new Hono().get(
         from ticket_orders o join rsvps r on r.id = o.rsvp_id
         where r.event_id = ${eventId}::uuid and o.status = 'paid'
         group by o.currency limit 10`,
-      db.pollVote.count({where: {poll: {eventId}}}),
+      // UNIQUE voters (distinct device tokens across the event's polls), via poll_votes_poll_voter_uq and polls.event_id.
+      db.$queryRaw<{voters: number}[]>`
+        select count(distinct v.voter_token)::int as voters
+        from poll_votes v join polls p on p.id = v.poll_id
+        where p.event_id = ${eventId}::uuid`,
     ]);
 
     const ended = event.endAt < now;
@@ -186,13 +193,13 @@ export const adminAnalyticsRoutes = new Hono().get(
       generatedAt: now.toISOString(),
       ended,
       views,
-      rsvps: {total, going: goingCount(rsvpRows), maybe: maybeCount(rsvpRows), checkedIn},
+      rsvps: {total, going: goingCount(rsvpRows), maybe: maybeCount(rsvpRows), waitlisted: waitlistedCount(rsvpRows), checkedIn},
       conversion: conversion(total, views),
       showRate: showRate(rsvpRows, ended),
       viewsByDay: zeroFillDays(range, daily),
       sources: topSources(viewSources, rsvpSources),
       revenue: revenueByCurrency(revenueRows),
-      pollParticipation: pollParticipation(pollVotes, confirmedGuests),
+      pollParticipation: pollParticipation(voterRows[0]?.voters ?? 0, confirmedGuests),
     });
   }
 );

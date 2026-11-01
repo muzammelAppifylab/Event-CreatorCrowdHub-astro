@@ -56,6 +56,74 @@
   box-shadow: var(--shadow-md);
 }
 
+.app-gate .gate-card {
+  width: 100%;
+  max-width: 420px;
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 2.5rem 2rem 1.75rem;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.gate-brand {
+  display: grid;
+  place-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.gate-eyebrow {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.gate-card h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 5vw, 1.875rem);
+  line-height: 1.2;
+}
+
+.gate-lede {
+  margin: 0 0 1rem;
+  max-width: 30ch;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+
+.gate-actions {
+  display: grid;
+  gap: 0.625rem;
+  width: 100%;
+}
+
+.gate-actions .button {
+  width: 100%;
+  justify-content: center;
+}
+
+.gate-back {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  width: 100%;
+  border-top: 1px solid var(--border);
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  text-decoration: none;
+}
+
+.gate-back:hover,
+.gate-back:focus-visible {
+  color: var(--ink, inherit);
+  text-decoration: underline;
+}
+
 /* The portal while a one-click sign-in from the dashboard finishes (PortalApp.tsx). */
 .app-signing-in {
   display: grid;
@@ -3917,4 +3985,1212 @@
 /* ---- lists ---- */
 .list-row {
   border-top-color: var(--border);
+}
+
+.tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ===================================================================
+   Redesign pass (Mobbin-informed): settings area, event rows, hub.
+   =================================================================== */
+
+/* ---- sidebar: the Settings entry lights up on any settings screen ---- */
+.app-nav-link[data-active] {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  font-weight: 600;
+}
+
+/* ---- settings: a secondary nav beside the screen (Monarch / Ghost / Toggl) ---- */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 2rem;
+  align-items: start;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.settings-layout > .settings-body > .app-page {
+  padding: 0;
+  max-width: none;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 1.5rem;
+  display: grid;
+  gap: 1.25rem;
+}
+
+.settings-nav-group {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-nav-label {
+  margin: 0 0 0.25rem;
+  padding: 0 0.625rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settings-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 36px;
+  padding: 0 0.625rem;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.settings-nav-link:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.settings-nav-link[data-active] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.settings-nav-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (max-width: 860px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .settings-nav {
+    position: static;
+    display: flex;
+    gap: 0.25rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+
+  .settings-nav-group {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .settings-nav-label {
+    display: none;
+  }
+
+  .settings-nav-link {
+    flex: none;
+    white-space: nowrap;
+  }
+}
+
+/* ---- overview ---- */
+.kpi-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.side-stack {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.event-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.875rem 1.125rem;
+  border-top: 1px solid var(--line);
+}
+
+.event-row:first-child {
+  border-top: 0;
+}
+
+.event-date {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  width: 52px;
+  height: 56px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  line-height: 1.1;
+}
+
+.event-date-month {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-text);
+}
+
+.event-date-day {
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.event-row-main {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.event-row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.event-row-title:hover {
+  text-decoration: underline;
+}
+
+.event-row-sub {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.event-row-seats {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.event-row-seats .progress {
+  flex: 1;
+  max-width: 160px;
+}
+
+.event-row-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.event-row-actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+@media (max-width: 640px) {
+  .event-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .event-row-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+.attention-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.attention-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 40px;
+}
+
+.attention-item[data-empty] {
+  color: var(--muted);
+}
+
+.attention-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.attention-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+}
+
+/* ---- event hub ---- */
+.hub-head {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.hub-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: fit-content;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.hub-crumb:hover {
+  color: var(--ink);
+}
+
+.hub-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.hub-title-row h2 {
+  margin: 0 0 0.375rem;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.hub-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hub-glance {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.hub-glance-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.hub-glance-count {
+  font-family: var(--font-display);
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.hub-glance-flags {
+  display: flex;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.hub-quick {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  gap: 0.75rem;
+}
+
+.hub-quick-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 56px;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.hub-quick-tile:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.hub-quick-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hub-quick-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.hub-quick-sub {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.guests-switch {
+  display: flex;
+  margin-bottom: 1rem;
+}
+
+.event-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.event-cell .event-date {
+  flex: none;
+  width: 44px;
+  height: 48px;
+}
+
+/* ---- layout: fluid, centred page; a toolbar never touches the card under it ---- */
+.app-content {
+  max-width: 1600px;
+  margin-inline: auto;
+}
+
+.toolbar + .card-panel,
+.toolbar + .card-flush,
+.tab-panel > .toolbar + * {
+  margin-top: 1rem;
+}
+
+.tab-panel > .toolbar {
+  margin-top: 1rem;
+}
+
+/* ---- contacts: toolbar, pager, profile + timeline ---- */
+.contacts-toolbar {
+  justify-content: space-between;
+  row-gap: 0.75rem;
+}
+
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1.125rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+
+.pager-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.contact-id {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.contact-id h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.contact-id p {
+  margin: 0.125rem 0 0.5rem;
+}
+
+.contact-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .contact-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.timeline {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 1.125rem 1.125rem;
+}
+
+.timeline-month {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.timeline-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.timeline-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.timeline-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.timeline-sub {
+  margin: 0.125rem 0 0.375rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.timeline-time {
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* event editor redesign */
+/* screens.css loads after this file, so these selectors carry one more class to win. */
+.app-page.screen-event-editor {
+  grid-template-columns: minmax(0, 1fr) 24rem;
+  column-gap: 2rem;
+}
+
+.app-page.screen-event-editor .editor-main {
+  display: block;
+  min-width: 0;
+}
+
+.app-page.screen-event-editor .editor-main > * + * {
+  margin-top: 1rem;
+}
+
+.app-page.screen-event-editor .editor-main form > * + *,
+.app-page.screen-event-editor .editor-main form > fieldset {
+  margin-top: 1rem;
+}
+
+.app-page.screen-event-editor fieldset {
+  min-width: 0;
+  margin-inline: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Section nav: sticky pills under the top bar, the current section filled. */
+.app-page.screen-event-editor .editor-nav {
+  top: 3.5rem;
+  z-index: 5;
+  margin-inline: -0.25rem;
+  padding: 0.5rem 0.25rem;
+  background: var(--background);
+  scrollbar-width: none;
+}
+
+.app-page.screen-event-editor .editor-nav a[aria-current] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.app-page.screen-event-editor .editor-section {
+  scroll-margin-top: 7rem;
+}
+
+.screen-event-editor .editor-title-input {
+  min-height: 3rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.screen-event-editor .editor-divider {
+  width: 100%;
+  margin: 0.25rem 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.screen-event-editor .editor-question {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.screen-event-editor .editor-more {
+  display: grid;
+  gap: 0.125rem;
+  text-align: left;
+  font-weight: 600;
+}
+
+.screen-event-editor .editor-more .muted {
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+
+.screen-event-editor .editor-more-body {
+  padding-top: 1rem;
+}
+
+.screen-event-editor .editor-later {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.screen-event-editor .editor-later strong {
+  display: inline-block;
+  min-width: 5.5rem;
+}
+
+
+/* Side column: status above the live preview. */
+.app-page.screen-event-editor > .editor-preview {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.screen-event-editor .editor-status {
+  display: grid;
+  gap: 0.375rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.screen-event-editor .editor-status p {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.screen-event-editor .editor-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1100px) {
+  .app-page.screen-event-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+}
+
+/* Editor pills: flush under the top bar, nothing scrolls through the gap above them. */
+.app-shell {
+  --topbar-h: 3.5rem;
+}
+
+.app-page.screen-event-editor .editor-nav {
+  top: calc(var(--topbar-h) - 1px);
+  z-index: 9;
+  margin-inline: 0;
+  padding: 0.625rem 0;
+  background: var(--background);
+  border-bottom: 0;
+  box-shadow: none;
+}
+
+.app-page.screen-event-editor .editor-section {
+  scroll-margin-top: calc(var(--topbar-h) + 4rem);
+}
+
+/* ---- contacts: stable filter row, tidy pager ---- */
+.contacts-filters {
+  flex-wrap: nowrap;
+}
+
+.contacts-filters .search-input {
+  width: 16rem;
+  min-width: 0;
+}
+
+.contacts-filters .select {
+  width: 14rem;
+}
+
+.contacts-filters .select select {
+  width: 100%;
+  text-overflow: ellipsis;
+}
+
+.contacts-filters > .btn,
+.contacts-filters > button {
+  flex: none;
+  min-width: 8.5rem;
+  justify-content: center;
+}
+
+@media (max-width: 900px) {
+  .contacts-filters {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .contacts-filters .search-input,
+  .contacts-filters .select {
+    width: 100%;
+  }
+}
+
+.table-pager {
+  width: 100%;
+  padding: 0;
+  border-top: 0;
+}
+
+.pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.pager-page {
+  min-width: 4.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.pager-size .select {
+  width: 5.25rem;
+}
+
+.pager-size .select select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0.25rem 2rem 0.25rem 0.625rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+}
+
+.pager-size .select select:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.card-foot:has(> .table-pager) {
+  padding: 0.75rem 1.125rem;
+}
+
+/* Names in people cells are links without the underline (it showed at rest and on hover). */
+a.person-name,
+a.person-name:hover,
+a.person-name:focus-visible {
+  text-decoration: none;
+}
+
+a.person-name:hover {
+  color: var(--accent-text);
+}
+
+/* ---- bulk bar: floats over the page, never moves the table ---- */
+.bulk-bar {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: calc(100vw - 2rem);
+  padding: 0.375rem 0.5rem 0.375rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--ink) 80%, var(--card));
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--card);
+  box-shadow: var(--shadow-lg, 0 12px 32px rgb(0 0 0 / 0.25));
+  transform: translateX(-50%);
+  animation: bulk-in 0.18s ease-out both;
+}
+
+@media (min-width: 961px) {
+  /* centred on the content, not the whole window (the sidebar is 256px) */
+  .bulk-bar {
+    left: calc(50% + 128px);
+  }
+}
+
+@keyframes bulk-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 0.75rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bulk-bar {
+    animation: none;
+  }
+}
+
+.bulk-bar-count {
+  margin: 0 0.5rem 0 0;
+  padding-right: 0.75rem;
+  border-right: 1px solid color-mix(in srgb, var(--card) 25%, transparent);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.bulk-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.bulk-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 36px;
+  padding: 0 0.75rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bulk-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--card) 16%, transparent);
+}
+
+.bulk-action:focus-visible {
+  outline: 2px solid var(--card);
+  outline-offset: 1px;
+}
+
+.bulk-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bulk-action[data-danger] {
+  color: color-mix(in oklab, var(--destructive) 55%, var(--card));
+}
+
+.bulk-clear {
+  padding: 0;
+  width: 36px;
+  justify-content: center;
+}
+
+@media (max-width: 640px) {
+  .bulk-bar {
+    bottom: 1rem;
+    padding-left: 0.75rem;
+  }
+
+  .bulk-action-label {
+    display: none;
+  }
+
+  .bulk-action {
+    padding: 0;
+    width: 36px;
+    justify-content: center;
+  }
+}
+
+/* room under the last row so the bar never hides it */
+.screen-contacts[data-selecting] {
+  padding-bottom: 5rem;
+}
+
+/* The scrollbar's width is always reserved, so the page never changes width when it appears
+   (a list gets taller, a dialog locks scrolling, the bulk bar adds padding). */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Row-select checkboxes in tables look like the kit's Checkbox (16px, ink fill, tick), not the browser's. */
+.data-table input[type='checkbox'] {
+  appearance: none;
+  position: relative;
+  display: block;
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  border: 1px solid var(--input);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
+}
+
+.data-table input[type='checkbox']:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.data-table input[type='checkbox']:checked {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.data-table input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--primary-foreground);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.data-table input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.data-table input[type='checkbox']:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* The hub's tab panels space their sections like a page does. */
+.hub-stack,
+.screen-event-hub .tab-panel {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+/* ===== Drawer: roomier, a clear header and a footer that stays in reach ===== */
+.drawer {
+  width: min(100%, 30rem);
+  max-width: 30rem;
+}
+
+.drawer-head {
+  padding: 1.25rem 3.5rem 1rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-head > .icon-button,
+.drawer-head .icon-button {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+.drawer-body {
+  padding: 1.5rem;
+  gap: 1.5rem;
+}
+
+.drawer-foot {
+  padding: 0.875rem 1.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+
+.drawer-foot > .btn:last-child,
+.drawer-foot > button:last-child {
+  min-width: 7.5rem;
+}
+
+/* ===== Poll form ===== */
+.screen-polls .poll-options {
+  gap: 0.625rem;
+}
+
+.screen-polls .poll-options legend {
+  margin-bottom: 0.625rem;
+  padding: 0;
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.screen-polls .poll-option-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* the same box as every other field (these inputs are not inside a Field) */
+.app-body .screen-polls .poll-option-row input {
+  width: 100%;
+  min-width: 0;
+  height: 2.75rem;
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--input);
+  border-radius: var(--r-md);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--type-ui);
+  font-size: var(--fs-body);
+  box-shadow: none;
+}
+
+.app-body .screen-polls .poll-option-row input:focus-visible {
+  outline: none;
+  border-color: var(--foreground);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--ring) 15%, transparent);
+}
+
+.app-body .screen-polls .poll-option-row input[aria-invalid='true'] {
+  border-color: var(--destructive);
+}
+
+.screen-polls .poll-settings {
+  display: grid;
+  gap: 1rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.screen-polls .poll-settings-title {
+  margin: 0;
+  font-size: var(--fs-body-sm);
+  font-weight: 600;
+}
+
+/* ---- duplicate event dialog ---- */
+.dup-form {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.dup-when {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dup-when-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.dup-label {
+  font-size: var(--fs-body-sm);
+  font-weight: 500;
+}
+
+/* one date per row in a dialog this narrow: the time must fit */
+.dup-dates {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.875rem;
+}
+
+.dup-zone {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: var(--fs-caption);
+  color: var(--muted-foreground);
+}
+
+.dup-copied {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.875rem 1rem;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-sunken);
+  font-size: var(--fs-body-sm);
+}
+
+.dup-copied li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.dup-copied li .icon {
+  flex: none;
+  margin-top: 0.2rem;
+  color: var(--rsvp-going-soft-foreground);
+}
+
+.dup-copied li[data-off] {
+  color: var(--muted-foreground);
+}
+
+.dup-copied li[data-off] .icon {
+  color: inherit;
+}
+
+/* ===== One scroller on desktop: the content frame. The page itself never scrolls. ===== */
+@media (min-width: 961px) {
+  html:has(body.app-body) {
+    overflow: hidden;
+    scrollbar-gutter: auto;
+  }
+
+  .app-body {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell {
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  .app-sidebar {
+    height: 100dvh;
+  }
+
+  .app-main {
+    height: calc(100dvh - 1rem);
+    overflow-x: clip;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* the scrollbar's width is always reserved, so content never shifts when it appears */
+    scrollbar-gutter: stable;
+  }
+}
+
+/* Editor head: back link above, title with its status, save actions at the top right. */
+.screen-event-editor .editor-crumb {
+  margin: 0 0 0.25rem -0.5rem;
+}
+
+.screen-event-editor .editor-title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  flex-wrap: wrap;
+}
+
+.screen-event-editor .editor-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.screen-event-editor .editor-bar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.screen-event-editor .editor-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+@media (max-width: 640px) {
+  .screen-event-editor .editor-head-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* The chip bar's filler (it closes the gap above the pills while stuck) sits under the head. */
+.screen-event-editor .editor-crumb,
+.screen-event-editor .page-header {
+  position: relative;
+  z-index: 10;
+}
+
+.app-page.screen-event-editor .editor-nav {
+  box-shadow: 0 -1.5rem 0 0 var(--background);
 }

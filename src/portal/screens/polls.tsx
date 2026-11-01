@@ -3,6 +3,7 @@ import {Link} from '@tanstack/react-router';
 import {useState} from 'react';
 
 import {ApiError} from '../api';
+import {QrCode} from '../qr';
 import {MoveButtons, moved} from './move-buttons';
 import {
   type AdminPoll,
@@ -10,7 +11,9 @@ import {
   createPoll,
   deletePoll,
   eventPollsQuery,
+  exportEventPollsCsv,
   exportPollCsv,
+  formatJoinCode,
   openPoll,
   reorderPolls,
   POLL_TYPE_LABELS,
@@ -132,6 +135,18 @@ export function Polls({eventId}: {eventId: string}) {
       action: () => remove.mutateAsync(poll.id),
     }).then(ok => ok && toast.success('Poll deleted.'));
 
+  const askOpen = (poll: AdminPoll) => {
+    const live = list?.find(p => p.status === 'open' && p.id !== poll.id);
+    if (!live) return act.mutate({id: poll.id, action: 'open'});
+    void confirm({
+      title: 'Open this poll?',
+      body: `Opening this closes the live poll “${live.question}”.`,
+      confirmLabel: 'Open poll',
+      pendingLabel: 'Opening…',
+      action: () => act.mutateAsync({id: poll.id, action: 'open'}),
+    });
+  };
+
   const columns: Column<AdminPoll>[] = [
     {
       key: 'order',
@@ -148,7 +163,24 @@ export function Polls({eventId}: {eventId: string}) {
       cell: p => (
         <div>
           <span className="cell-title">{p.question}</span>
-          <span className="cell-sub">{POLL_TYPE_LABELS[p.type].label}</span>
+          <span className="cell-sub">
+            {POLL_TYPE_LABELS[p.type].label}
+            {p.results ? ` · ${p.results.totalVoters} ${p.results.totalVoters === 1 ? 'vote' : 'votes'}` : ''} · {p.anonymous ? 'Anonymous' : 'Named'}
+          </span>
+          {p.results && p.results.options.length > 0 && (
+            <div className="poll-result-bars" aria-label="Results">
+              {p.results.options.map(o => (
+                <div key={o.id} className="poll-result-row">
+                  <span>{o.label}</span>
+                  <progress max={100} value={o.percent} aria-label={`${o.label}: ${o.percent}%`} />
+                  <span>{Math.round(o.percent)}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {p.results?.rating && p.results.rating.count > 0 && (
+            <span className="cell-sub">Average {p.results.rating.average?.toFixed(1)} of 5</span>
+          )}
         </div>
       ),
     },
@@ -168,7 +200,7 @@ export function Polls({eventId}: {eventId: string}) {
             items={[
               p.status === 'open'
                 ? {label: 'Close poll', icon: 'ban', onSelect: () => act.mutate({id: p.id, action: 'close'})}
-                : {label: p.status === 'closed' ? 'Reopen' : 'Open for voting', icon: 'zap', onSelect: () => act.mutate({id: p.id, action: 'open'})},
+                : {label: p.status === 'closed' ? 'Reopen' : 'Open for voting', icon: 'zap', onSelect: () => askOpen(p)},
               ...(p.status === 'draft'
                 ? [
                     {label: 'Edit', icon: 'pencil' as const, onSelect: () => start(p)},
@@ -188,22 +220,47 @@ export function Polls({eventId}: {eventId: string}) {
   return (
     <div className="app-page screen-polls">
       <div className="toolbar">
-        <p className="muted">{
-          event ? (
-            <>
-              Guests vote at{' '}
-              <strong>
-                {window.location.host}/p/{event.pollJoinCode}
-              </strong>
-              . One poll is open at a time.
-            </>
-          ) : (
-            'Ask the room a question and watch the answers arrive.'
-          )
-        }
-        </p>
+        <div>
+          <p className="muted">{
+            event ? (
+              <>
+                Guests vote at{' '}
+                <strong>
+                  {window.location.host}/p/{event.pollJoinCode}
+                </strong>
+                . One poll is open at a time.
+              </>
+            ) : (
+              'Ask the room a question and watch the answers arrive.'
+            )
+          }
+          </p>
+          {event && (
+            <p className="muted">
+              Join code <strong>{formatJoinCode(event.pollJoinCode)}</strong>
+            </p>
+          )}
+        </div>
         <div className="toolbar-group">
           <>
+            {event && (
+              <Button
+                variant="secondary"
+                icon="copy"
+                onClick={() =>
+                  void navigator.clipboard
+                    .writeText(`${window.location.origin}/p/${event.pollJoinCode}`)
+                    .then(() => toast.success('Vote link copied.'), () => toast.danger('Could not copy the link.'))
+                }>
+                Copy vote link
+              </Button>
+            )}
+            {event && <QrCode value={`${window.location.origin}/p/${event.pollJoinCode}`} label={`QR code to vote, join code ${formatJoinCode(event.pollJoinCode)}`} size={72} />}
+            {list && list.some(p => p.status !== 'draft') && (
+              <Button variant="secondary" icon="file" onClick={() => void exportEventPollsCsv(eventId, toast)}>
+                Export CSV
+              </Button>
+            )}
             {event && (
               <Link to={`/polls/${event.pollJoinCode}/present` as never} className={buttonClass({variant: 'secondary'})}>
                 Presenter view
@@ -325,6 +382,8 @@ export function Polls({eventId}: {eventId: string}) {
               )}
             </fieldset>
           )}
+          <div className="poll-settings">
+            <p className="poll-settings-title">Voting</p>
           <Checkbox
             label="Anonymous"
             description="Votes are never linked to a guest."
@@ -337,6 +396,7 @@ export function Polls({eventId}: {eventId: string}) {
             checked={Boolean(form.values.showResultsToVoters)}
             onChange={v => form.set('showResultsToVoters', v)}
           />
+          </div>
           {saveFailed && <ErrorNote error={save.error!} />}
         </div>
       </Drawer>

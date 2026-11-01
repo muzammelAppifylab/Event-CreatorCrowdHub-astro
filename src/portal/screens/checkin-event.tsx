@@ -1,7 +1,8 @@
 import {useInfiniteQuery, useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
 import {Link, useParams} from '@tanstack/react-router';
-import {type FormEvent, useRef, useState} from 'react';
+import {type FormEvent, useEffect, useRef, useState} from 'react';
 
+import {downloadExport, guestsExportUrl, NO_GUEST_FILTER} from '../guests-queries';
 import {
   ApiError,
   attendeesQuery,
@@ -31,6 +32,8 @@ import {
   SearchInput,
   Stat,
   useToast,
+  BulkAction,
+  BulkBar,
 } from '../ui';
 
 const STATUS_WORDS: Record<string, string> = {
@@ -59,6 +62,27 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
   const [codeError, setCodeError] = useState('');
   const [lastScan, setLastScan] = useState<DoorGuest | null>(null);
   const codeInput = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState(false);
+
+  // Door search runs 200 ms after typing stops (US-27); Enter or Search applies it at once.
+  useEffect(() => {
+    const trimmed = draft.trim();
+    if (trimmed === q) return;
+    const timer = setTimeout(() => setQ(trimmed), 200);
+    return () => clearTimeout(timer);
+  }, [draft, q]);
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      await downloadExport(guestsExportUrl(eventId, NO_GUEST_FILTER), 'guests.csv');
+      toast.success('Guest list exported.');
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : 'The export failed.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const list = useQuery({...doorListQuery(eventId, q), placeholderData: previous => previous});
   const refreshList = () => queryClient.invalidateQueries({queryKey: ['checkin', 'list', eventId]});
@@ -176,9 +200,16 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
         title={event?.title ?? 'Door list'}
         description={event ? eventWhen(event.startAt, event.timezone) : undefined}
         actions={
-          <Link to={'/checkin' as never} className={buttonClass({variant: 'secondary'})}>
-            All events
-          </Link>
+          <>
+            {data?.canManage && (
+              <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
+                Export CSV
+              </Button>
+            )}
+            <Link to={'/checkin' as never} className={buttonClass({variant: 'secondary'})}>
+              All events
+            </Link>
+          </>
         }
       />
 
@@ -370,9 +401,10 @@ export function OnlineAttendance({eventId}: {eventId: string}) {
             ))}
           </div>
           <LoadMore query={attendees} />
-          <Button size="lg" disabled={selected.size === 0} pending={mark.isPending} pendingLabel="Saving…" onClick={() => mark.mutate([...selected])}>
-            {selected.size > 0 ? `Mark ${selected.size} attended` : 'Mark selected attended'}
-          </Button>
+          <p className="muted">Tick the guests who joined, then mark them attended.</p>
+          <BulkBar count={selected.size} noun={selected.size === 1 ? 'guest selected' : 'guests selected'} onClear={() => setSelected(new Set())}>
+            <BulkAction icon="check-circle" label={`Mark ${selected.size} attended`} pending={mark.isPending} onClick={() => mark.mutate([...selected])} />
+          </BulkBar>
         </>
       )}
     </Card>
