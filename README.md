@@ -32,7 +32,7 @@ npm run build               # prisma generate && astro build
 
 `.env` is local only: never commit it.
 
-## Admin login (local development)
+## Admin login
 
 On a deployed site the owner signs in at `/dashboard` with a 6-digit code emailed to an address in
 `SITE_OWNER_EMAILS`; there is no shared password.
