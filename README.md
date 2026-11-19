@@ -32,15 +32,18 @@ in [Rules for this app](#rules-for-this-app).
 
 ## Before you publish this update
 
-This update fixes the findings in `docs/AUDIT-REPORT.md`. What to know when you publish it:
+What to know when you publish it:
 
-- **New database changes run on Publish**, in this order (folders in `prisma/migrations/`):
-  `20261113090000_capacity_backstops`, `20261113150000_guest_email_outbox`,
-  `20261113160000_checkin_role_slug`, `20261113170000_index_gaps`, `20261113171000_guest_privacy`,
-  `20261113180000_poll_attempts`, `20261113190000_pageview_salt`, `20261113200000_outbox_invite_idx`.
+- **New database changes run on Publish**, in order (folders in `prisma/migrations/`): the
+  `20261113…` and `20261116090000_query_indexes` changes, then `20261119100000_rate_attempts` (rate limits
+  kept in the database) and `20261119120000_payment_providers` (the owner's payment provider choice).
   Nothing to do by hand; if one fails, the previous version keeps serving.
 - **Uptime monitor**: point it at `/site-api/health/deep`. It checks the database too (200 when fine,
   503 when not); `/site-api/health` answers even when the database is down.
+- **Payments**: tickets keep using the built-in checkout until the owner picks Ezypay, Stripe or PayPal under
+  Dashboard → Settings → Payments (see [Payments](#payments)).
+- **Read-only access**: the new `site:event:read` permission lets a role open the events screens without
+  changing anything. Admins get it by default.
 - **Live polls**: people who already voted count as a new device once after the update. Nothing is lost.
 - **After one deploy**, remove the `rsvp-emails` line from `lists` in `background.json` and publish
   again. It is kept only to move old waiting jobs into the new guest email outbox.
