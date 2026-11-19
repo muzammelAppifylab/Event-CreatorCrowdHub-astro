@@ -6,7 +6,7 @@ import {sha256Hex} from '../../platform/auth/encoding';
 import {startTicketCheckout} from '../ticket-checkout';
 
 /**
- * Pay for a ticket (docs/porting/payments-jobs.md).
+ * Pay for a ticket (docs/ARCHITECTURE.md).
  *
  *   POST /site-api/event-checkout   {token}   start or resume the platform checkout for the
  *                                             guest's awaiting_payment RSVP ("Finish booking")

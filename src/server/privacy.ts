@@ -20,7 +20,7 @@ import {isUuid} from '../lib/text';
  * marketing-consent link carries a SIGNED "consent" token ({rsvpId}, 30 days) that only the
  * confirmation email holds, so consent counts only once the inbox owner proves it.
  *
- * Retention (docs/porting/privacy.md): export, unsubscribe and erase work for as long as the row
+ * Retention (docs/ARCHITECTURE.md): export, unsubscribe and erase work for as long as the row
  * holds personal data (audit L-42: the export no longer closes before retention); `expiredGuestIds`
  * + `eraseRsvp` let a background job anonymise guests `RETENTION_DAYS` after the event.
  * The guest's links work whatever the event became (unpublished, cancelled, deleted: audit M-23).

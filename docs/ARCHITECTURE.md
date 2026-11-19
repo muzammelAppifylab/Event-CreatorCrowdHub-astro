@@ -94,7 +94,7 @@ Source Stripe code is not ported. A paid RSVP is held `awaiting_payment`; `start
 `src/server/payments-hooks.ts` confirms, releases or refunds. Amounts come only from the catalogue: one
 price per ticket type AND amount, key `tkt-<24 hex>-<cents>-<currency>` (`ticketPriceKey`), creatable only in
 the editor/Preview. `refund_due` orders are refunded manually in the dashboard's Payments tab. Holds last
-`appConfig.checkoutHoldMinutes` (30, `src/config/app.config.ts`). Detail: `docs/porting/payments-jobs.md`.
+`appConfig.checkoutHoldMinutes` (30, `src/config/app.config.ts`).
 
 ## Background jobs (`background.json`, `src/server/background.ts`, `src/server/jobs/`)
 
@@ -108,8 +108,8 @@ the editor/Preview. `refund_due` orders are refunded manually in the dashboard's
 - `webhook-deliveries`: outbound webhooks (`src/server/webhook-delivery.ts`, retries 3). The platform allows ~10 job
   sends a minute, so ONE job carries a whole emit (many events, each with its endpoint ids; the handler fans out)
   and a refused send is parked in `webhook_outbox` (`webhook-outbox.ts`), which the scheduler tick drains (max 8
-  jobs per tick, exponential backoff, dropped after 8 tries or 24 h). Nothing is lost to the rate limit. Detail:
-  `docs/porting/webhooks.md`.
+  jobs per tick, exponential backoff, dropped after 8 tries or 24 h). Nothing is lost to the rate limit.
+
 
 Schedules do not tick locally: trigger with `sendJob(url, 'event-scheduler', {})`.
 
@@ -150,7 +150,6 @@ Locally, sign in as an admin with `npm run dev-admin -- you@example.com`.
 ```bash
 npx prisma dev start ccd-astro      # local Postgres; put its URL in .env as DATABASE_URL
 npx prisma migrate deploy
-npm run db:seed:demo                # demo events, RSVPs, polls (dev only; never touches users)
 npm run db:seed                     # sample data (prisma/seed.sql): safe to run twice, refuses a database in use
 npx astro dev                       # http://localhost:4321
 ```

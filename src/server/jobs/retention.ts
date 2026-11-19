@@ -2,7 +2,7 @@ import type {PrismaClient} from '../../generated/prisma/client';
 import {deleteExpiredInvites, eraseRsvp, expiredGuestIds, prunePrivacyAttempts, restoredErasedIds} from '../privacy';
 
 /**
- * Retention sweep (docs/porting/privacy.md), daily (background.json `guest-retention`):
+ * Retention sweep (docs/ARCHITECTURE.md), daily (background.json `guest-retention`):
  *   1. re-applies erasures a backup restore brought back (`guest_erasures`, audit M-27);
  *   2. anonymises RSVPs whose event ended more than `RETENTION_DAYS` ago;
  *   3. deletes host invites (name + address) for those events (audit M-26);

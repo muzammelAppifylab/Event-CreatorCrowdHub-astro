@@ -18,7 +18,6 @@
     "setup": "node scripts/platform.mjs setup",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "prisma db seed",
-    "db:seed:demo": "node --env-file=.env scripts/seed-demo.mjs",
     "dev-admin": "node scripts/platform.mjs dev-admin"
   },
   "dependencies": {

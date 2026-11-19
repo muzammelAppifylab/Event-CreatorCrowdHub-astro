@@ -3,7 +3,7 @@
  * The colour, type, radius and shadow tokens are the Marquee design system
  * copied from the original app (tokens.css = primitives, theme.css = roles,
  * light/dark, brand override, and the template aliases such as --accent, --bg,
- * --line). See docs/porting/design-tokens.md. Never a hex value outside those
+ * --line). Never a hex value outside those
  * two files, never style="" (the CSP blocks it).
  *
  * Dark: prefers-color-scheme, data-theme="dark" on <html> (the dashboard's

@@ -2506,7 +2506,7 @@
  * Design parity with the original app (shadcn/ui + Marquee tokens).
  * Everything below restyles the kit to match CreatorCrowdHub's
  * src/components/ui/* and shared/*; it comes last on purpose so it wins over
- * the neutral rules above. Semantic tokens only (docs/porting/design-tokens.md).
+ * the neutral rules above. Semantic tokens only.
  * ====================================================================== */
 
 .app-body {

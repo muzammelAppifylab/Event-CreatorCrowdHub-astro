@@ -24,7 +24,7 @@ import {isUuid, notFound, parsePageCursor} from '../validate';
 /**
  * Messages for event organisers (`site:event:manage`): broadcasts to guest
  * segments, the email preview, the message log and the automatic reminder rules.
- * Mounted at `/site-api/event-admin` (docs/porting/guests.md).
+ * Mounted at `/site-api/event-admin` (docs/ARCHITECTURE.md).
  *
  *   GET    /events/:eventId/messages?before=             the log, newest first, keyset paged
  *   GET    /events/:eventId/messages/segments            guest counts per segment

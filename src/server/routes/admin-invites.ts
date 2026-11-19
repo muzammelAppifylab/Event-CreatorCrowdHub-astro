@@ -18,7 +18,7 @@ import {isUuid, notFound} from '../validate';
 
 /**
  * Guest invites, for event organisers (`site:event:manage`). Mounted by the
- * app at `/site-api/event-admin` (docs/porting/guests.md), so paths here start
+ * app at `/site-api/event-admin` (docs/ARCHITECTURE.md), so paths here start
  * with `/events/:eventId/invites`.
  *
  *   GET    /events/:eventId/invites?before=         invites, by email, keyset paged

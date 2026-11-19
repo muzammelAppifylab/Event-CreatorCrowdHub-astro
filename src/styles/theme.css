@@ -11,7 +11,7 @@
  *      The source's own meanings are --accent-bg / --accent-foreground and
  *      --surface-muted.
  *   3. The template aliases (--bg, --surface, --line …) are at the bottom.
- * See docs/porting/design-tokens.md.
+ *
  */
 
 :root {

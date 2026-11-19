@@ -22,7 +22,7 @@ import {promoteWaitlist} from '../waitlist-promote';
 
 /**
  * Guest management for event organisers (`site:event:manage`). Mounted by the
- * app at `/site-api/event-admin` (docs/porting/guests.md).
+ * app at `/site-api/event-admin` (docs/ARCHITECTURE.md).
  *
  *   GET    /events/:eventId/guests?status&response&ticketTypeId&checkedIn&q&before   list (keyset, 50 a page)
  *   GET    /events/:eventId/guests/export.csv?(same filters)                         CSV (20,000 rows at most)

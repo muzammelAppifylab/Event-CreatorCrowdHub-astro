@@ -20,7 +20,7 @@ import {promoteWaitlist} from './jobs/waitlist';
 
 /**
  * Ticket checkout on top of the platform's payments (docs/agent/payments.md,
- * docs/porting/payments-jobs.md).
+ * docs/ARCHITECTURE.md).
  *
  * The platform charges a CATALOGUE amount by price KEY, so a ticket type's price is one
  * catalogue price whose key is derived from the ticket type AND its amount

@@ -66,7 +66,7 @@ function promotedEmails(promoted: ReleaseResult['promoted']) {
 }
 
 /**
- * The ONE sweep for holds that lapsed (docs/porting/payments-jobs.md). A hold lapses
+ * The ONE sweep for holds that lapsed (docs/ARCHITECTURE.md). A hold lapses
  * `checkoutHoldMinutes` after its pending ticket order was created (the platform checkout's
  * start), else after the RSVP row last changed when no order exists. Bounded per run, and stops at
  * the scheduler's `deadline` (ms epoch) between holds; the rest are released next tick.

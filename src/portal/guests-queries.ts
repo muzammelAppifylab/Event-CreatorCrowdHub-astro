@@ -7,7 +7,7 @@ import {read} from './api';
  * The guest-management reads and helpers, ONCE (same rule as `queries.ts`):
  * guests, invites, messages and contacts. Browser-safe: nothing from
  * `src/server` is imported. Calls go through `siteFetch` to
- * `/site-api/event-admin/...` (docs/porting/guests.md), so this file does not
+ * `/site-api/event-admin/...` (docs/ARCHITECTURE.md), so this file does not
  * depend on the typed client until the routes are mounted.
  *
  * Query keys start with `'guests'`, `'invites'`, `'messages'` or `'contacts'`:

@@ -93,9 +93,7 @@ src/domain/           pure event rules (codes, tokens, capacity…)
 src/emails/           email templates
 src/portal/           the creator dashboard (React SPA at /dashboard)
 prisma/               schema, migrations, seed.sql (sample data)
-scripts/seed-demo.mjs richer local demo data (npm run db:seed:demo)
 docs/ARCHITECTURE.md  routes, data, jobs
-docs/PORTING.md       source map and gaps of the port; docs/porting/ has per-area notes
 AGENTS.md, docs/agent/  the template's rules for AI agents (managed: never edit)
 ```
 
@@ -113,8 +111,7 @@ npm run dev                         # http://localhost:4321
 
 Then [create your admin account](#create-your-admin-account): sign up at
 http://localhost:4321/account/register/, type the code printed by `npm run dev`, and run
-`npm run dev-admin -- you@example.com`. For a fuller dashboard (events with RSVPs, invites, polls,
-messages and page views), also run `npm run db:seed:demo`.
+`npm run dev-admin -- you@example.com`.
 
 ## Setting up, step by step
 
@@ -167,14 +164,7 @@ Create the tables, and run it again after every new migration (yours or a templa
 ```bash
 npm run db:migrate                # prisma migrate deploy
 npm run db:seed                   # the sample data in prisma/seed.sql
-npm run db:seed:demo              # optional: richer demo events (local databases only)
 ```
-
-`db:seed:demo` replaces only its own `demo-` events each time it runs, never touches accounts, and
-refuses a database that isn't on this computer (the editor's Preview Database only with
-`SITE_PREVIEW=1` and `SEED_DEMO_HOST=<its host>`). It stops without changing anything when a
-`demo-` slug belongs to an event it didn't create. It prints a few guest links at the end, since
-manage tokens are stored hashed.
 
 ### Run it
 
@@ -232,7 +222,6 @@ admin password, and none is ever kept in this repository.
 | `npm run check` | `npm test`, then `npm run build`: run it before you push |
 | `npm run db:migrate` | applies new migrations (`prisma migrate deploy`) |
 | `npm run db:seed` | loads `prisma/seed.sql` (sample data) |
-| `npm run db:seed:demo` | richer demo events, RSVPs, invites, polls (local only) |
 | `npm run dev-admin -- <email>` | a local admin ([Create your admin account](#create-your-admin-account)) |
 | `npm run studio` | Prisma Studio on http://localhost:5555, to browse the database |
 | `npm run preview` | serves the last `npm run build` |
@@ -242,8 +231,7 @@ admin password, and none is ever kept in this repository.
 ## Rules for this app
 
 These come on top of `AGENTS.md` and `docs/agent/`, which stay exactly as the template ships them.
-Details: `docs/ARCHITECTURE.md` (routes, data, jobs), `docs/PORTING.md` (source map, gaps),
-`docs/porting/*.md`.
+Details: `docs/ARCHITECTURE.md` (routes, data, jobs).
 
 - **Code**: backend `src/server/routes/{admin-*,rsvp,events,event-*,polls-public,privacy,pageviews}.ts`,
   jobs `src/server/jobs/`, mail `src/server/mailer.ts` + `src/emails/`, pure rules `src/domain/`,
@@ -360,7 +348,7 @@ files (`git checkout --ours <file>`) and the template's side of its own files
 | sign-up answers 503 `auth_not_configured`: "Sign-in is not set up on this site yet" | `JWT_SECRET` is missing or shorter than 32 characters | `npm run setup` (or `openssl rand -base64 48` into `.env`), then restart `npm run dev` |
 | pages, event pages or sign-in answer 503 `site_database_disabled` | `DATABASE_URL` is empty | `npm run setup`, then restart `npm run dev` |
 | sign-up answers 500, and the dev server shows `relation "login_attempts" does not exist` or `The table public.permissions does not exist` | the tables aren't created (migrations pending) | `npm run db:migrate` |
-| `/events/` is empty | no sample data loaded | `npm run db:seed` (and `npm run db:seed:demo` for more) |
+| `/events/` is empty | no sample data loaded | `npm run db:seed` |
 | `db:seed` stops with an exception about existing data | `prisma/seed.sql` refuses a database that already holds real data | use a fresh local database (`docker compose down -v`, then up, `npm run setup`) |
 | no code appears after signing up | `SITE_KEY` is set (codes are then emailed by the platform), or the dev server runs in the background | empty `SITE_KEY` in `.env` and restart; or read `npx astro dev logs` |
 | no new code when you sign up again with the same address | account emails to one address are limited, so a repeat within a few minutes sends none | use the code printed the first time, wait a few minutes, or sign up with another address |
