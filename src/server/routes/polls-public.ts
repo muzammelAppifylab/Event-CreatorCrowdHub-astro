@@ -14,7 +14,7 @@ import {
 } from '../../domain/polls';
 import {CODE_ALPHABET, POLL_JOIN_CODE_LENGTH} from '../../domain/codes';
 import {hashToken} from '../../domain/secureToken';
-import {POLL_GUEST_PREFIX, verifyPollGuestToken} from '../../domain/tokens';
+import {POLL_GUEST_PREFIX, pollLinkFor, verifyPollGuestToken} from '../../domain/tokens';
 import {Prisma, type PrismaClient} from '../../generated/prisma/client';
 import {background, clientIp, rateLimitIp, tooMany} from '../../platform/auth/kit';
 import {hmacKey, subjectHash} from '../../platform/auth/keys';
@@ -532,18 +532,21 @@ export const pollPublicRoutes = new Hono()
     });
   })
 
-  // The manage page's poll link: `/p/<code>?g=<manage token>` for a voting-eligible guest, else 404.
-  .get('/guest-link/:token', withDb, async c => {
+  // The manage page's poll link for a voting-eligible guest, else 404: `/p/<code>/?g=<signed pg_ token>`.
+  // Never the raw manage token: that is the guest's whole RSVP credential and must not travel in a URL
+  // (history, logs, a shared screen). The signed token only names {rsvp, event} for voting.
+  .get('/guest-link/:token', withAuthCore, async c => {
     const token = c.req.param('token');
     const rsvp =
       token.length <= GUEST_TOKEN_MAX
         ? await c.var.db.rsvp.findFirst({
             where: {manageToken: hashToken(token), status: {in: [...VOTING_ELIGIBLE_STATUSES]}, response: {not: 'not_going'}, event: {deletedAt: null, status: 'published'}},
-            select: {event: {select: {pollJoinCode: true}}},
+            select: {id: true, eventId: true, event: {select: {pollJoinCode: true}}},
           })
         : null;
     if (!rsvp) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
-    return c.json({path: `/p/${rsvp.event.pollJoinCode}?g=${encodeURIComponent(token)}`});
+    c.header('Cache-Control', 'private, no-store');
+    return c.json({path: pollLinkFor('', rsvp.event.pollJoinCode, rsvp.id, rsvp.eventId, c.var.secret)});
   })
 
   .post('/:code/votes', withAuthCore, async c => {

@@ -6,7 +6,9 @@ import {audit} from '../../platform/auth/audit';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {attachmentHeader, csvExport, type CsvValue, toCsv} from '../csv';
 import {PERMISSIONS} from '../permissions';
+import {requireEventRead} from '../guards-ext';
 import {nextSortOrder, validateOrder} from '../sort-order';
+import {lockEvent} from '../jobs/shared';
 import {isUuid, notFound} from '../validate';
 import {emitWebhook, emitWebhooks, pollClosedPayload} from '../webhook-emit';
 import {
@@ -49,6 +51,8 @@ import {
  * by a response body after the handler returned.
  */
 export const POLL_EXPORT_PAGE = 1000;
+/** Polls per event. */
+export const MAX_POLLS = 100;
 /** Most vote rows one CSV export holds; `X-Export-Truncated: 1` says when it was cut. */
 export const POLL_EXPORT_MAX_ROWS = 20_000;
 
@@ -270,7 +274,7 @@ async function pollList(db: Db, event: Promise<EventRef | null>, where: Prisma.P
 }
 
 export const adminPollRoutes = new Hono()
-  .get('/event/:eventId', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+  .get('/event/:eventId', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const id = c.req.param('eventId');
     if (!isUuid(id)) return notFound(c, 'Event');
     const list = await pollList(c.var.db, c.var.db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}), {eventId: id}, {eventId: id});
@@ -294,7 +298,7 @@ export const adminPollRoutes = new Hono()
     return c.body(csv, 200, csvHeaders(`poll-votes-${event.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`, truncated));
   })
 
-  .get('/by-code/:code', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+  .get('/by-code/:code', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const code = normalizeJoinCode(c.req.param('code'));
     if (!code) return notFound(c, 'Event');
     const list = await pollList(
@@ -313,32 +317,33 @@ export const adminPollRoutes = new Hono()
     const id = c.req.param('eventId');
     if (!isUuid(id)) return notFound(c, 'Event');
     const body = await c.req.json().catch(() => null);
-    // The event, the poll count and the last position: independent reads, one trip.
-    const [event, count, last] = await Promise.all([
-      db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}),
-      db.poll.count({where: {eventId: id}}),
-      db.poll.aggregate({where: {eventId: id}, _max: {sortOrder: true}}),
-    ]);
+    const event = await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}});
     if (!event) return notFound(c, 'Event');
     const input = parsePollInput(body);
     if ('error' in input) return c.json(invalid(input), 422);
-    if (count >= 100) {
-      return c.json(problem('too_many_polls', 'An event can have at most 100 polls.'), 409);
-    }
-    const created = await db.poll.create({
-      data: {
-        id: orderedUuid(Date.now() / 1000),
-        sortOrder: nextSortOrder(last._max.sortOrder),
-        eventId: event.id,
-        question: input.question,
-        type: input.type,
-        anonymous: input.anonymous,
-        showResultsToVoters: input.showResultsToVoters,
-        pollOptions: {create: input.options.map((label, i) => ({id: orderedUuid(i), label, sortOrder: i}))},
-      },
-      // The new options come back in the same statement: no second read.
-      select: withOptions,
+    // Count and insert under the event's row lock: two creates at once can't both pass the cap (or
+    // take the same position). Short: database work only.
+    const created = await db.$transaction(async tx => {
+      await lockEvent(tx, event.id);
+      const count = await tx.poll.count({where: {eventId: event.id}});
+      if (count >= MAX_POLLS) return null;
+      const last = await tx.poll.aggregate({where: {eventId: event.id}, _max: {sortOrder: true}});
+      return tx.poll.create({
+        data: {
+          id: orderedUuid(Date.now() / 1000),
+          sortOrder: nextSortOrder(last._max.sortOrder),
+          eventId: event.id,
+          question: input.question,
+          type: input.type,
+          anonymous: input.anonymous,
+          showResultsToVoters: input.showResultsToVoters,
+          pollOptions: {create: input.options.map((label, i) => ({id: orderedUuid(i), label, sortOrder: i}))},
+        },
+        // The new options come back in the same statement: no second read.
+        select: withOptions,
+      });
     });
+    if (!created) return c.json(problem('too_many_polls', `An event can have at most ${MAX_POLLS} polls.`), 409);
     return c.json({poll: adminPoll(created as AdminPollRow)}, 201);
   })
 
@@ -451,7 +456,7 @@ export const adminPollRoutes = new Hono()
     return c.json({ok: true});
   })
 
-  .get('/:pollId/results', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+  .get('/:pollId/results', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const id = c.req.param('pollId');
     if (!isUuid(id)) return notFound(c, 'Poll');
     // The poll with its options, and its counts: side by side, one round trip.

@@ -25,7 +25,7 @@ import {
   splitOffset,
   type OffsetUnit,
 } from '../guests-queries';
-import {when} from '../shared';
+import {useCanManageEvents, when} from '../shared';
 import {
   Badge,
   Button,
@@ -153,10 +153,12 @@ function PreviewModal({preview, onClose}: {preview: EmailPreview | null; onClose
  * `eventId` is the event's uuid.
  */
 export function MessagesTab({eventId}: {eventId: string}) {
+  // Read-only viewers (no `manageEvents`) see the rules and the log, never the composer.
+  const canManage = useCanManageEvents();
   return (
     <div className="app-page screen-messages">
       <AutomaticEmails eventId={eventId} />
-      <Broadcast eventId={eventId} />
+      {canManage && <Broadcast eventId={eventId} />}
       <MessageLog eventId={eventId} />
     </div>
   );
@@ -290,6 +292,7 @@ export function AutomaticEmails({eventId}: {eventId: string}) {
   const toast = useToast();
   const query = useQuery(rulesQuery(eventId));
   const [editing, setEditing] = useState<string | 'new' | null>(null);
+  const canManage = useCanManageEvents();
   const form = useForm<RuleForm>(newRuleForm('reminder'), RULE_RULES);
   const [preview, setPreview] = useState<EmailPreview | null>(null);
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
@@ -364,7 +367,7 @@ export function AutomaticEmails({eventId}: {eventId: string}) {
   };
 
   const busyKey = (toggle.isPending && toggle.variables?.id) || (remove.isPending && remove.variables) || null;
-  const columns: Column<RuleRow>[] = [
+  const allColumns: Column<RuleRow>[] = [
     {
       key: 'email',
       header: 'Email',
@@ -385,7 +388,7 @@ export function AutomaticEmails({eventId}: {eventId: string}) {
           label={r.enabled ? 'On' : 'Off'}
           checked={r.enabled}
           pending={busyKey === r.id && toggle.isPending}
-          disabled={busyKey !== null && busyKey !== r.id}
+          disabled={!canManage || (busyKey !== null && busyKey !== r.id)}
           onChange={enabled => toggle.mutate({id: r.id, enabled})}
         />
       ),
@@ -407,6 +410,7 @@ export function AutomaticEmails({eventId}: {eventId: string}) {
       ),
     },
   ];
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'actions');
 
   const limits = RULE_OFFSET_LIMITS[v.kind];
   return (
@@ -415,6 +419,7 @@ export function AutomaticEmails({eventId}: {eventId: string}) {
       description="Sent once to each confirmed guest. Times already past when someone RSVPs are skipped."
       flush
       actions={
+        canManage && (
         <Menu
           label="Add an automatic email"
           trigger={<span>Add email</span>}
@@ -425,6 +430,7 @@ export function AutomaticEmails({eventId}: {eventId: string}) {
             onSelect: () => openNew(kind),
           }))}
         />
+        )
       }>
       <DataTable
         caption="Automatic emails"

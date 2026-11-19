@@ -2,7 +2,9 @@ import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
 import type {PrismaClient} from '../../generated/prisma/client';
+import {clientIp, rateLimitIp} from '../../platform/auth/kit';
 import {problem, withDb} from '../../platform/guards';
+import {RATE_LIMITS, sweepAttempts, takeAttempt} from '../rate-attempts';
 import {normaliseSource} from './admin-analytics';
 
 /**
@@ -17,25 +19,22 @@ import {normaliseSource} from './admin-analytics';
  * slugs exist (L-8).
  *
  * No session. The app-wide `sameOrigin` + `csrf` guards already refuse cross-site and token-less
- * writes (call it with `siteFetch`). The raw IP and user agent only feed the hash and the in-memory
- * limiter; neither is stored or logged. The hash is salted with a RANDOM salt per UTC day, kept in
+ * writes (call it with `siteFetch`). The raw IP and user agent only feed the hash and the limiter's
+ * keyed hash; neither is stored or logged. The hash is salted with a RANDOM salt per UTC day, kept in
  * `page_view_salts` (one row per day, created on first use) and deleted after 2 days: once a day's
  * salt is gone nobody, the site included, can recompute a hash from an IP, and days cannot be
  * linked to each other (L-43). One row per
  * (event, visitor, day): `page_views_event_visitor_day_uq` + `ON CONFLICT DO NOTHING`.
  *
- * ABUSE LIMITS ARE BEST EFFORT: the counters live in this isolate's memory (bounded to MAX_TRACKED keys,
- * oldest windows evicted, then cleared), so N isolates allow roughly N x the limit. A database-backed
- * limiter would cost a write per beacon (more than the beacon itself), so it is deliberately not used.
- * The real bounds are the unique index (one row per visitor hash per day) and the per-event cap; a
- * spammer rotating user agents can only add analytics noise, never reach other data. Listed in the
- * security audit follow-ups.
+ * ABUSE LIMITS: per network and per event, in the site's own `rate_attempts` table (shared by every
+ * isolate; src/server/rate-attempts.ts), ONE conditional statement per counted beacon, only after the
+ * event was found (an unknown slug costs one indexed read and writes nothing). Over the network cap: 429;
+ * over the event cap: dropped quietly. The unique index (one row per visitor hash per day) still dedupes.
  */
 
 const SLUG = /^[a-z0-9][a-z0-9-]{0,99}$/;
-/** Beacons per IP and per event, per minute, per Worker isolate (best effort; the unique index is the real dedupe). */
-export const BEACON_LIMIT = {perIp: 60, perEvent: 500, windowMs: 60_000};
-const MAX_TRACKED = 5000;
+/** Beacons per network and per event, per minute (`RATE_LIMITS.beaconIp` / `beaconEvent`). */
+export const BEACON_LIMIT = {perIp: RATE_LIMITS.beaconIp.max, perEvent: RATE_LIMITS.beaconEvent.max, windowMs: RATE_LIMITS.beaconIp.windowMs};
 
 const enc = new TextEncoder();
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -89,28 +88,6 @@ export async function visitorHash(input: {salt: string; ip: string; userAgent: s
   return hex(await crypto.subtle.digest('SHA-256', enc.encode([input.salt, input.ip, input.userAgent, input.eventId].join('\n'))));
 }
 
-/** A small fixed-window counter, bounded in size (module memory is for tiny caches only). */
-export function createLimiter(limit: number, windowMs: number, now: () => number = Date.now) {
-  const hits = new Map<string, {start: number; n: number}>();
-  return (key: string): boolean => {
-    const t = now();
-    const entry = hits.get(key);
-    if (!entry || t - entry.start >= windowMs) {
-      if (hits.size >= MAX_TRACKED) {
-        for (const [k, v] of hits) if (t - v.start >= windowMs) hits.delete(k);
-        if (hits.size >= MAX_TRACKED) hits.clear();
-      }
-      hits.set(key, {start: t, n: 1});
-      return true;
-    }
-    entry.n += 1;
-    return entry.n <= limit;
-  };
-}
-
-const ipLimit = createLimiter(BEACON_LIMIT.perIp, BEACON_LIMIT.windowMs);
-const eventLimit = createLimiter(BEACON_LIMIT.perEvent, BEACON_LIMIT.windowMs);
-
 /** A beacon must never break the page: a missing or odd body just means "no utm". */
 const beaconBody = validator('json', value => {
   const raw = (value as {utmSource?: unknown} | null)?.utmSource;
@@ -123,8 +100,7 @@ export const pageViewRoutes = new Hono().post('/:slug', beaconBody, withDb, asyn
   if (!SLUG.test(slug)) return c.body(null, 204);
 
   // The Worker's own view of the client; never x-forwarded-for, which anyone can send.
-  const ip = c.req.header('cf-connecting-ip') ?? 'local';
-  if (!ipLimit(ip)) return c.json(problem('rate_limited', 'Too many requests. Try again in a minute.'), 429);
+  const ip = clientIp(c);
 
   // Only what the public event page shows and is still running: published, public or unlisted, not
   // deleted (events_slug_live_uq: one live event per slug). Anything else is not counted, quietly.
@@ -133,8 +109,16 @@ export const pageViewRoutes = new Hono().post('/:slug', beaconBody, withDb, asyn
     select: {id: true},
   });
   if (!event) return c.body(null, 204);
-  // Over the cap: drop quietly. The page does not care and a spammer learns nothing.
-  if (!eventLimit(event.id)) return c.body(null, 204);
+  const limited = await takeAttempt(c.var.db, [
+    {limit: RATE_LIMITS.beaconIp, key: rateLimitIp(ip)},
+    {limit: RATE_LIMITS.beaconEvent, key: event.id},
+  ]);
+  sweepAttempts(c, c.var.db);
+  if (!limited.allowed) {
+    if (limited.over === RATE_LIMITS.beaconIp) return c.json(problem('rate_limited', 'Too many requests. Try again in a minute.'), 429);
+    // Over the event cap: drop quietly. The page does not care and a spammer learns nothing.
+    return c.body(null, 204);
+  }
 
   const now = new Date();
   const day = utcDay(now);

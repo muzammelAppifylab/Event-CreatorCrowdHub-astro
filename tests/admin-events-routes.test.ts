@@ -107,6 +107,8 @@ beforeEach(() => {
     $transaction: vi.fn(async (arg: unknown) => (typeof arg === 'function' ? (arg as (tx: unknown) => unknown)(state.db) : [])),
     // lockEvent ignores the rows; the H-1 probe reads {held, paid}.
     $queryRaw: vi.fn(async () => [{held: false, paid: false}]),
+    // The cancel's outbox insert (one keyed statement inside its transaction).
+    $executeRaw: vi.fn(async () => 0),
   };
 });
 
@@ -216,6 +218,19 @@ describe('/:id', () => {
     expect(res.status).toBe(200);
     expect(calls.event).toContainEqual({orders: {where: {status: 'paid', rsvp: {eventId: ID}}, data: {status: 'refund_due'}}});
     expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'event_cancelled', meta: {refundDue: 2}}));
+    // The guests' emails are queued in the same transaction as the flip.
+    expect(state.db.$executeRaw).toHaveBeenCalled();
+  });
+
+  it('cancel that lost the race (the conditional flip changed nothing) answers 409 and does nothing else', async () => {
+    vi.mocked(audit).mockClear();
+    stored = row({status: 'published'});
+    (state.db.event as {updateMany: ReturnType<typeof vi.fn>}).updateMany.mockResolvedValueOnce({count: 0});
+    const res = await json(`/admin-events/${ID}/cancel`, 'POST');
+    expect(res.status).toBe(409);
+    expect(calls.event.some(c => 'orders' in c)).toBe(false);
+    expect(state.db.$executeRaw).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'event_cancelled'}));
   });
 
   it('refuses http: and javascript: links', async () => {

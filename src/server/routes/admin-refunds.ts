@@ -4,6 +4,7 @@ import type {PrismaClient} from '../../generated/prisma/client';
 import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {PERMISSIONS} from '../permissions';
+import {requireEventRead} from '../guards-ext';
 import {refundedTicket} from '../ticket-checkout';
 import {keysetAfter} from '../../lib/text';
 import {isUuid, parsePageCursor} from '../validate';
@@ -103,12 +104,12 @@ const eventFilter = (value: string | undefined) => (value && isUuid(value) ? val
 
 export const adminRefundRoutes = new Hono()
   // Registered before `/:id/...` routes; `/count` is its own path.
-  .get('/count', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/count', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     c.header('Cache-Control', 'private, no-store');
     return c.json(await countRefundDue(c.var.db, eventFilter(c.req.query('eventId'))));
   })
 
-  .get('/', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     c.header('Cache-Control', 'private, no-store');
     return c.json(await listRefundDue(c.var.db, {eventId: eventFilter(c.req.query('eventId')), before: c.req.query('before')}));
   })

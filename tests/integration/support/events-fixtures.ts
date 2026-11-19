@@ -39,7 +39,7 @@ export const eventsApp = new Hono()
   .route('/privacy', privacyRoutes);
 
 export async function resetEvents() {
-  await db.$executeRawUnsafe('TRUNCATE "events", "webhook_endpoints", "event_settings", "guest_email_outbox" RESTART IDENTITY CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "events", "webhook_endpoints", "event_settings", "guest_email_outbox", "rate_attempts" RESTART IDENTITY CASCADE');
   emails.length = 0;
 }
 

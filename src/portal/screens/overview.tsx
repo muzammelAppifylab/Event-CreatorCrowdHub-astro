@@ -5,7 +5,7 @@ import {healthQuery, siteQuery} from '../queries';
 import {formatInZone} from '../../domain/time';
 import {type OverviewData, overviewQuery} from '../overview-queries';
 import {formatChange} from '../overview-format';
-import {ago, useMe, when} from '../shared';
+import {ago, useCanManageEvents, useMe, when} from '../shared';
 import {RefundsCard} from './refunds-card';
 import {Badge, buttonClass, Card, EmptyState, ErrorNote, Icon, LoadingBlock, Notice, PageHeader, ProgressBar, Stat} from '../ui';
 
@@ -21,9 +21,11 @@ export function Overview() {
   const me = useMe();
   const viewer = me.data?.viewer;
   const abilities = me.data?.abilities;
+  const canView = Boolean(abilities?.viewEvents || abilities?.manageEvents);
+  const canManage = useCanManageEvents();
   const health = useQuery(healthQuery);
   const site = useQuery(siteQuery);
-  const events = useQuery({...overviewQuery, enabled: Boolean(abilities?.manageEvents)});
+  const events = useQuery({...overviewQuery, enabled: canView});
   const ev = events.data;
   const firstName = viewer?.name?.split(/\s+/)[0];
 
@@ -41,7 +43,7 @@ export function Overview() {
               <Icon name="globe" size={18} />
               View the website
             </a>
-            {abilities?.manageEvents && (
+            {canManage && (
               <Link className={buttonClass()} to={'/events/new' as never}>
                 <Icon name="plus" size={18} />
                 Create event
@@ -58,9 +60,9 @@ export function Overview() {
         </Notice>
       )}
 
-      {abilities?.manageEvents && <RefundsCard />}
+      {canView && <RefundsCard />}
 
-      {me.data && !abilities?.manageEvents && (
+      {me.data && !canView && (
         <EmptyState
           icon="user"
           title={firstName ? `Welcome, ${firstName}` : 'Welcome'}
@@ -75,7 +77,7 @@ export function Overview() {
 
       {events.error && <ErrorNote error={events.error} />}
       {events.isPending && events.fetchStatus !== 'idle' && <LoadingBlock rows={2} />}
-      {abilities?.manageEvents && noEvents && (
+      {canManage && noEvents && (
         <EmptyState
           icon="calendar"
           title="Create your first event"
@@ -88,7 +90,7 @@ export function Overview() {
           Set it up in a few minutes and share the link. Every guest lands in your Guests list.
         </EmptyState>
       )}
-      {abilities?.manageEvents && ev && !noEvents && (
+      {canView && ev && !noEvents && (
         <>
           <Kpis data={ev.last30} upcoming={ev.totals.upcomingEvents} more={ev.totals.hasMore} />
 
@@ -112,7 +114,7 @@ export function Overview() {
               ) : (
                 <div className="card-body">
                   <p className="muted">
-                    Nothing scheduled. <Link to={'/events/new' as never}>Create an event</Link>
+                    Nothing scheduled.{canManage && <> <Link to={'/events/new' as never}>Create an event</Link></>}
                   </p>
                 </div>
               )}

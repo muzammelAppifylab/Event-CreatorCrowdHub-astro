@@ -73,7 +73,7 @@ const windows = [
         <p class="browse-eyebrow">Events</p>
         <h1>Find your next event</h1>
         <p class="browse-lede">Search upcoming events, filter by format or date, then RSVP in under 30 seconds. No account needed.</p>
-        <form class="browse-search" action="/events/" method="get" role="search">
+        <form class="browse-search" action="/events/" method="get" role="search" novalidate>
           {format && <input type="hidden" name="format" value={format} />}
           {when && <input type="hidden" name="when" value={when} />}
           <label class="sr-only" for="event-search">Search events</label>

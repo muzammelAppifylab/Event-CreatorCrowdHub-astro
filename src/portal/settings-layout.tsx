@@ -5,7 +5,8 @@ import type {Abilities} from '../lib/types';
 import {useMe} from './shared';
 import {Icon, type IconName} from './ui';
 
-type SettingsItem = {to: string; label: string; icon: IconName; ability?: keyof Abilities};
+/** `abilities`: shown when the visitor has ANY of them (the same rule as the route's `needs(...)`). */
+type SettingsItem = {to: string; label: string; icon: IconName; abilities?: (keyof Abilities)[]};
 
 /**
  * Everything that configures the site or the person lives under ONE sidebar entry, "Settings",
@@ -18,19 +19,22 @@ export const SETTINGS_GROUPS: {label: string; items: SettingsItem[]}[] = [
   {
     label: 'Events',
     items: [
-      {to: '/event-settings', label: 'Branding & defaults', icon: 'settings', ability: 'manageEvents'},
-      {to: '/integrations', label: 'Integrations', icon: 'zap', ability: 'manageIntegrations'},
+      {to: '/event-settings', label: 'Branding & defaults', icon: 'settings', abilities: ['viewEvents', 'manageEvents']},
+      {to: '/integrations', label: 'Integrations', icon: 'zap', abilities: ['manageIntegrations']},
     ],
   },
   {
     label: 'Team',
     items: [
-      {to: '/users', label: 'Users', icon: 'users', ability: 'manageUsers'},
-      {to: '/roles', label: 'Roles & access', icon: 'shield', ability: 'manageRoles'},
-      {to: '/activity', label: 'Activity log', icon: 'activity', ability: 'readAudit'},
+      {to: '/users', label: 'Users', icon: 'users', abilities: ['manageUsers']},
+      {to: '/roles', label: 'Roles & access', icon: 'shield', abilities: ['manageRoles']},
+      {to: '/activity', label: 'Activity log', icon: 'activity', abilities: ['readAudit']},
     ],
   },
 ];
+
+const allowed = (item: SettingsItem, abilities: Partial<Abilities> | undefined) =>
+  !item.abilities || item.abilities.some(a => abilities?.[a]);
 
 const SETTINGS_PATHS = SETTINGS_GROUPS.flatMap(group => group.items.map(item => item.to));
 
@@ -40,7 +44,7 @@ export const isSettingsPath = (pathname: string) =>
 
 /** Where the sidebar's "Settings" entry goes: the first screen this visitor may open. */
 export function firstSettingsPath(abilities: Partial<Abilities> | undefined) {
-  const first = SETTINGS_GROUPS.flatMap(group => group.items).find(item => !item.ability || abilities?.[item.ability]);
+  const first = SETTINGS_GROUPS.flatMap(group => group.items).find(item => allowed(item, abilities));
   return first?.to ?? '/account';
 }
 
@@ -48,7 +52,7 @@ export function SettingsLayout({children}: {children: ReactNode}) {
   const abilities = useMe().data?.abilities;
   const groups = SETTINGS_GROUPS.map(group => ({
     ...group,
-    items: group.items.filter(item => !item.ability || abilities?.[item.ability]),
+    items: group.items.filter(item => allowed(item, abilities)),
   })).filter(group => group.items.length);
   const pathname = useRouterState({select: s => s.location.pathname});
   return (

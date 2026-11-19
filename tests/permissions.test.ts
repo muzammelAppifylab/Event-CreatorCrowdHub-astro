@@ -25,15 +25,17 @@ describe('the permission catalogue', () => {
     expect(CORE.ROLE_READ).toBe('site:role:read');
     expect(CORE.ROLE_UPDATE).toBe('site:role:update');
     expect(CORE.AUDIT_READ).toBe('site:audit:read');
+    expect(PERMISSIONS.EVENT_READ).toBe('site:event:read');
     expect(PERMISSIONS.EVENT_MANAGE).toBe('site:event:manage');
     expect(PERMISSIONS.EVENT_CHECKIN).toBe('site:event:checkin');
     expect(PERMISSIONS.EVENT_INTEGRATIONS).toBe('site:event:integrations');
     expect(CATALOGUE.EVENT_INTEGRATIONS.roles).toEqual([]);
     expect(CATALOGUE.EVENT_MANAGE.roles).toEqual(['admin']);
+    expect(CATALOGUE.EVENT_READ.roles).toEqual(['admin']);
     // Admins may check guests in too; the door-staff role is granted by migration, not here.
     expect(CATALOGUE.EVENT_CHECKIN.roles).toEqual(['admin']);
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
-      ['checkinGuests', 'editRoles', 'manageEvents', 'manageIntegrations', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
+      ['checkinGuests', 'editRoles', 'manageEvents', 'viewEvents', 'manageIntegrations', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
     );
     expect(Object.values(NO_ABILITIES).every(v => v === false)).toBe(true);
   });
@@ -49,12 +51,21 @@ describe('the permission catalogue', () => {
       editRoles: false,
       readAudit: true,
       manageEvents: true,
+      viewEvents: false,
       checkinGuests: false,
       manageIntegrations: false,
     } satisfies Abilities);
     // The type is exact: a key nobody declared does not exist.
     // @ts-expect-error not in the catalogue
     void NO_ABILITIES.manageEverything;
+  });
+
+  it('gives a see-only role (the store demo) viewEvents and nothing that writes', () => {
+    const demo = abilitiesFor(new Set(['site:user:read', 'site:role:read', 'site:audit:read', 'site:event:read']));
+    expect(demo.viewEvents).toBe(true);
+    expect(demo.manageEvents).toBe(false);
+    expect(demo.checkinGuests).toBe(false);
+    expect(demo.manageIntegrations).toBe(false);
   });
 
   it('ships the door-staff role under a slug the platform role API accepts', () => {

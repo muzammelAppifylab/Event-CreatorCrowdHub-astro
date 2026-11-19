@@ -14,7 +14,7 @@ import {
 import {notifyPromoted} from './jobs/holds';
 import {queueGuestEmail} from './jobs/guest-emails';
 import {emitCancelledIds, emitSeated, emitWebhook, orderPaidPayload} from './webhook-emit';
-import {isUniqueViolation, lockEvent, seatsTakenOf, siteBase} from './jobs/shared';
+import {type Db, isUniqueViolation, lockEvent, seatsTakenOf, siteBase} from './jobs/shared';
 import {promoteWaitlist} from './jobs/waitlist';
 
 /**
@@ -337,7 +337,7 @@ export async function refundedTicket(db: PrismaClient, refund: Refund, now = new
  * refund them from the dashboard; `payment.refunded` then marks them `refunded`.
  * Called by the event-cancel route (whoever owns it). Returns how many orders need a refund.
  */
-export async function markEventOrdersRefundDue(db: PrismaClient, eventId: string): Promise<number> {
+export async function markEventOrdersRefundDue(db: Db, eventId: string): Promise<number> {
   const done = await db.ticketOrder.updateMany({where: {status: 'paid', rsvp: {eventId}}, data: {status: 'refund_due'}});
   return done.count;
 }

@@ -11,7 +11,7 @@ vi.mock('../src/platform/guards', async () => {
     withViewer: async (c: any, next: () => Promise<void>) => { c.set('viewer', {state: 'user', id: 7}); await next(); },
     requireAuth: pass,
     requirePermission: () => pass,
-    can: vi.fn(async (_c: unknown, perm: string) => (String(perm).includes('manage') ? state.manage : true)),
+    can: vi.fn(async (_c: unknown, perm: string) => (String(perm).includes('manage') ? state.manage : String(perm).endsWith(':read') ? false : true)),
     withDb: async (c: any, next: () => Promise<void>) => { c.set('db', state.db); await next(); },
   };
 });

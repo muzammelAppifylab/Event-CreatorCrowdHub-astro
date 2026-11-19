@@ -3,6 +3,7 @@ import {useParams} from '@tanstack/react-router';
 import {useEffect, useRef, useState} from 'react';
 
 import {useUnsavedGuard} from '../use-unsaved-guard';
+import {useCanManageEvents} from '../shared';
 import {CoverPicker} from './cover-picker';
 import {EventPreview} from './event-editor-preview';
 import {AutomaticEmails} from './messages';
@@ -292,6 +293,8 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
   const queryClient = useQueryClient();
   const toast = useToast();
   const nav = useEventsNav();
+  // A read-only viewer (no `manageEvents`) sees every section with its controls disabled and no Save.
+  const canManage = useCanManageEvents();
   const form = useForm<FormValues>(initial, {});
   const formRef = useRef<HTMLFormElement>(null);
   const [questions, setQuestions] = useState<QuestionDraft[]>(drafts);
@@ -368,7 +371,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
       if (!done.ok) Object.assign(fields, done.fields);
     }
     showErrors(fields);
-    if (Object.keys(fields).length === 0) save.mutate({body, publish});
+    if (Object.keys(fields).length === 0 && canManage) save.mutate({body, publish});
   });
   const submit = submitWith(false);
   // Both ends are picked, not typed, so the order is checked live (the server's rule: eventRuleErrors).
@@ -434,7 +437,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
           <PageHeader
             title={
               <span className="editor-title-row">
-                {isNew ? 'New event' : 'Edit event'}
+                {isNew ? 'New event' : canManage ? 'Edit event' : 'Event details'}
                 <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
               </span>
             }
@@ -444,10 +447,11 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                   {event.publicPath}
                 </a>
               ) : (
-                'Fill in each section, then publish. Publishing saves your changes first.'
+                canManage ? 'Fill in each section, then publish. Publishing saves your changes first.' : 'View only: your role can see this event but not change it.'
               )
             }
             actions={
+              canManage && (
               <div className="editor-head-actions" role="group" aria-label="Save">
                 <span className="editor-bar-state" aria-live="polite">
                   {dirty && (
@@ -476,6 +480,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                   </Button>
                 )}
               </div>
+              )
             }
           />
 
@@ -505,7 +510,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
             </Notice>
           )}
 
-          <fieldset className="form-stack" disabled={cancelled}>
+          <fieldset className="form-stack" disabled={cancelled || !canManage}>
             <div id="sec-details" className="editor-section">
               <Card title="Basics" description="What guests read first. The link follows the title until you change it.">
                 <div className="form-stack">
@@ -701,7 +706,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
           </fieldset>
         </form>
 
-        <fieldset className="form-stack" disabled={cancelled}>
+        <fieldset className="form-stack" disabled={cancelled || !canManage}>
           {event ? (
             <>
               <div id="sec-tickets" className="editor-section">
@@ -763,6 +768,7 @@ function Tickets({event}: {event: AdminEventDetail}) {
   const confirm = useConfirm();
   const toast = useToast();
   const tickets = useQuery(eventTicketsQuery(event.id));
+  const canManage = useCanManageEvents();
   const [editing, setEditing] = useState<AdminTicketType | 'new' | null>(null);
   // Sold counts and capacity also show in the event itself, so refresh the whole slice.
   const refresh = () => queryClient.invalidateQueries({queryKey: ['events']});
@@ -785,7 +791,7 @@ function Tickets({event}: {event: AdminEventDetail}) {
     onSettled: () => queryClient.invalidateQueries({queryKey: eventTicketsQuery(event.id).queryKey}),
   });
   const rows = tickets.data?.ticketTypes;
-  const columns: Column<AdminTicketType>[] = [
+  const allColumns: Column<AdminTicketType>[] = [
     {
       key: 'order',
       header: 'Order',
@@ -837,6 +843,8 @@ function Tickets({event}: {event: AdminEventDetail}) {
         ),
     },
   ];
+  // Read-only viewers: the tickets, no ordering, editing or deleting.
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'order' && c.key !== 'actions');
   return (
     <>
       <Card
@@ -844,9 +852,11 @@ function Tickets({event}: {event: AdminEventDetail}) {
         description="Free and paid ticket types. Without any, RSVPs are free."
         flush
         actions={
-          <Button variant="secondary" size="sm" icon="plus" onClick={() => setEditing('new')}>
-            Add ticket
-          </Button>
+          canManage && (
+            <Button variant="secondary" size="sm" icon="plus" onClick={() => setEditing('new')}>
+              Add ticket
+            </Button>
+          )
         }>
         <DataTable
           caption="Ticket types"

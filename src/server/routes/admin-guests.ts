@@ -12,6 +12,7 @@ import {eventMailSelect, type GuestNotice, type MailEvent} from '../guest-mail';
 import {notifyGuests} from '../guest-notices';
 import {erasureHash, exportFilename, guestExportById} from '../privacy';
 import {PERMISSIONS} from '../permissions';
+import {requireEventRead} from '../guards-ext';
 import {checkedInPayload, emitWebhook, emitWebhooks, rsvpPayload} from '../webhook-emit';
 import {normalizeEmail} from './admin-invites';
 import {isUuid, notFound, parsePageCursor} from '../validate';
@@ -30,7 +31,7 @@ import {promoteWaitlist} from '../waitlist-promote';
  *   PATCH  /events/:eventId/guests/:rsvpId     edit name, email, plus-ones, consent, attended, checked in
  *   DELETE /events/:eventId/guests/:rsvpId     remove (frees the seat; refused when the guest has an order: erase)
  *   GET    /contacts?q&consent&repeat&attended&event&limit&before   everyone who RSVP'd to any event, once per email
- *   GET    /contacts/detail?email              one person: their profile and every RSVP they made
+ *   GET    /contacts/detail?key=<rsvp id>      one person: their profile and every RSVP they made
  *   GET    /contacts/export.csv?q&consent      the same as CSV
  *
  * A malformed or unknown event or guest id is a 404. Seat changes run in a
@@ -609,6 +610,8 @@ export const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, '\\$&')}%`;
 
 type ContactRaw = {
   email: string;
+  /** The newest RSVP's id: the contact's opaque key in URLs (never the email address). */
+  key: string;
   name: string;
   event_count: number;
   last_event_id: string;
@@ -652,6 +655,7 @@ async function queryContacts(db: PrismaClient, opts: ContactOpts) {
   if (opts.consentOnly) having.push(CONTACT_CONSENT);
   const rows = await db.$queryRaw<ContactRaw[]>`
     SELECT r.email AS email,
+      (array_agg(r.id ORDER BY r.created_at DESC, r.id DESC))[1]::text AS key,
       (array_agg(r.name ORDER BY r.created_at DESC, r.id DESC))[1] AS name,
       count(DISTINCT r.event_id)::int AS event_count,
       (array_agg(e.id ORDER BY e.start_at DESC))[1]::text AS last_event_id,
@@ -669,6 +673,7 @@ async function queryContacts(db: PrismaClient, opts: ContactOpts) {
     LIMIT ${opts.limit}`;
   return rows.map(r => ({
     email: r.email,
+    key: r.key,
     name: r.name,
     eventCount: r.event_count,
     lastEvent: {id: r.last_event_id, title: r.last_event_title, startAt: new Date(r.last_event_start_at).toISOString()},
@@ -693,8 +698,9 @@ const contactsQuery = validator('query', value => {
   };
 });
 
+/** `?key=<rsvp uuid>`: any RSVP of the person (the list sends the newest). Never the email: it would sit in the URL. */
 const contactDetailQuery = validator('query', value => ({
-  email: typeof value.email === 'string' ? value.email.trim().toLowerCase().slice(0, 254) : '',
+  key: isUuid(value.key) ? value.key.toLowerCase() : '',
 }));
 
 const auditRemoval = (db: PrismaClient, actor: number | null | undefined, eventId: string, action: 'remove' | 'erase', done: number, failed: number) =>
@@ -729,6 +735,8 @@ export async function* guestExportPages(db: PrismaClient, where: Prisma.RsvpWher
 /* ── Routes ─────────────────────────────────────────────────────────── */
 
 const guard = [withViewer, requireAuth, requirePermission(MANAGE), withDb] as const;
+/** Reads (lists and one guest): see-only admins too. Exports and writes stay on `guard`. */
+const readGuard = [withViewer, requireAuth, requireEventRead(), withDb] as const;
 
 export const adminGuestRoutes = new Hono()
   // Registered before `/:rsvpId` so "export.csv" is not read as an id.
@@ -777,7 +785,7 @@ export const adminGuestRoutes = new Hono()
     return c.json(result);
   })
 
-  .get('/events/:eventId/guests/:rsvpId', ...guard, async c => {
+  .get('/events/:eventId/guests/:rsvpId', ...readGuard, async c => {
     const {db} = c.var;
     const eventId = c.req.param('eventId');
     const rsvpId = c.req.param('rsvpId');
@@ -891,7 +899,7 @@ export const adminGuestRoutes = new Hono()
     return c.json(problem('has_order', 'This guest has a payment on record, so they cannot be removed. Erase them instead.'), 409);
   })
 
-  .get('/events/:eventId/guests', filterQuery, ...guard, async c => {
+  .get('/events/:eventId/guests', filterQuery, ...readGuard, async c => {
     const {db} = c.var;
     const eventId = c.req.param('eventId');
     if (!isUuid(eventId)) return notFound(c, 'Event');
@@ -959,7 +967,7 @@ export const adminGuestRoutes = new Hono()
     });
   })
 
-  .get('/contacts', contactsQuery, ...guard, async c => {
+  .get('/contacts', contactsQuery, ...readGuard, async c => {
     const {limit, before, ...filter} = c.req.valid('query');
     const rows = await queryContacts(c.var.db, {...filter, after: before, limit: limit + 1});
     const items = rows.slice(0, limit);
@@ -967,8 +975,12 @@ export const adminGuestRoutes = new Hono()
   })
 
   // One person across every event: who they are, and each RSVP they made, newest first.
-  .get('/contacts/detail', contactDetailQuery, ...guard, async c => {
-    const {email} = c.req.valid('query');
+  // Keyed by one of their RSVP ids (never the address in the URL); see-only admins may read it.
+  .get('/contacts/detail', contactDetailQuery, ...readGuard, async c => {
+    const {key} = c.req.valid('query');
+    if (!key) return notFound(c, 'Contact');
+    const anchor = await c.var.db.rsvp.findFirst({where: {id: key, event: {deletedAt: null}}, select: {email: true}});
+    const email = anchor?.email;
     if (!email || email.startsWith('removed+')) return notFound(c, 'Contact');
     const [rsvps, unsubscribed] = await Promise.all([
       c.var.db.rsvp.findMany({

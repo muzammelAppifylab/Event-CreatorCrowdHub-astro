@@ -1,8 +1,8 @@
 import {Hono} from 'hono';
 
 import {Prisma} from '../../generated/prisma/client';
-import {requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
-import {PERMISSIONS} from '../permissions';
+import {requireAuth, withDb, withViewer} from '../../platform/guards';
+import {requireEventRead} from '../guards-ext';
 
 /**
  * Events dashboard numbers. Mount: `.route('/overview', adminOverviewRoutes)` -> `GET /overview`.
@@ -64,7 +64,7 @@ type RecentRow = {id: string; eventId: string; name: string; status: string; res
  * subquery in each statement (the same order and limit as the list), never a list of ids read
  * first and sent back.
  */
-export const adminOverviewRoutes = new Hono().get('/', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+export const adminOverviewRoutes = new Hono().get('/', withViewer, requireAuth, requireEventRead(), withDb, async c => {
   const db = c.var.db;
   const now = new Date();
   const win = periodWindows(now);

@@ -33,6 +33,7 @@ import {problem, withDb} from '../../platform/guards';
 import {sendClaimEmail} from '../claim-mail';
 import {sendConsentEmail} from '../consent-mail';
 import {canSendEventEmail, sendEventEmail} from '../mailer';
+import {guestMailAllowed, ipKey, limitRequest, RATE_LIMITS} from '../rate-attempts';
 import {confirmationRuleFor} from '../jobs/guest-emails';
 // Locks the event row for the transaction (`SELECT … FOR UPDATE`), so seat counts and writes are atomic per event.
 import {lockEvent} from '../jobs/shared';
@@ -64,10 +65,11 @@ import {emitPromoted, emitWebhook, rsvpPayload} from '../webhook-emit';
  * Emails go out after commit, in the background: a failed email never undoes a seat.
  *
  * Index: rsvps(event_id, status), unique (event_id, email), unique manage_token / ticket_code.
- * Rate limits are per Worker isolate (best effort): `AttemptKind` in the managed platform/auth/rate-limit.ts is
- * a closed union with no RSVP kind, so the DB-backed limiter can't be used without editing managed files.
- * Manage-link requests rotate the token (only a hash is stored, so the old link cannot be re-sent); capped at 3
- * per (event, email) per hour. See docs/porting/SECURITY-AUDIT.md "Follow-ups".
+ * Rate limits live in the site's own `rate_attempts` table (src/server/rate-attempts.ts; the managed limiter's
+ * kinds are a closed list): per network on RSVP submits, edits and "lost my link", per event on RSVP submits,
+ * and before EVERY guest email these public routes trigger (confirmation, consent, manage link) per
+ * (event, address) and per address across events. Keys are keyed hashes only, never a raw email or IP.
+ * Manage-link requests rotate the token (only a hash is stored, so the old link cannot be re-sent).
  */
 
 // ---------------------------------------------------------------- paid-ticket hook (payments agent)
@@ -126,23 +128,10 @@ export function manageTokenAllows(endAt: Date, access: 'read' | 'write', now: Da
   return now.getTime() < endAt.getTime() + (access === 'write' ? MANAGE_WRITE_DAYS : MANAGE_READ_DAYS) * DAY_MS;
 }
 
-/** Sliding-window limiter, per isolate. */
-const hits = new Map<string, number[]>();
-function hit(key: string, limit: number, windowMs: number, now = Date.now()): boolean {
-  const recent = (hits.get(key) ?? []).filter(t => t > now - windowMs);
-  if (recent.length >= limit) {
-    hits.set(key, recent);
-    return false;
-  }
-  recent.push(now);
-  hits.set(key, recent);
-  if (hits.size > 5000) for (const [k, v] of hits) if (v.every(t => t <= now - windowMs)) hits.delete(k);
-  return true;
+/** One email to a guest, only while the public-route caps allow it (`guestMailAllowed`); otherwise skipped quietly. */
+async function capped(db: PrismaClient, eventId: string, email: string, send: () => Promise<unknown>): Promise<void> {
+  if (await guestMailAllowed(db, eventId, email)) await send();
 }
-const clientIp = (c: Context) => c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-const RSVP_LIMIT = {limit: 10, windowMs: 60_000};
-/** Confirmation + manage-link emails per (event, email) per hour: no email bombing. */
-const EMAIL_CAP = {limit: 3, windowMs: 3_600_000};
 
 const originOf = (c: Context) => config.siteUrl ?? new URL(c.req.url).origin;
 
@@ -888,7 +877,7 @@ const sendPromotions = (db: PrismaClient, origin: string, event: EventRow, chang
 
 /** Emails a new link (older links die), capped per (event, email); see `sendWithFreshLink`. */
 async function mailManageLink(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow) {
-  if (!canSendEventEmail() || !hit(`mail:${event.id}:${rsvp.email}`, EMAIL_CAP.limit, EMAIL_CAP.windowMs)) return;
+  if (!canSendEventEmail() || !(await guestMailAllowed(db, event.id, rsvp.email))) return;
   await sendWithFreshLink(db, origin, event, rsvp, 'manage-link', manageLinkEmail);
 }
 
@@ -996,10 +985,9 @@ export const rsvpRoutes = new Hono()
   .post('/events/:slug', slugParam, objectBody, withDb, async c => {
     // Every answer from here carries the same headers, so a new and a repeat RSVP look alike (audit L-6).
     privateHeaders(c);
-    if (!hit(`rsvp:${clientIp(c)}`, RSVP_LIMIT.limit, RSVP_LIMIT.windowMs)) {
-      return c.json(problem('rate_limited', 'Too many RSVPs. Try again in a minute.'), 429);
-    }
     const db = c.var.db;
+    const busy = await limitRequest(c, db, [{limit: RATE_LIMITS.rsvpIp, key: ipKey(c)}], 'Too many RSVPs. Try again in a minute.');
+    if (busy) return busy;
     const raw = c.req.valid('json');
     const now = new Date();
     const event = await findEvent(db, {slug: c.req.valid('param').slug});
@@ -1013,6 +1001,9 @@ export const rsvpRoutes = new Hono()
     const parsed = validateRsvp(raw, rulesOf(event));
     if (!parsed.ok) return c.json({...problem('validation_failed', 'Some fields need attention.'), fields: parsed.fields}, 422);
     const utm = typeof raw.utmSource === 'string' ? raw.utmSource.slice(0, 80) : null;
+    // A flood of fake guests on one event stops here, whatever networks it comes from.
+    const flood = await limitRequest(c, db, [{limit: RATE_LIMITS.rsvpEvent, key: event.id}], 'This event is getting lots of RSVPs right now. Try again in a few minutes.');
+    if (flood) return flood;
 
     // An invite is for the person it was sent to (audit M-5): on a private event only that email may
     // RSVP with it, so a forwarded link can't let anyone else in (one invite, one guest: emails are
@@ -1053,10 +1044,10 @@ export const rsvpRoutes = new Hono()
       }
     }
 
-    hit(`mail:${event.id}:${rsvp.email}`, EMAIL_CAP.limit, EMAIL_CAP.windowMs);
     // No confirmation yet for a guest who still has to pay: the paid confirmation follows the payment.
-    if (rsvp.status !== 'awaiting_payment') background(c, sendConfirmation(db, origin, event, rsvp, token));
-    if (rsvp.marketingConsent) background(c, sendConsentEmail(db, rsvp.id, {origin}));
+    // Each guest email counts against the per-address caps first (skipped quietly when over).
+    if (rsvp.status !== 'awaiting_payment') background(c, capped(db, event.id, rsvp.email, () => sendConfirmation(db, origin, event, rsvp, token)));
+    if (rsvp.marketingConsent) background(c, capped(db, event.id, rsvp.email, () => sendConsentEmail(db, rsvp.id, {origin})));
     background(c, sendPromotions(db, origin, event, out.promoted));
     emitWebhook(c, db, 'rsvp.created', rsvpPayload(rsvp));
     emitPromoted(c, db, out.promoted);
@@ -1069,8 +1060,9 @@ export const rsvpRoutes = new Hono()
   // "Lost my link": always 202, so it can't tell anyone whether an email has RSVP'd.
   .post('/events/:slug/manage-link', slugParam, emailBody, withDb, async c => {
     privateHeaders(c);
-    if (!hit(`link:${clientIp(c)}`, 10, 60_000)) return c.json(problem('rate_limited', 'Too many requests. Try again in a minute.'), 429);
     const db = c.var.db;
+    const busy = await limitRequest(c, db, [{limit: RATE_LIMITS.linkIp, key: ipKey(c)}], 'Too many requests. Try again in a minute.');
+    if (busy) return busy;
     const event = await findEvent(db, {slug: c.req.valid('param').slug});
     const rsvp = event
       ? await db.rsvp.findUnique({where: {eventId_email: {eventId: event.id, email: c.req.valid('json').email}}, select: rsvpSelect})
@@ -1165,11 +1157,10 @@ export const rsvpRoutes = new Hono()
   })
 
   .patch('/manage/:token', tokenParam, objectBody, withDb, async c => {
-    if (!hit(`rsvp:${clientIp(c)}`, RSVP_LIMIT.limit, RSVP_LIMIT.windowMs)) {
-      return c.json(problem('rate_limited', 'Too many changes. Try again in a minute.'), 429);
-    }
     const db = c.var.db;
     privateHeaders(c);
+    const busy = await limitRequest(c, db, [{limit: RATE_LIMITS.rsvpIp, key: ipKey(c)}], 'Too many changes. Try again in a minute.');
+    if (busy) return busy;
     const found = await fromManageToken(db, c.req.valid('param').token, 'write');
     if (!found) return notFound(c, 'RSVP');
     if (found.unavailable) return eventUnavailable(c, found.unavailable.title);
@@ -1191,10 +1182,12 @@ export const rsvpRoutes = new Hono()
       emitWebhook(c, db, out.rsvp.status === 'cancelled' ? 'rsvp.cancelled' : 'rsvp.updated', rsvpPayload(out.rsvp));
       emitPromoted(c, db, out.promoted);
       // Newly ticked "send me updates": the inbox owner confirms it (double opt-in, as a new RSVP does).
-      if (out.rsvp.marketingConsent && !out.previous.marketingConsent) background(c, sendConsentEmail(db, out.rsvp.id, {origin: originOf(c)}));
+      if (out.rsvp.marketingConsent && !out.previous.marketingConsent) {
+        background(c, capped(db, found.event.id, out.rsvp.email, () => sendConsentEmail(db, out.rsvp.id, {origin: originOf(c)})));
+      }
       // Tell the guest when their status changed (a new seat, the waitlist, awaiting approval). Same link.
       if (out.rsvp.status !== out.previous.status && out.rsvp.status !== 'awaiting_payment') {
-        background(c, sendConfirmation(db, originOf(c), found.event, out.rsvp, c.req.valid('param').token));
+        background(c, capped(db, found.event.id, out.rsvp.email, () => sendConfirmation(db, originOf(c), found.event, out.rsvp, c.req.valid('param').token)));
       }
       return c.json({ok: true, status: out.rsvp.status, checkoutUrl});
     } catch (err) {

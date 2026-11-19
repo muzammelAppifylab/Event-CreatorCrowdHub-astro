@@ -41,8 +41,13 @@ beforeEach(() => {
       findMany: vi.fn(async () => [{id: P2}]),
       updateMany: vi.fn(async () => ({count: 1})),
       update: vi.fn(async () => ({id: P1, status: 'open'})),
+      // Poll create counts and inserts inside its transaction: the same mocks as the top-level client.
+      count: (...a: unknown[]) => state.db.poll.count(...a),
+      aggregate: (...a: unknown[]) => state.db.poll.aggregate(...a),
+      create: (...a: unknown[]) => state.db.poll.create(...a),
     },
     pollOption: {deleteMany: vi.fn(), createMany: vi.fn()},
+    $queryRaw: vi.fn(async () => []),
   };
   state.db = {
     event: {findFirst: vi.fn(async () => ({id: EV, title: 'T', startAt: new Date(), endAt: new Date()}))},

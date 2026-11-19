@@ -37,7 +37,7 @@ const T = (minute: number) => new Date(Date.UTC(2026, 9, 10, 9, minute));
 /** The erasure log's address hash: sha256 hex of the lower-case address (schema `GuestErasure`). */
 const sha = (email: string) => createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
 
-type Contact = {email: string; marketingConsent: boolean};
+type Contact = {email: string; key: string; marketingConsent: boolean};
 
 describe.skipIf(!DATABASE_URL)('host guest admin: erase, contacts consent, exports, notices (integration, real Postgres)', () => {
   let admin: Browser;
@@ -186,7 +186,11 @@ describe.skipIf(!DATABASE_URL)('host guest admin: erase, contacts consent, expor
       const items = (await admin.get(`${G}/contacts?q=${encodeURIComponent(email)}`)).json.items as Contact[];
       return items.find(i => i.email === email);
     };
-    const detail = async (email: string) => (await admin.get(`${G}/contacts/detail?email=${encodeURIComponent(email)}`)).json.contact as Contact;
+    // The detail is keyed by the list's `key` (an RSVP id), never by the address.
+    const detail = async (email: string) => {
+      const key = (await listed(email))?.key ?? '';
+      return (await admin.get(`${G}/contacts/detail?key=${encodeURIComponent(key)}`)).json.contact as Contact;
+    };
 
     it('opted in and confirmed on the latest RSVP, and nobody with that address unsubscribed', async () => {
       const e1 = await mkEvent({title: 'One'});

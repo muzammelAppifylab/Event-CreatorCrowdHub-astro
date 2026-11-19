@@ -36,6 +36,7 @@ const app = new Hono().route('/event-settings', eventSettingsRoutes);
 const post = (path: string, body: unknown) =>
   app.request(`/event-settings${path}`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
 const ID = `file_${'a'.repeat(26)}`;
+const OLD = `file_${'b'.repeat(26)}`;
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -65,11 +66,14 @@ describe('POST /event-settings/logo', () => {
     expect(res.status).toBe(422);
     expect(files.createUpload).not.toHaveBeenCalled();
   });
-  it('asks for a PUBLIC upload for a valid image', async () => {
+  it('asks for a PUBLIC upload for a valid image and keeps the issued id as the pending logo', async () => {
     files.createUpload.mockResolvedValue({ok: true, data: {file: {id: ID}, upload: {url: '/u'}}});
+    const upsert = vi.fn(async () => ({id: 1}));
+    state.db = {eventSettings: {upsert}};
     const res = await post('/logo', {name: 'a.png', contentType: 'image/png', size: 500});
     expect(res.status).toBe(201);
     expect(files.createUpload.mock.calls[0]![1]).toMatchObject({visibility: 'public', contentType: 'image/png'});
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({update: {pendingLogoFileId: ID}}));
   });
 });
 
@@ -78,13 +82,34 @@ describe('POST /event-settings/logo/complete', () => {
     expect((await post('/logo/complete', {fileId: '../x'})).status).toBe(422);
     expect(files.completeUpload).not.toHaveBeenCalled();
   });
-  it('removes a stored file that is not a public image and keeps the old logo', async () => {
-    files.completeUpload.mockResolvedValue({ok: true, data: {id: ID, name: 'a.pdf', contentType: 'application/pdf', size: 5, visibility: 'public'}});
-    const upsert = vi.fn();
-    state.db = {eventSettings: {upsert}};
+  it('never confirms, adopts or deletes a file id this route did not issue', async () => {
+    const updateMany = vi.fn();
+    state.db = {eventSettings: {findFirst: vi.fn(async () => null), updateMany}};
     const res = await post('/logo/complete', {fileId: ID});
     expect(res.status).toBe(422);
-    expect(files.deleteFile).toHaveBeenCalled();
-    expect(upsert).not.toHaveBeenCalled();
+    expect(files.completeUpload).not.toHaveBeenCalled();
+    expect(files.deleteFile).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+  it('removes the ISSUED file when it is not a public image and keeps the old logo', async () => {
+    files.completeUpload.mockResolvedValue({ok: true, data: {id: ID, name: 'a.pdf', contentType: 'application/pdf', size: 5, visibility: 'public'}});
+    const updateMany = vi.fn(async () => ({count: 1}));
+    state.db = {eventSettings: {findFirst: vi.fn(async () => ({logoFileId: OLD})), updateMany}};
+    const res = await post('/logo/complete', {fileId: ID});
+    expect(res.status).toBe(422);
+    expect(updateMany).toHaveBeenCalledWith({where: {id: 1, pendingLogoFileId: ID}, data: {pendingLogoFileId: null}});
+    expect(files.deleteFile).toHaveBeenCalledTimes(1);
+    expect(files.deleteFile.mock.calls[0]).toEqual([expect.anything(), ID]);
+  });
+  it('adopts the issued file and deletes only the previous logo stored in the row', async () => {
+    files.completeUpload.mockResolvedValue({ok: true, data: {id: ID, name: 'logo.png', contentType: 'image/png', size: 500, visibility: 'public'}});
+    const updateMany = vi.fn(async () => ({count: 1}));
+    const findUnique = vi.fn(async () => null);
+    state.db = {eventSettings: {findFirst: vi.fn(async () => ({logoFileId: OLD})), updateMany, findUnique}};
+    const res = await post('/logo/complete', {fileId: ID});
+    expect(res.status).toBe(200);
+    expect(updateMany).toHaveBeenCalledWith({where: {id: 1, pendingLogoFileId: ID}, data: {logoFileId: ID, logoName: 'logo.png', pendingLogoFileId: null}});
+    expect(files.deleteFile).toHaveBeenCalledTimes(1);
+    expect(files.deleteFile.mock.calls[0]).toEqual([expect.anything(), OLD]);
   });
 });

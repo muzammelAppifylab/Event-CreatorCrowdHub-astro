@@ -137,9 +137,9 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
     label: '',
     items: [
       {to: '/', label: 'Overview', icon: 'dashboard', exact: true},
-      {to: '/events', label: 'Events', icon: 'calendar', abilities: ['manageEvents']},
-      {to: '/checkin', label: 'Check-in', icon: 'check-circle', abilities: ['checkinGuests', 'manageEvents']},
-      {to: '/contacts', label: 'Contacts', icon: 'users', abilities: ['manageEvents']},
+      {to: '/events', label: 'Events', icon: 'calendar', abilities: ['viewEvents', 'manageEvents']},
+      {to: '/checkin', label: 'Check-in', icon: 'check-circle', abilities: ['checkinGuests', 'viewEvents', 'manageEvents']},
+      {to: '/contacts', label: 'Contacts', icon: 'users', abilities: ['viewEvents', 'manageEvents']},
     ],
   },
   // Settings, Account, Users, Roles, Activity and Integrations are ONE sidebar entry (below) with a
@@ -411,7 +411,7 @@ const overviewRoute = createRoute({
   // Door staff (check in guests, cannot manage events) land on the door screen, as in the original.
   beforeLoad: async ({context: {queryClient}}) => {
     const me = await queryClient.ensureQueryData(meQuery).catch(() => null);
-    if (me?.abilities?.checkinGuests && !me.abilities.manageEvents) throw redirect({to: '/checkin'});
+    if (me?.abilities?.checkinGuests && !me.abilities.manageEvents && !me.abilities.viewEvents) throw redirect({to: '/checkin'});
   },
   loader: async ({context: {queryClient}}) => {
     // The tiles the visitor may see, as the screen's `enabled` flags decide.
@@ -480,7 +480,7 @@ function EventHubRoute() {
 const eventsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Events'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureInfiniteQueryData(eventsListQuery('upcoming'))),
   component: lazyRouteComponent(() => import('./screens/events'), 'Events'),
@@ -488,6 +488,7 @@ const eventsRoute = createRoute({
 const eventNewRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events/new',
+  // Creating is a write: a read-only viewer never reaches this screen.
   beforeLoad: needs('manageEvents'),
   staticData: {title: 'New event'},
   component: lazyRouteComponent(() => import('./screens/event-editor'), 'EventEditor'),
@@ -495,14 +496,14 @@ const eventNewRoute = createRoute({
 const eventEditRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events/$id/edit',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Edit event'},
   component: lazyRouteComponent(() => import('./screens/event-editor'), 'EventEditor'),
 });
 const eventHubRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/events/$id',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Event'},
   // `warm` swallows a failed read (a 404 included): the hub shows its own "Event not found" state.
   loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(hubEventQuery(params.id))),
@@ -511,21 +512,22 @@ const eventHubRoute = createRoute({
 const contactsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/contacts',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Contacts'},
   component: lazyRouteComponent(() => import('./screens/contacts'), 'Contacts'),
 });
 const contactDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: '/contacts/$email',
-  beforeLoad: needs('manageEvents'),
+  // `$key`: the contact's newest RSVP id. Never the email address: it would sit in the URL (history, logs).
+  path: '/contacts/$key',
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Contact'},
   component: lazyRouteComponent(() => import('./screens/contact-detail'), 'ContactDetailPage'),
 });
 const eventSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/event-settings',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Event settings'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(eventSettingsQuery)),
   component: lazyRouteComponent(() => import('./screens/event-settings'), 'EventSettings'),
@@ -533,7 +535,7 @@ const eventSettingsRoute = createRoute({
 const checkinRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/checkin',
-  beforeLoad: needs('checkinGuests', 'manageEvents'),
+  beforeLoad: needs('checkinGuests', 'viewEvents', 'manageEvents'),
   staticData: {title: 'Check-in'},
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(doorEventsQuery)),
   component: lazyRouteComponent(() => import('./screens/checkin'), 'Checkin'),
@@ -541,7 +543,7 @@ const checkinRoute = createRoute({
 const checkinEventRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/checkin/$eventId',
-  beforeLoad: needs('checkinGuests', 'manageEvents'),
+  beforeLoad: needs('checkinGuests', 'viewEvents', 'manageEvents'),
   staticData: {title: 'Door list'},
   loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(doorListQuery(params.eventId, ''))),
   component: lazyRouteComponent(() => import('./screens/checkin-event'), 'CheckinEvent'),
@@ -549,14 +551,14 @@ const checkinEventRoute = createRoute({
 const checkinCodeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/checkin/code/$code',
-  beforeLoad: needs('checkinGuests', 'manageEvents'),
+  beforeLoad: needs('checkinGuests', 'viewEvents', 'manageEvents'),
   staticData: {title: 'Check in guest'},
   component: lazyRouteComponent(() => import('./screens/checkin-code'), 'CheckinCode'),
 });
 const pollPresenterRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/polls/$code/present',
-  beforeLoad: needs('manageEvents'),
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Poll presenter'},
   loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(presenterPollsQuery(params.code))),
   component: lazyRouteComponent(() => import('./screens/poll-presenter'), 'PollPresenter'),
@@ -572,6 +574,7 @@ const integrationsRoute = createRoute({
 const refundsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/refunds',
+  beforeLoad: needs('viewEvents', 'manageEvents'),
   staticData: {title: 'Refunds to finish'},
   component: lazyRouteComponent(() => import('./screens/refunds'), 'Refunds'),
 });

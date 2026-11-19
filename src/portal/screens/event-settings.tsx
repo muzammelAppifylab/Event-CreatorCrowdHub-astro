@@ -26,6 +26,7 @@ import type {PaidTicketRow, PaymentsStatusDto, PriceStatus} from '../../server/p
 import {BrandPreview, PosterPicker} from './branding-preview';
 import {DefaultRemindersEditor} from './default-reminders-editor';
 import {siteQuery} from '../queries';
+import {ReadOnly, useCanManageEvents} from '../shared';
 import {Badge, Button, Card, Checkbox, type Column, DataTable, ErrorNote, Field, IconButton, LoadingBlock, PageHeader, RadioCards, Select, Tabs, useConfirm, useToast} from '../ui';
 
 const FONT_INFO: Record<FontPreset, {title: string; description: string}> = {
@@ -114,6 +115,7 @@ function BrandingCard({settings}: {settings: EventSettingsDto}) {
   const [color, setColor] = useState(settings.brandColor ?? '');
   const [font, setFont] = useState<FontPreset>(settings.fontPreset);
   const [poster, setPoster] = useState(settings.defaultCoverPoster ?? '');
+  const canManage = useCanManageEvents();
   const site = useQuery(siteQuery).data?.site;
   const siteName = site?.name || 'Your site';
   const {save, pending, error} = useSave(setErrors);
@@ -135,15 +137,20 @@ function BrandingCard({settings}: {settings: EventSettingsDto}) {
         title="Branding"
         description="Colour, font and cover for public event pages and emails. The preview updates as you change them."
         actions={
-          <Button type="button" variant="ghost" size="sm" disabled={isDefault} onClick={reset}>
-            Reset to default
-          </Button>
+          canManage && (
+            <Button type="button" variant="ghost" size="sm" disabled={isDefault} onClick={reset}>
+              Reset to default
+            </Button>
+          )
         }
         footer={
-          <Button type="submit" pending={pending} pendingLabel="Saving…" disabled={!dirty}>
-            Save branding
-          </Button>
+          canManage && (
+            <Button type="submit" pending={pending} pendingLabel="Saving…" disabled={!dirty}>
+              Save branding
+            </Button>
+          )
         }>
+        <ReadOnly readOnly={!canManage}>
         <div className="form-stack">
           <Field id="s-brandColor" label="Brand colour" optional hint="A hex colour like #4f46e5. Blank keeps the default black and white." error={errors.brandColor}>
             <input id="s-brandColor" {...fieldAria('s-brandColor', errors.brandColor, true)} value={color} onChange={ev => setColor(ev.target.value)} maxLength={7} autoComplete="off" spellCheck={false} placeholder="#4f46e5" />
@@ -162,6 +169,7 @@ function BrandingCard({settings}: {settings: EventSettingsDto}) {
           </div>
           {error && <ErrorNote error={error} />}
         </div>
+        </ReadOnly>
       </Card>
       <BrandPreview color={color} font={font} poster={poster} siteName={siteName} />
     </form>
@@ -175,6 +183,7 @@ function DefaultsCard({settings}: {settings: EventSettingsDto}) {
   const [replyToEmail, setReplyToEmail] = useState(settings.replyToEmail);
   const [allowMaybe, setAllowMaybe] = useState(settings.allowMaybeDefault);
   const [showGuests, setShowGuests] = useState(settings.showGuestListDefault);
+  const canManage = useCanManageEvents();
   const {save, pending, error} = useSave(setErrors);
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
@@ -192,10 +201,13 @@ function DefaultsCard({settings}: {settings: EventSettingsDto}) {
         title="Defaults for new events"
         description="New events start with these; each event can change them."
         footer={
-          <Button type="submit" pending={pending} pendingLabel="Saving…">
-            Save defaults
-          </Button>
+          canManage && (
+            <Button type="submit" pending={pending} pendingLabel="Saving…">
+              Save defaults
+            </Button>
+          )
         }>
+        <ReadOnly readOnly={!canManage}>
         <div className="form-stack">
           <Field id="s-timezone" label="Timezone" error={errors.defaultTimezone}>
             <Select id="s-timezone" {...fieldAria('s-timezone', errors.defaultTimezone)} value={timezone} onChange={ev => setTimezone(ev.target.value)} options={timeZoneOptions(timezone)} />
@@ -212,6 +224,7 @@ function DefaultsCard({settings}: {settings: EventSettingsDto}) {
           <Checkbox label="Show the guest list" description="New events show who is coming to confirmed guests." checked={showGuests} onChange={setShowGuests} />
           {error && <ErrorNote error={error} />}
         </div>
+        </ReadOnly>
       </Card>
     </form>
   );
@@ -220,6 +233,7 @@ function DefaultsCard({settings}: {settings: EventSettingsDto}) {
 function EmailsCard({settings}: {settings: EventSettingsDto}) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [rules, setRules] = useState<ReminderRuleValues[]>(settings.defaultReminderRules);
+  const canManage = useCanManageEvents();
   const {save, pending, error} = useSave(setErrors);
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
@@ -231,14 +245,18 @@ function EmailsCard({settings}: {settings: EventSettingsDto}) {
         title="Default emails"
         description={`Copied to every new event, where they can be edited. Up to ${MAX_DEFAULT_REMINDER_RULES}. Existing events keep theirs.`}
         footer={
-          <Button type="submit" pending={pending} pendingLabel="Saving…">
-            Save emails
-          </Button>
+          canManage && (
+            <Button type="submit" pending={pending} pendingLabel="Saving…">
+              Save emails
+            </Button>
+          )
         }>
+        <ReadOnly readOnly={!canManage}>
         <div className="form-stack">
           <DefaultRemindersEditor value={rules} onChange={setRules} error={errors.defaultReminderRules} />
           {error && <ErrorNote error={error} />}
         </div>
+        </ReadOnly>
       </Card>
     </form>
   );
@@ -335,6 +353,7 @@ function LogoCard({settings}: {settings: EventSettingsDto}) {
   const confirm = useConfirm();
   const input = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const canManage = useCanManageEvents();
   const site = useQuery(siteQuery).data?.site;
   const logoUrl = settings.logoUrl ?? null;
   const refresh = () => queryClient.invalidateQueries({queryKey: ['event-settings']});
@@ -377,6 +396,7 @@ function LogoCard({settings}: {settings: EventSettingsDto}) {
           {shown ? <img className="bp-logo" src={shown} alt={logoUrl ? 'Your logo' : 'Site logo'} /> : null}
           <span className="muted">{logoUrl ? 'Your logo' : shown ? 'Using the site logo' : 'No logo yet'}</span>
         </div>
+        {canManage && (
         <div className="toolbar">
           <input
             ref={input}
@@ -396,12 +416,13 @@ function LogoCard({settings}: {settings: EventSettingsDto}) {
             {logoUrl ? 'Replace logo' : 'Upload logo'}
           </Button>
           {logoUrl && (
-            <Button type="button" variant="secondary" pending={remove.isPending} pendingLabel="Removing…" disabled={busy} onClick={() => void confirm({title: 'Remove your logo?', body: 'Event pages and emails go back to the site logo.', confirmLabel: 'Remove logo', pendingLabel: 'Removing…', action: () => remove.mutateAsync()})}>
+            <Button type="button" variant="danger" pending={remove.isPending} pendingLabel="Removing…" disabled={busy} onClick={() => void confirm({title: 'Remove your logo?', body: 'Event pages and emails go back to the site logo.', confirmLabel: 'Remove logo', pendingLabel: 'Removing…', tone: 'danger', action: () => remove.mutateAsync()})}>
               Remove logo
             </Button>
           )}
         </div>
-        <p className="muted">{LOGO_RULE}</p>
+        )}
+        {canManage && <p className="muted">{LOGO_RULE}</p>}
         {error && <p className="field-error" role="alert">{error}</p>}
       </div>
     </Card>

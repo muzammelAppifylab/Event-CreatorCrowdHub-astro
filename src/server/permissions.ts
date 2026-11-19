@@ -20,6 +20,20 @@ import {abilitiesOf, type AbilitiesOf, codenamesOf, CORE_PERMISSIONS, definePerm
  */
 export const CATALOGUE = definePermissions({
   ...CORE_PERMISSIONS,
+  /**
+   * See the events admin (events, guests, invites, messages, polls, analytics, refunds, settings)
+   * without changing anything. Every GET of the events admin takes this OR `EVENT_MANAGE`; every
+   * write needs `EVENT_MANAGE`. The store's read-only demo role holds only `…:read` codenames
+   * (docs/agent/store-apps.md), so this is what lets it open the events screens.
+   */
+  EVENT_READ: {
+    codename: 'site:event:read',
+    title: 'See events',
+    description: 'Open events, guests, invites, messages, polls, analytics and event settings without changing them.',
+    group: 'Events',
+    ability: 'viewEvents',
+    roles: ['admin'],
+  },
   /** Create, edit and publish events, guests, invites, messages, polls and settings. */
   EVENT_MANAGE: {
     codename: 'site:event:manage',

@@ -9,6 +9,7 @@ import {hubEventQuery} from '../overview-queries';
 import {type AdminEventDetail} from '../../lib/event-schemas';
 import {HubActions, PublishProblems} from './event-hub-actions';
 import {RefundsCard} from './refunds-card';
+import {useCanManageEvents} from '../shared';
 import {Badge, buttonClass, Card, DefinitionList, EmptyState, ErrorNote, Icon, type IconName, LoadingBlock, Notice, ProgressBar, Stat, Tabs, useToast} from '../ui';
 
 const STATUS_TONES = {draft: 'neutral', published: 'success', cancelled: 'danger'} as const;
@@ -47,6 +48,7 @@ function HubOverview({eventId, onTab}: HubOverviewProps) {
   const analytics = useQuery(eventAnalyticsQuery(eventId));
   const a = analytics.data;
   const toast = useToast();
+  const canManage = useCanManageEvents();
   // Going = confirmed "Yes" only, the number Analytics shows. counts.confirmed also holds confirmed "Maybe"
   // answers, which would read as "14 of 12 going".
   const going = a ? a.rsvps.going : null;
@@ -84,9 +86,9 @@ function HubOverview({eventId, onTab}: HubOverviewProps) {
         </div>
       </Card>
       <div className="hub-quick">
-        <QuickTile icon="user-plus" title="Invite guests" sub="Send personal invites" onClick={() => onTab('guests', 'invites')} />
-        <QuickTile icon="check-circle" title="Check in guests" sub="Open the door list" onClick={() => onTab('checkin')} />
-        <QuickTile icon="mail" title="Message guests" sub="Email an update" onClick={() => onTab('messages')} />
+        {canManage && <QuickTile icon="user-plus" title="Invite guests" sub="Send personal invites" onClick={() => onTab('guests', 'invites')} />}
+        <QuickTile icon="check-circle" title={canManage ? 'Check in guests' : 'Door list'} sub="Open the door list" onClick={() => onTab('checkin')} />
+        {canManage && <QuickTile icon="mail" title="Message guests" sub="Email an update" onClick={() => onTab('messages')} />}
         <QuickTile icon="copy" title="Copy event link" sub="Share the public page" onClick={copyLink} disabled={!e} />
       </div>
       <RefundsCard eventId={eventId} />
@@ -130,6 +132,7 @@ export function EventHub({eventId}: {eventId: string}) {
   const event = useQuery(hubEventQuery(eventId));
   const e = event.data;
   const [problem, setProblem] = useState<ApiError | null>(null);
+  const canManage = useCanManageEvents();
   const current = HUB_TABS.find(t => t.id === tab)!;
   const Tab = tab === 'overview' ? null : tabComponent(tab);
 
@@ -202,13 +205,13 @@ export function EventHub({eventId}: {eventId: string}) {
                 Event page
               </a>
             )}
-            {e && e.status !== 'cancelled' && (
+            {e && (canManage ? e.status !== 'cancelled' : true) && (
               <Link className={buttonClass({variant: 'secondary'})} to={`/events/${e.id}/edit` as never}>
-                <Icon name="pencil" size={18} />
-                Edit
+                <Icon name={canManage ? 'pencil' : 'file'} size={18} />
+                {canManage ? 'Edit' : 'View details'}
               </Link>
             )}
-            {e && (
+            {e && canManage && (
               <HubActions
                 event={{
                   id: e.id,

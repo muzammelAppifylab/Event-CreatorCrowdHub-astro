@@ -905,6 +905,8 @@ model EventSettings {
   /// The creator's logo: a PUBLIC platform file (files.md). Null = fall back to the site logo.
   logoFileId           String?    @map("logo_file_id") @db.VarChar(40)
   logoName             String?    @map("logo_name") @db.VarChar(200)
+  /// The logo upload `POST /event-settings/logo` issued last: the ONLY id its `/complete` step accepts (and may delete).
+  pendingLogoFileId    String?    @map("pending_logo_file_id") @db.VarChar(40)
   updatedAt            DateTime   @default(now()) @updatedAt @map("updated_at")
 
   @@map("event_settings")
@@ -947,6 +949,20 @@ model GuestErasure {
 
 /// Rate limit for the public privacy links (src/server/routes/privacy.ts, audit L-40): keyed HMACs of
 /// the client IP and the link token, never the raw values. Pruned daily by the retention job.
+/// Public-route abuse limits (RSVPs, guest emails, page views): one row per counted attempt, keyed by a
+/// keyed hash (`subjectHash`) of the IP, email or event, never the raw value. Bounded counts per
+/// (kind, key_hash) window; rows older than a day are swept (src/server/rate-attempts.ts).
+model RateAttempt {
+  id        BigInt   @id @default(autoincrement())
+  kind      String   @db.VarChar(24)
+  keyHash   String   @map("key_hash") @db.Char(64)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([kind, keyHash, createdAt], map: "rate_attempts_kind_key_created_idx")
+  @@index([createdAt], map: "rate_attempts_created_idx")
+  @@map("rate_attempts")
+}
+
 model PrivacyAttempt {
   id        BigInt   @id @default(autoincrement())
   ipHash    String   @map("ip_hash") @db.Char(64)

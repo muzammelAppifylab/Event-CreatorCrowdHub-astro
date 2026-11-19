@@ -16,7 +16,9 @@ import {
   publicBase,
 } from '../guest-mail';
 import {enqueueGuestEmails, kickGuestEmails} from '../jobs/outbox';
+import type {Db} from '../jobs/shared';
 import {PERMISSIONS} from '../permissions';
+import {requireEventRead} from '../guards-ext';
 import {isUuid, notFound, parsePageCursor} from '../validate';
 
 /**
@@ -55,6 +57,32 @@ export const REMINDER_KINDS: readonly ReminderKind[] = ['confirmation', 'reminde
 export const MESSAGE_LOG_PAGE_SIZE = 50;
 /** Most guests one broadcast reaches (the request enqueues them; the guest email outbox sends). */
 export const MAX_BROADCAST_RECIPIENTS = 500;
+/** Broadcast emails queued per rolling 24 hours, site-wide (every event): four full broadcasts. Protects the sender's reputation and the platform's mail quota. */
+export const DAILY_BROADCAST_LIMIT = 2000;
+/** The one advisory lock every broadcast send takes (a fixed key: the limit is site-wide). */
+export const BROADCAST_LIMIT_LOCK = 'broadcast-daily-limit';
+
+export class DailyBroadcastLimitError extends Error {
+  constructor() {
+    super('Daily broadcast limit reached.');
+    this.name = 'DailyBroadcastLimitError';
+  }
+}
+
+/**
+ * Makes room for `count` more broadcast emails under the daily limit, atomically (as
+ * `reserveDailyInvites`). Call it FIRST inside the transaction that enqueues them: the
+ * transaction-scoped advisory lock makes two sends count one after the other; the count (index
+ * guest_email_outbox_kind_created_idx) is its own statement after the lock, so under READ COMMITTED it
+ * sees every send that committed before. Throws `DailyBroadcastLimitError` (roll back, answer 409).
+ */
+export async function reserveDailyBroadcast(tx: Db, count: number, now: Date): Promise<void> {
+  if (count <= 0) return;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${BROADCAST_LIMIT_LOCK}, 0))`;
+  const since = new Date(now.getTime() - 24 * 3_600_000);
+  const queued = await tx.guestEmailOutbox.count({where: {kind: 'broadcast', createdAt: {gte: since}}});
+  if (queued + count > DAILY_BROADCAST_LIMIT) throw new DailyBroadcastLimitError();
+}
 
 /** Offset bounds per kind, in minutes (negative = before the start). */
 export const RULE_OFFSET_LIMITS: Record<ReminderKind, {min: number; max: number}> = {
@@ -335,7 +363,7 @@ const isNotFound = (err: unknown) => (err as {code?: string} | null)?.code === '
 const logQuery = validator('query', v => ({before: typeof v.before === 'string' ? v.before : ''}));
 
 export const adminMessageRoutes = new Hono()
-  .get('/events/:eventId/messages/rules', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/events/:eventId/messages/rules', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const eventId = c.req.param('eventId');
     if (!isUuid(eventId)) return notFound(c, 'Event');
     // Independent reads: one trip.
@@ -373,6 +401,7 @@ export const adminMessageRoutes = new Hono()
       return c.json(problem('too_many_rules', 'An event can have up to 50 automatic emails.'), 409);
     }
     const rule = await db.reminderRule.create({data: {...input, eventId: event.id}, select: ruleSelect});
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'reminder_rule_created', target: ['event', event.id], meta: {ruleId: rule.id, kind: rule.kind}});
     return c.json(rule, 201);
   })
 
@@ -390,6 +419,7 @@ export const adminMessageRoutes = new Hono()
     if ('fields' in checked) return c.json(invalid(checked.fields), 422);
     const {offsetMinutes, enabled, subject, body} = checked.rule;
     const rule = await db.reminderRule.update({where: {id: ruleId}, data: {offsetMinutes, enabled, subject, body}, select: ruleSelect});
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'reminder_rule_changed', target: ['event', eventId], meta: {ruleId, kind: rule.kind, keys: Object.keys(patch)}});
     return c.json(rule);
   })
 
@@ -404,6 +434,7 @@ export const adminMessageRoutes = new Hono()
         data: {enabled: c.req.valid('json').enabled},
         select: ruleSelect,
       });
+      await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'reminder_rule_toggled', target: ['event', eventId], meta: {ruleId, kind: rule.kind, enabled: rule.enabled}});
       return c.json(rule);
     } catch (err) {
       if (isNotFound(err)) return notFound(c, 'Rule');
@@ -416,7 +447,9 @@ export const adminMessageRoutes = new Hono()
     const eventId = c.req.param('eventId');
     if (!isUuid(ruleId) || !isUuid(eventId)) return notFound(c, 'Rule');
     const {count} = await c.var.db.reminderRule.deleteMany({where: {id: ruleId, eventId}});
-    return count ? c.json({ok: true}) : notFound(c, 'Rule');
+    if (!count) return notFound(c, 'Rule');
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'reminder_rule_deleted', target: ['event', eventId], meta: {ruleId}});
+    return c.json({ok: true});
   })
 
   .post('/events/:eventId/messages/preview', previewBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
@@ -452,7 +485,7 @@ export const adminMessageRoutes = new Hono()
     return c.json({subject: email.subject, html: email.html, text: email.text, recipient: {name: guest.name, sample: !found}, unknownTags});
   })
 
-  .get('/events/:eventId/messages/segments', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/events/:eventId/messages/segments', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const {db} = c.var;
     const eventId = c.req.param('eventId');
     if (!isUuid(eventId)) return notFound(c, 'Event');
@@ -465,7 +498,7 @@ export const adminMessageRoutes = new Hono()
     return c.json({counts, eventEnded: ended});
   })
 
-  .get('/events/:eventId/messages', logQuery, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/events/:eventId/messages', logQuery, withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const {db} = c.var;
     const eventId = c.req.param('eventId');
     if (!isUuid(eventId)) return notFound(c, 'Event');
@@ -547,6 +580,7 @@ export const adminMessageRoutes = new Hono()
     let message: MessageRow;
     try {
       message = await db.$transaction(async tx => {
+        await reserveDailyBroadcast(tx, recipients.length, now);
         const created = (await tx.message.create({
           data: {
             eventId: event.id,
@@ -570,6 +604,9 @@ export const adminMessageRoutes = new Hono()
         return created;
       });
     } catch (err) {
+      if (err instanceof DailyBroadcastLimitError) {
+        return c.json(problem('daily_broadcast_limit', `Guests can be sent up to ${DAILY_BROADCAST_LIMIT} messages a day across all events. Try again tomorrow, or pick a smaller segment.`), 409);
+      }
       // Two identical requests raced past the lookup: the unique index let one through.
       const winner = isUniqueViolation(err) ? await alreadySent() : null;
       if (winner) return c.json(winner, 200);

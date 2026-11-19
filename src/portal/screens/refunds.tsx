@@ -2,7 +2,7 @@ import {useInfiniteQuery, useMutation, useQueryClient} from '@tanstack/react-que
 
 import {formatMoney} from '../../lib/format';
 import {markRefunded, type RefundRow, refundsQuery} from '../refunds-queries';
-import {ago} from '../shared';
+import {ago, useCanManageEvents} from '../shared';
 import {Button, Card, type Column, DataTable, EmptyState, ErrorNote, LoadMore, Notice, PageHeader, useConfirm, useToast} from '../ui';
 
 /**
@@ -15,6 +15,7 @@ export function Refunds() {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
   const toast = useToast();
+  const canManage = useCanManageEvents();
   const list = useInfiniteQuery(refundsQuery);
   const rows = list.data?.pages.flatMap(p => p.items);
 
@@ -33,7 +34,7 @@ export function Refunds() {
       action: () => mark.mutateAsync(row.id),
     }).then(ok => ok && toast.success('Order marked as refunded.'));
 
-  const columns: Column<RefundRow>[] = [
+  const allColumns: Column<RefundRow>[] = [
     {key: 'guest', header: 'Guest', cell: r => <span className="cell-title">{r.guestName}</span>},
     {key: 'event', header: 'Event', hideOnMobile: true, cell: r => r.eventTitle},
     {key: 'amount', header: 'Amount', width: 'shrink', align: 'end', cell: r => formatMoney(r.amountCents, r.currency)},
@@ -49,6 +50,8 @@ export function Refunds() {
       ),
     },
   ];
+  // Read-only viewers see the list, never "Mark refunded" (the server refuses it with 403 anyway).
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'actions');
 
   return (
     <div className="app-page refunds-screen">

@@ -15,7 +15,7 @@ import {
   shareKitQuery,
   shareUrl,
 } from '../guests-queries';
-import {ago} from '../shared';
+import {ago, useCanManageEvents} from '../shared';
 import {
   Button,
   buttonClass,
@@ -109,6 +109,8 @@ export function InvitesTab({eventId}: {eventId: string}) {
   const confirm = useConfirm();
   const toast = useToast();
   const [inviting, setInviting] = useState(false);
+  // Read-only viewers (no `manageEvents`): the list and the share kit, no inviting, resending or deleting.
+  const canManage = useCanManageEvents();
   const [result, setResult] = useState<CreateInvitesResult | null>(null);
   const form = useForm({emails: ''}, PASTE_RULES);
   const pasted = countPasted(form.values.emails);
@@ -177,7 +179,7 @@ export function InvitesTab({eventId}: {eventId: string}) {
     }).then(ok => ok && toast.success('Invite deleted.'));
 
   const busyKey = (resendOne.isPending && resendOne.variables) || (remove.isPending && remove.variables) || null;
-  const columns: Column<InviteRow>[] = [
+  const allColumns: Column<InviteRow>[] = [
     {
       key: 'who',
       header: 'Invitee',
@@ -218,12 +220,14 @@ export function InvitesTab({eventId}: {eventId: string}) {
       ),
     },
   ];
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'actions');
 
   return (
     <div className="app-page screen-invites">
       <div className="toolbar">
         <p className="muted">Send each person a personal RSVP link.</p>
         <div className="toolbar-group">
+          {canManage && (
           <>
             <Button
               variant="secondary"
@@ -238,6 +242,7 @@ export function InvitesTab({eventId}: {eventId: string}) {
               Invite people
             </Button>
           </>
+          )}
         </div>
       </div>
 
@@ -253,7 +258,7 @@ export function InvitesTab({eventId}: {eventId: string}) {
           loading={invites.isPending}
           error={invites.error}
           empty={
-            <EmptyState icon="mail" title="No invites yet" action={<Button icon="user-plus" onClick={() => setInviting(true)}>Invite people</Button>}>
+            <EmptyState icon="mail" title="No invites yet" action={canManage ? <Button icon="user-plus" onClick={() => setInviting(true)}>Invite people</Button> : undefined}>
               Paste a list of emails and each person gets a personal link.
             </EmptyState>
           }

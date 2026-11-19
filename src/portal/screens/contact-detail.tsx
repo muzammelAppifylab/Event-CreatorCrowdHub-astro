@@ -33,18 +33,19 @@ function headline(r: Rsvp) {
   return 'RSVP’d to';
 }
 
-/** The route component: reads the email from the path. */
+/** The route component: reads the contact's key (one of their RSVP ids, never the email) from the path. */
 export function ContactDetailPage() {
-  const {email} = useParams({strict: false}) as {email?: string};
-  return <ContactDetail email={email ?? ''} />;
+  const {key} = useParams({strict: false}) as {key?: string};
+  return <ContactDetail contactKey={key ?? ''} />;
 }
 
-/** `/dashboard/contacts/$email`: one person across every event, as a profile beside a timeline. */
-export function ContactDetail({email}: {email: string}) {
-  const query = useQuery(contactDetailQuery(email));
+/** `/dashboard/contacts/$key`: one person across every event, as a profile beside a timeline. */
+export function ContactDetail({contactKey}: {contactKey: string}) {
+  const query = useQuery(contactDetailQuery(contactKey));
   const toast = useToast();
   const data = query.data;
   const c = data?.contact;
+  const email = c?.email ?? '';
 
   // Group the timeline by the month the RSVP was made.
   const groups: {label: string; items: Rsvp[]}[] = [];
@@ -64,13 +65,14 @@ export function ContactDetail({email}: {email: string}) {
         </Link>
         <div className="hub-title-row">
           <div className="contact-id">
-            <Avatar name={c?.name ?? email} size="lg" />
+            <Avatar name={c?.name ?? 'Contact'} size="lg" />
             <div>
-              <h2>{c?.name ?? email}</h2>
+              <h2>{c?.name ?? 'Contact'}</h2>
               <p className="muted">{email}</p>
               {c && <span className="badges">{c.marketingConsent ? <Badge tone="success" icon="check">Opted in to marketing</Badge> : <Badge>No marketing consent</Badge>}</span>}
             </div>
           </div>
+          {email && (
           <div className="hub-actions">
             <Button
               variant="secondary"
@@ -88,6 +90,7 @@ export function ContactDetail({email}: {email: string}) {
               Send an email
             </a>
           </div>
+          )}
         </div>
       </header>
 

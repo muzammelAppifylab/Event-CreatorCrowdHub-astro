@@ -13,6 +13,7 @@ import {eventMailSelect, inviteLink, type MailEvent, publicBase} from '../guest-
 import {enqueueGuestEmails, kickGuestEmails} from '../jobs/outbox';
 import type {Db} from '../jobs/shared';
 import {PERMISSIONS} from '../permissions';
+import {requireEventRead} from '../guards-ext';
 import {isUuid, notFound} from '../validate';
 
 /**
@@ -269,7 +270,7 @@ const createBody = validator('json', (value, c) => {
 });
 
 export const adminInviteRoutes = new Hono()
-  .get('/events/:eventId/invites', listQuery, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/events/:eventId/invites', listQuery, withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const event = await eventFor(c.var.db, c.req.param('eventId'));
     if (!event) return notFound(c, 'Event');
     const before = c.req.valid('query').before.toLowerCase();
@@ -339,7 +340,7 @@ export const adminInviteRoutes = new Hono()
     return c.json({queued: created.length, sent: created.length, skippedInvalid: parsed.invalid, skippedDuplicate}, 201);
   })
 
-  .get('/events/:eventId/invites/resend-preview', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/events/:eventId/invites/resend-preview', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const event = await eventFor(c.var.db, c.req.param('eventId'));
     if (!event) return notFound(c, 'Event');
     // Counted in the database by `resendableSql`, the same rule the resend picks its targets and total by
@@ -470,10 +471,12 @@ export const adminInviteRoutes = new Hono()
     const eventId = c.req.param('eventId');
     if (!isUuid(inviteId) || !isUuid(eventId)) return notFound(c, 'Invite');
     const {count} = await c.var.db.invite.deleteMany({where: {id: inviteId, eventId}});
-    return count ? c.json({ok: true}) : notFound(c, 'Invite');
+    if (!count) return notFound(c, 'Invite');
+    await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'invite_deleted', target: ['invite', inviteId], meta: {eventId}});
+    return c.json({ok: true});
   })
 
-  .get('/events/:eventId/share-kit', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .get('/events/:eventId/share-kit', withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const event = await eventFor(c.var.db, c.req.param('eventId'));
     if (!event) return notFound(c, 'Event');
     const base = publicBase(c.req.url);

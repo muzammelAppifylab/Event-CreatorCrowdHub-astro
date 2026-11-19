@@ -225,17 +225,29 @@ function FormsDemo({onSaved}: {onSaved: () => void}) {
   const [plan, setPlan] = useState<'starter' | 'pro'>('starter');
   const [agree, setAgree] = useState(true);
   const [weekly, setWeekly] = useState(false);
+  // A pretend save, so the demo shows the pending state every real Save button has.
+  const [saving, setSaving] = useState(false);
+  const save = () => {
+    if (saving) return;
+    setSaving(true);
+    void new Promise(resolve => setTimeout(resolve, 800)).then(() => {
+      setSaving(false);
+      onSaved();
+    });
+  };
   return (
-    <form className="kit-section" noValidate onSubmit={form.submit(() => onSaved())}>
+    <form className="kit-section" noValidate onSubmit={form.submit(save)}>
       <Card
         title="Fields"
         description="A visible label, the error under the field in words, shown on blur or submit."
         footer={
           <>
-            <Button variant="secondary" onClick={() => form.reset()}>
+            <Button variant="secondary" onClick={() => form.reset()} disabled={saving}>
               Reset
             </Button>
-            <Button type="submit">Save</Button>
+            <Button type="submit" pending={saving} pendingLabel="Saving…">
+              Save
+            </Button>
           </>
         }>
         <div className="form-grid">

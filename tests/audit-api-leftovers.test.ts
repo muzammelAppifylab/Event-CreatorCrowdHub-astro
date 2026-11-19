@@ -3,7 +3,7 @@ import {beforeEach, describe, expect, it, vi} from 'vitest';
 
 /** Audit follow-ups L-5 (door window), L-8 (pageview beacon), L-10 (unlisted cache), L-14 (webhook URL guard). */
 
-const state = vi.hoisted(() => ({db: {} as Record<string, any>, manage: true}));
+const state = vi.hoisted(() => ({db: {} as Record<string, any>, manage: true, read: false}));
 
 vi.mock('../src/platform/guards', async () => {
   const actual = await vi.importActual<typeof import('../src/platform/guards')>('../src/platform/guards');
@@ -13,7 +13,7 @@ vi.mock('../src/platform/guards', async () => {
     withViewer: async (c: any, next: () => Promise<void>) => { c.set('viewer', {state: 'user', id: 7}); await next(); },
     requireAuth: pass,
     requirePermission: () => pass,
-    can: vi.fn(async (_c: unknown, perm: string) => (String(perm).includes('manage') ? state.manage : true)),
+    can: vi.fn(async (_c: unknown, perm: string) => (String(perm).includes('manage') ? state.manage : String(perm).endsWith(':read') ? state.read : true)),
     withDb: async (c: any, next: () => Promise<void>) => { c.set('db', state.db); await next(); },
   };
 });
@@ -43,6 +43,7 @@ let rsvp: Record<string, any>;
 beforeEach(() => {
   vi.clearAllMocks();
   state.manage = false;
+  state.read = false;
   rsvp = {id: 'r1', eventId: EV, name: 'G', ticketCode: 'ABCD2345', seats: 1, status: 'confirmed', response: 'going', checkedInAt: null, event: event(longAgo())};
   state.db = {
     event: {findFirst: vi.fn(async () => null), findMany: vi.fn(async () => [])},
@@ -81,6 +82,13 @@ describe('L-5: door ticket codes only inside the door window', () => {
     state.manage = true;
     expect((await call('/checkin/codes/ABCD2345')).status).toBe(200);
     expect((await call('/checkin/codes/ABCD2345', 'POST', {checkedIn: false})).status).toBe(200);
+  });
+
+  it('a see-only admin may LOOK UP a past code but never check it in', async () => {
+    state.read = true;
+    expect((await call('/checkin/codes/ABCD2345')).status).toBe(200);
+    expect((await call('/checkin/codes/ABCD2345', 'POST', {checkedIn: true})).status).toBe(404);
+    expect(state.db.rsvp.updateMany).not.toHaveBeenCalled();
   });
 
   it('the door list asks for the window for staff, not for managers', async () => {
