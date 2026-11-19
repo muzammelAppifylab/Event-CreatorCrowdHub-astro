@@ -1,4 +1,5 @@
 import {useInfiniteQuery, useMutation, useQueryClient} from '@tanstack/react-query';
+import {Link} from '@tanstack/react-router';
 import {useRef, useState} from 'react';
 
 import {formatInZone} from '../../domain/time';
@@ -12,6 +13,7 @@ import {
 } from '../../lib/event-schemas';
 import {api, ApiError, read} from '../api';
 import {eventsListQuery, fieldAria, focusFirstInvalid, useEventsNav} from '../events-queries';
+import {useCanManageEvents} from '../shared';
 import {canCancel, canDelete, canUnpublish, guarded} from './event-hub-actions';
 import {
   Badge,
@@ -25,6 +27,7 @@ import {
   IconButton,
   LoadMore,
   Menu,
+  type MenuItem,
   Modal,
   PageHeader,
   SearchInput,
@@ -58,6 +61,7 @@ export function Events() {
   const confirm = useConfirm();
   const toast = useToast();
   const go = useEventsNav();
+  const canManage = useCanManageEvents();
   const [tab, setTab] = useState<EventListTab>('upcoming');
   const [copying, setCopying] = useState<AdminEventSummary | null>(null);
   const events = useInfiniteQuery(eventsListQuery(tab));
@@ -139,15 +143,9 @@ export function Events() {
           </div>
           <div>
           <span className="cell-title">
-            <a
-              href={`/dashboard/events/${e.id}`}
-              onClick={ev => {
-                if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
-                ev.preventDefault();
-                go(`/events/${e.id}`);
-              }}>
+            <Link to="/events/$id" params={{id: e.id}}>
               {e.title}
-            </a>
+            </Link>
           </span>
           <span className="cell-sub">
             {FORMAT_LABELS[e.format]} · /e/{e.slug}
@@ -196,22 +194,29 @@ export function Events() {
             items={[
               {label: 'Open event hub', icon: 'dashboard', onSelect: () => go(`/events/${e.id}`)},
               {label: 'Guests', icon: 'users', onSelect: () => go(`/events/${e.id}?tab=guests`)},
-              {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}/edit`)},
-              e.status === 'draft'
-                ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
-                : e.status === 'published'
-                  ? {label: 'Unpublish', icon: 'ban', disabled: !canUnpublish(e), onSelect: () => unpublish.mutate(e)}
-                  : {label: 'Cancelled', icon: 'ban', disabled: true, onSelect: () => undefined},
-              {label: 'Duplicate', icon: 'copy', onSelect: () => setCopying(e)},
               {label: 'View public page', icon: 'external', disabled: e.status !== 'published', onSelect: () => void window.open(`/e/${encodeURIComponent(e.slug)}`, '_blank', 'noopener')},
-              'separator',
-              ...(canCancel(e) ? [{label: 'Cancel event', icon: 'x' as const, danger: true, onSelect: () => void askCancel(e)}] : []),
-              ...(canDelete(e) ? [{label: 'Delete draft', icon: 'trash' as const, danger: true, onSelect: () => askDelete(e)}] : []),
+              // Read-only viewers (no `manageEvents`) get only the items above.
+              ...(canManage ? writeItems(e) : []),
             ]}
           />
         ),
     },
   ];
+  function writeItems(e: AdminEventSummary): MenuItem[] {
+    return [
+      'separator',
+      {label: 'Edit', icon: 'pencil', onSelect: () => go(`/events/${e.id}/edit`)},
+      e.status === 'draft'
+        ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
+        : e.status === 'published'
+          ? {label: 'Unpublish', icon: 'ban', disabled: !canUnpublish(e), onSelect: () => unpublish.mutate(e)}
+          : {label: 'Cancelled', icon: 'ban', disabled: true, onSelect: () => undefined},
+      {label: 'Duplicate', icon: 'copy', onSelect: () => setCopying(e)},
+      ...(canCancel(e) || canDelete(e) ? ['separator' as const] : []),
+      ...(canCancel(e) ? [{label: 'Cancel event', icon: 'x' as const, danger: true, onSelect: () => void askCancel(e)}] : []),
+      ...(canDelete(e) ? [{label: 'Delete draft', icon: 'trash' as const, danger: true, onSelect: () => askDelete(e)}] : []),
+    ];
+  }
 
   return (
     <div className="app-page screen-events">
@@ -219,9 +224,11 @@ export function Events() {
         title="Events"
         description="Everything you're running, have run, or are still drafting."
         actions={
-          <Button icon="plus" onClick={() => go('/events/new')}>
-            Create event
-          </Button>
+          canManage && (
+            <Button icon="plus" onClick={() => go('/events/new')}>
+              Create event
+            </Button>
+          )
         }
       />
 
@@ -258,11 +265,11 @@ export function Events() {
                     <Button variant="secondary" onClick={() => setTab('upcoming')}>
                       {EMPTY_ACTION[tab]}
                     </Button>
-                  ) : (
+                  ) : canManage ? (
                     <Button icon="plus" onClick={() => go('/events/new')}>
                       {EMPTY_ACTION[tab]}
                     </Button>
-                  )
+                  ) : undefined
                 }>
                 {EMPTY_TEXT[tab]}
               </EmptyState>

@@ -12,7 +12,7 @@ import {
   viewsDayRange,
   zeroFillDays,
 } from '../src/server/routes/admin-analytics';
-import {BEACON_LIMIT, createLimiter, utcDay, visitorHash} from '../src/server/routes/pageviews';
+import {BEACON_LIMIT, utcDay, visitorHash} from '../src/server/routes/pageviews';
 
 const base = {salt: 'a'.repeat(64), ip: '203.0.113.7', userAgent: 'UA/1', eventId: 'e1'};
 
@@ -35,15 +35,12 @@ describe('visitorHash', () => {
   it('utcDay is the UTC date', () => expect(utcDay(new Date('2026-10-30T23:59:59-05:00'))).toBe('2026-10-31'));
 });
 
-describe('beacon limiter', () => {
-  it('allows the limit per window, then refuses, then resets', () => {
-    let t = 0;
-    const hit = createLimiter(3, 1000, () => t);
-    expect([hit('a'), hit('a'), hit('a'), hit('a')]).toEqual([true, true, true, false]);
-    expect(hit('b')).toBe(true);
-    t = 1000;
-    expect(hit('a')).toBe(true);
+describe('beacon limits', () => {
+  // Counted in the database (src/server/rate-attempts.ts; tests/rate-attempts.test.ts).
+  it('caps per network and per event, per minute', () => {
     expect(BEACON_LIMIT.perIp).toBeGreaterThan(0);
+    expect(BEACON_LIMIT.perEvent).toBeGreaterThan(BEACON_LIMIT.perIp);
+    expect(BEACON_LIMIT.windowMs).toBe(60_000);
   });
 });
 

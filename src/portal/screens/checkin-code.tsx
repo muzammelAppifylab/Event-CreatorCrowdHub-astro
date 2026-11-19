@@ -2,6 +2,7 @@ import {useMutation, useQuery} from '@tanstack/react-query';
 import {Link, useParams} from '@tanstack/react-router';
 
 import {ApiError, call, type DoorGuest, type DoorEvent, type DoorToggle, doorTime, eventWhen, partyName} from '../checkin-queries';
+import {useCanCheckIn} from '../shared';
 import {Badge, Button, buttonClass, Card, EmptyState, ErrorNote, Notice, PageHeader, useToast} from '../ui';
 
 type ByCode = {event: DoorEvent; guest: DoorGuest};
@@ -19,6 +20,8 @@ export function CheckinCode() {
   const params = useParams({strict: false}) as {code?: string};
   const code = (params.code ?? '').trim().toUpperCase();
   const toast = useToast();
+  // A read-only viewer (`viewEvents` only) sees the guest, never Check in or Undo.
+  const canCheckIn = useCanCheckIn();
   const lookup = useQuery({
     queryKey: ['checkin', 'code', code],
     queryFn: () => call<ByCode>(`/checkin/codes/${encodeURIComponent(code)}`),
@@ -81,7 +84,7 @@ export function CheckinCode() {
             This guest is {STATUS_WORDS[guest.status] ?? guest.status.replace(/_/g, ' ')}, so they can't be checked in. Check the door list or ask
             the host.
           </Notice>
-        ) : (
+        ) : !canCheckIn ? null : (
           <Button
             size="lg"
             variant={checkedIn ? 'secondary' : 'primary'}

@@ -3,6 +3,7 @@ import {Link, useParams} from '@tanstack/react-router';
 import {type FormEvent, useEffect, useRef, useState} from 'react';
 
 import {downloadExport, guestsExportUrl, NO_GUEST_FILTER} from '../guests-queries';
+import {useCanCheckIn, useCanManageEvents} from '../shared';
 import {
   ApiError,
   attendeesQuery,
@@ -63,6 +64,9 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
   const [lastScan, setLastScan] = useState<DoorGuest | null>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const [exporting, setExporting] = useState(false);
+  // A read-only viewer (`viewEvents` only) sees the door list and counts, never Check in, Undo or Export.
+  const canCheckIn = useCanCheckIn();
+  const canManage = useCanManageEvents();
 
   // Door search runs 200 ms after typing stops (US-27); Enter or Search applies it at once.
   useEffect(() => {
@@ -129,7 +133,7 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
   const counts: DoorCounts | undefined = data?.counts;
   const busyCode = toggle.isPending ? toggle.variables.ticketCode : null;
 
-  const columns: Column<DoorGuest>[] = [
+  const allColumns: Column<DoorGuest>[] = [
     {
       key: 'name',
       header: 'Guest',
@@ -176,6 +180,7 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
       },
     },
   ];
+  const columns = canCheckIn ? allColumns : allColumns.filter(c => c.key !== 'actions');
 
   if (list.error instanceof ApiError && list.error.status === 404) {
     return (
@@ -201,7 +206,7 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
         description={event ? eventWhen(event.startAt, event.timezone) : undefined}
         actions={
           <>
-            {data?.canManage && (
+            {data?.canManage && canManage && (
               <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
                 Export CSV
               </Button>
@@ -220,6 +225,7 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
         hint={counts ? `${counts.checkedInGuests} of ${counts.expectedGuests} parties` : undefined}
       />
 
+      {canCheckIn && (
       <Card title="Ticket code" description="Type or scan a ticket code, then press Check in.">
         <form className="toolbar" noValidate onSubmit={submitCode}>
           <Field label="Ticket code" id="door-code" error={codeError}>
@@ -254,11 +260,13 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
           </Notice>
         )}
       </Card>
+      )}
 
       <Card flush title="Guests" description="Search by name or ticket code.">
         <form
           className="toolbar"
           role="search"
+          noValidate
           onSubmit={e => {
             e.preventDefault();
             setQ(draft.trim());
@@ -296,7 +304,7 @@ export function CheckinEvent({eventId: eventIdProp}: {eventId?: string} = {}) {
         {data && data.guests.length >= 200 && <p className="muted">Showing the first 200 guests. Search to narrow the list.</p>}
       </Card>
 
-      {data?.canManage && event && event.format !== 'in_person' && <OnlineAttendance eventId={event.id} />}
+      {data?.canManage && canManage && event && event.format !== 'in_person' && <OnlineAttendance eventId={event.id} />}
     </div>
   );
 }

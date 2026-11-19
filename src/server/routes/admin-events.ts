@@ -35,10 +35,11 @@ import {
 } from '../../lib/event-schemas';
 import {keysetAfter} from '../../lib/text';
 import {audit} from '../../platform/auth';
-import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {problem, requireAuth, withDb, withViewer} from '../../platform/guards';
 import type {Viewer} from '../../platform/types';
 import {STARTER_REMINDER_RULES} from '../../domain/reminders';
 import {PERMISSIONS} from '../permissions';
+import {EVENT_READERS, requireReadOrWrite} from '../guards-ext';
 import {nextSortOrder, validateOrder} from '../sort-order';
 import {enqueueEventCancelledEmails, kickGuestEmails} from '../jobs/outbox';
 import {notifyPromoted} from '../jobs/holds';
@@ -207,7 +208,7 @@ function toDetail(e: EventRow, questions: QuestionRow[], guests: GuestState): Ad
     pollJoinCode: e.pollJoinCode,
     thankYouLink: e.thankYouLink,
     questions: questions.map(toQuestion),
-    publicPath: `/e/${e.slug}`,
+    publicPath: `/events/${encodeURIComponent(e.slug)}/`,
     createdAt: e.createdAt.toISOString(),
     updatedAt: e.updatedAt.toISOString(),
   };
@@ -465,7 +466,8 @@ const hasGuests = (doing: 'unpublished' | 'deleted') =>
 // ------------------------------------------------------------------ routes --
 
 export const adminEventRoutes = new Hono<Env>()
-  .use('*', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb)
+  // GETs: see-only admins too (`site:event:read`); every write needs `site:event:manage`.
+  .use('*', withViewer, requireAuth, requireReadOrWrite(EVENT_READERS, [PERMISSIONS.EVENT_MANAGE]), withDb)
 
   .get('/', listQuery, async c => {
     const {tab, before} = c.req.valid('query');
@@ -674,18 +676,23 @@ export const adminEventRoutes = new Hono<Env>()
     const id = c.req.param('id');
     const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, status: true}}) : null;
     if (!row) return notFound(c);
-    if (row.status === 'cancelled') return c.json(problem('conflict', 'This event is already cancelled.'), 409);
-    await db.event.updateMany({where: {id, status: {not: 'cancelled'}}, data: {status: 'cancelled'}});
+    const already = problem('conflict', 'This event is already cancelled.');
+    if (row.status === 'cancelled') return c.json(already, 409);
+    // ONE transaction: the flip, paid tickets to `refund_due` (so the owner sees what to refund) and one
+    // keyed outbox row per guest expecting the event. Either all of it commits or none: a failure
+    // leaves the event as it was and the owner simply cancels again, nothing is half done.
+    // The flip is conditional: of two cancels at once, exactly one gets count 1 and does the rest.
+    const outcome = await db.$transaction(async tx => {
+      const flipped = await tx.event.updateMany({where: {id, deletedAt: null, status: {not: 'cancelled'}}, data: {status: 'cancelled'}});
+      if (flipped.count === 0) return null;
+      const refundDue = await markEventOrdersRefundDue(tx, id);
+      await enqueueEventCancelledEmails(tx, id);
+      return {refundDue};
+    });
+    if (!outcome) return c.json(already, 409);
     await clearPublicEvents();
-    // Paid tickets become `refund_due` so the owner sees what to refund; the cancel itself already committed.
-    let refundDue = 0;
-    try {
-      refundDue = await markEventOrdersRefundDue(db, id);
-    } catch (err) {
-      console.error(`event cancel: refund_due marking failed: ${(err as Error).message}`.slice(0, 200));
-    }
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'event_cancelled', target: ['event', id], meta: {refundDue}});
-    await queueCancelEmails(db, id);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'event_cancelled', target: ['event', id], meta: {refundDue: outcome.refundDue}});
+    await kickGuestEmails();
     for (const hook of eventCancelHooks) await hook(db, id);
     return c.json({event: await loadDetail(db, id)});
   })
@@ -833,6 +840,7 @@ export const adminEventRoutes = new Hono<Env>()
       },
       select: ticketSelect,
     });
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'ticket_type_created', target: ['event', id], meta: {ticketTypeId: created.id}});
     return c.json({ticketType: toTicket(created, 0, new Date())}, 201);
   })
 
@@ -884,6 +892,7 @@ export const adminEventRoutes = new Hono<Env>()
       },
       select: ticketSelect,
     });
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'ticket_type_changed', target: ['event', id], meta: {ticketTypeId: ticketId, keys: Object.keys(patch)}});
     const held = await seatsHeld(db, id);
     return c.json({ticketType: toTicket(updated, held.get(ticketId) ?? 0, new Date())});
   })
@@ -909,23 +918,9 @@ export const adminEventRoutes = new Hono<Env>()
     if (outcome === 'chosen') {
       return c.json(problem('conflict', 'Guests already chose this ticket. Set its sales end to a past date to stop selling it.'), 409);
     }
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'ticket_type_deleted', target: ['event', id], meta: {ticketTypeId: ticketId}});
     return c.json({ok: true});
   });
-
-/**
- * US-11: one email per guest still expecting the event, as guest email outbox rows inserted in ONE
- * statement (keyed, so a repeat is a no-op), then one drain kick. The outbox sends them in batches
- * (audit H-3: never one platform job per guest). Never throws.
- */
-async function queueCancelEmails(db: PrismaClient, eventId: string): Promise<void> {
-  try {
-    await enqueueEventCancelledEmails(db, eventId);
-  } catch (err) {
-    console.error(`event cancel: queueing guest emails failed: ${(err as Error).message}`.slice(0, 200));
-    return;
-  }
-  await kickGuestEmails();
-}
 
 /** Seats held per ticket type: confirmed and awaiting-payment "going" RSVPs. */
 async function seatsHeld(db: PrismaClient, eventId: string): Promise<Map<string, number>> {

@@ -19,7 +19,7 @@ import {
   sendJson,
   summarizeBulk,
 } from '../guests-queries';
-import {ago, when} from '../shared';
+import {ago, useCanManageEvents, when} from '../shared';
 import {
   Badge,
   Button,
@@ -35,6 +35,7 @@ import {
   LoadingBlock,
   LoadMore,
   Menu,
+  type MenuItem,
   Notice,
   PageHeader,
   rules,
@@ -124,6 +125,8 @@ export function GuestsTab({eventId}: {eventId: string}) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Read-only viewers (no `manageEvents`): the list and each guest's details, no selection, actions or export.
+  const canManage = useCanManageEvents();
 
   const guests = useInfiniteQuery(guestsQuery(eventId, filter));
   const rows = guests.data?.pages.flatMap(page => page.items);
@@ -186,7 +189,7 @@ export function GuestsTab({eventId}: {eventId: string}) {
   };
 
   const allOnPage = Boolean(rows?.length) && rows!.every(g => selected.has(g.id));
-  const columns: Column<GuestRow>[] = [
+  const allColumns: Column<GuestRow>[] = [
     {
       key: 'select',
       header: (
@@ -260,21 +263,28 @@ export function GuestsTab({eventId}: {eventId: string}) {
           disabled={bulk.isPending}
           items={[
             {label: 'View details', icon: 'file', onSelect: () => setOpen(g.id)},
-            ...(g.status === 'pending'
-              ? [
-                  {label: 'Approve', icon: 'check' as const, onSelect: () => ask('approve', [g.id])},
-                  {label: 'Decline', icon: 'ban' as const, onSelect: () => ask('decline', [g.id])},
-                ]
-              : []),
-            ...(g.status === 'waitlisted' ? [{label: 'Promote', icon: 'trending-up' as const, onSelect: () => ask('promote', [g.id])}] : []),
-            'separator' as const,
-            {label: 'Remove', icon: 'trash', danger: true, onSelect: () => ask('remove', [g.id])},
-            {label: 'Erase personal data', icon: 'lock', danger: true, onSelect: () => ask('erase', [g.id])},
+            // Read-only viewers (no `manageEvents`) get only "View details".
+            ...(canManage ? guestWriteItems(g) : []),
           ]}
         />
       ),
     },
   ];
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'select');
+  function guestWriteItems(g: GuestRow): MenuItem[] {
+    return [
+      ...(g.status === 'pending'
+        ? [
+            {label: 'Approve', icon: 'check' as const, onSelect: () => ask('approve', [g.id])},
+            {label: 'Decline', icon: 'ban' as const, onSelect: () => ask('decline', [g.id])},
+          ]
+        : []),
+      ...(g.status === 'waitlisted' ? [{label: 'Promote', icon: 'trending-up' as const, onSelect: () => ask('promote', [g.id])}] : []),
+      'separator',
+      {label: 'Remove', icon: 'trash', danger: true, onSelect: () => ask('remove', [g.id])},
+      {label: 'Erase personal data', icon: 'lock', danger: true, onSelect: () => ask('erase', [g.id])},
+    ];
+  }
 
   const ids = [...selected];
   const counts = first?.statusCounts ?? {};
@@ -325,12 +335,15 @@ export function GuestsTab({eventId}: {eventId: string}) {
               Clear filters
             </Button>
           )}
-          <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
-            Export CSV
-          </Button>
+          {canManage && (
+            <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
+              Export CSV
+            </Button>
+          )}
         </div>
       </div>
 
+      {canManage && (
       <BulkBar count={selected.size} noun={selected.size === 1 ? 'guest selected' : 'guests selected'} onClear={() => setSelected(new Set())}>
         <BarAction icon="check" label="Approve" disabled={bulk.isPending} onClick={() => ask('approve', ids)} />
         <BarAction icon="x" label="Decline" disabled={bulk.isPending} onClick={() => ask('decline', ids)} />
@@ -338,6 +351,7 @@ export function GuestsTab({eventId}: {eventId: string}) {
         <BarAction icon="trash" label="Remove" danger disabled={bulk.isPending} onClick={() => ask('remove', ids)} />
         <BarAction icon="lock" label="Erase data" danger disabled={bulk.isPending} onClick={() => ask('erase', ids)} />
       </BulkBar>
+      )}
 
       <Card flush>
         <DataTable
@@ -391,6 +405,7 @@ function GuestDrawer({
 }) {
   const queryClient = useQueryClient();
   const toast = useToast();
+  const canManage = useCanManageEvents();
   const detail = useQuery({...guestQuery(eventId, rsvpId ?? ''), enabled: Boolean(rsvpId)});
   const guest = detail.data;
   const form = useForm({name: '', email: '', plusOnes: '0', marketingConsent: false as boolean}, GUEST_RULES);
@@ -438,7 +453,7 @@ function GuestDrawer({
       description={guest ? `${STATUS_LABELS[guest.status]} · ticket ${guest.ticketCode}` : undefined}
       dismissible={!save.isPending}
       onSubmit={form.submit(values =>
-        save.mutate({
+        canManage && save.mutate({
           name: values.name,
           email: values.email,
           plusOnes: Number(values.plusOnes),
@@ -450,9 +465,11 @@ function GuestDrawer({
           <Button variant="secondary" onClick={close} disabled={save.isPending}>
             Close
           </Button>
-          <Button type="submit" pending={save.isPending && save.variables?.checkedIn === undefined} pendingLabel="Saving…" disabled={!guest || save.isPending}>
-            Save changes
-          </Button>
+          {canManage && (
+            <Button type="submit" pending={save.isPending && save.variables?.checkedIn === undefined} pendingLabel="Saving…" disabled={!guest || save.isPending}>
+              Save changes
+            </Button>
+          )}
         </>
       }>
       {detail.isPending && rsvpId && <LoadingBlock />}
@@ -461,19 +478,19 @@ function GuestDrawer({
         <>
           {save.error && !(save.error instanceof ApiError && Object.keys(save.error.fields).length) && <ErrorNote error={save.error} />}
           <Field label="Name" id="f-name" error={form.error('name')}>
-            <input type="text" autoComplete="off" maxLength={120} {...form.field('name')} />
+            <input type="text" autoComplete="off" maxLength={120} {...form.field('name')} disabled={!canManage} />
           </Field>
           <Field label="Email" id="f-email" error={form.error('email')}>
-            <input type="email" autoComplete="off" maxLength={254} {...form.field('email')} />
+            <input type="email" autoComplete="off" maxLength={254} {...form.field('email')} disabled={!canManage} />
           </Field>
           <Field label="Plus-ones" id="f-plusOnes" error={form.error('plusOnes')} hint="Changes the seats this guest holds.">
-            <input type="number" inputMode="numeric" min={0} max={10} {...form.field('plusOnes')} />
+            <input type="number" inputMode="numeric" min={0} max={10} {...form.field('plusOnes')} disabled={!canManage} />
           </Field>
           <Checkbox
             label="Marketing consent"
             description="Turning it on needs the guest’s own confirmation; you can switch it off here."
             checked={form.values.marketingConsent}
-            disabled={!guest.marketingConsent}
+            disabled={!canManage || !guest.marketingConsent}
             onChange={on => form.set('marketingConsent', on)}
           />
 
@@ -511,7 +528,7 @@ function GuestDrawer({
                   <Select
                     aria-label="Attended online"
                     value={guest.attended === null ? '' : guest.attended ? 'yes' : 'no'}
-                    disabled={save.isPending}
+                    disabled={!canManage || save.isPending}
                     onChange={ev => save.mutate({attended: ev.target.value === '' ? null : ev.target.value === 'yes'})}
                     options={[
                       {value: '', label: 'Not recorded'},
@@ -537,6 +554,7 @@ function GuestDrawer({
           <h3>Timeline</h3>
           <DefinitionList items={guest.timeline.map(t => ({label: TIMELINE_LABELS[t.kind] ?? t.kind, value: when(t.at)}))} />
 
+          {canManage && (
           <div className="toolbar-group">
             {guest.status === 'pending' && (
               <>
@@ -568,6 +586,7 @@ function GuestDrawer({
               Erase personal data
             </Button>
           </div>
+          )}
         </>
       )}
     </Drawer>

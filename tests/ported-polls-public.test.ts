@@ -12,6 +12,7 @@ vi.mock('../src/platform/guards', async () => {
 const atCeiling = () => (state.stop ? [{ip: 10_000, fresh: 0, device: 0}] : [{ip: 0, fresh: 0, device: 0}]);
 
 import {pollPublicRoutes, invalidateResults} from '../src/server/routes/polls-public';
+import {verifyPollGuestToken} from '../src/domain/tokens';
 
 const app = new Hono().route('/p', pollPublicRoutes);
 const U = (n: number) => `0192f0a1-0000-7000-8000-${String(n).padStart(12, '0')}`;
@@ -80,11 +81,15 @@ describe('public poll routes', () => {
     expect((await post({pollId: POLL, optionIds: [O1], g: 'nope'})).status).toBe(200);
     expect(state.db.pollVote.upsert.mock.calls[0][0].create).not.toHaveProperty('rsvpId');
   });
-  it('guest-link: 404 for an unknown token, a /p link with g for a confirmed guest', async () => {
+  it('guest-link: 404 for an unknown token, a /p link with a SIGNED g (never the manage token) for a confirmed guest', async () => {
     state.db.rsvp = {findFirst: vi.fn(async () => null)};
     expect((await app.request('/p/guest-link/bad')).status).toBe(404);
-    state.db.rsvp.findFirst.mockResolvedValue({event: {pollJoinCode: 'K7Q42X'}});
-    expect(await (await app.request('/p/guest-link/tok')).json()).toEqual({path: '/p/K7Q42X?g=tok'});
+    state.db.rsvp.findFirst.mockResolvedValue({id: U(9), eventId: 'e', event: {pollJoinCode: 'K7Q42X'}});
+    const {path} = (await (await app.request('/p/guest-link/tok-raw-manage-token')).json()) as {path: string};
+    expect(path.startsWith('/p/K7Q42X/?g=pg_')).toBe(true);
+    expect(path).not.toContain('tok-raw-manage-token');
+    const g = decodeURIComponent(path.split('?g=')[1]!);
+    expect(verifyPollGuestToken(g, 's'.repeat(40))).toEqual({rsvpId: U(9), eventId: 'e'});
   });
   it('hides results when the host keeps them private', async () => {
     poll.showResultsToVoters = false;

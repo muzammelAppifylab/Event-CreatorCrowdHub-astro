@@ -4,6 +4,7 @@ import {useState} from 'react';
 
 import {ApiError} from '../api';
 import {QrCode} from '../qr';
+import {useCanManageEvents} from '../shared';
 import {MoveButtons, moved} from './move-buttons';
 import {
   type AdminPoll,
@@ -66,6 +67,8 @@ export function Polls({eventId}: {eventId: string}) {
   const toast = useToast();
   const polls = useQuery(eventPollsQuery(eventId));
   const [editing, setEditing] = useState<string | 'new' | null>(null);
+  // Read-only viewers (no `manageEvents`): the polls and their results, no editing, ordering, opening or export.
+  const canManage = useCanManageEvents();
   const [type, setType] = useState<PollType>('single_choice');
   const [options, setOptions] = useState<string[]>(['', '']);
   const [optionsError, setOptionsError] = useState('');
@@ -150,7 +153,7 @@ export function Polls({eventId}: {eventId: string}) {
     });
   };
 
-  const columns: Column<AdminPoll>[] = [
+  const allColumns: Column<AdminPoll>[] = [
     {
       key: 'order',
       header: 'Order',
@@ -217,6 +220,7 @@ export function Polls({eventId}: {eventId: string}) {
         ),
     },
   ];
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'order' && c.key !== 'actions');
 
   const isNew = editing === 'new';
   const saveFailed = save.error && !(save.error instanceof ApiError && Object.keys(save.error.fields).length);
@@ -255,7 +259,7 @@ export function Polls({eventId}: {eventId: string}) {
           <p className="muted">Ask the room a question and watch the answers arrive.</p>
         )}
         <div className="toolbar-group polls-actions">
-          {list && list.some(p => p.status !== 'draft') && (
+          {canManage && list && list.some(p => p.status !== 'draft') && (
             <Button variant="ghost" icon="file" onClick={() => void exportEventPollsCsv(eventId, toast)}>
               Export CSV
             </Button>
@@ -265,9 +269,11 @@ export function Polls({eventId}: {eventId: string}) {
               <Icon name="monitor" size={16} /> Presenter view
             </Link>
           )}
-          <Button icon="plus" onClick={() => start()} disabled={save.isPending}>
-            New poll
-          </Button>
+          {canManage && (
+            <Button icon="plus" onClick={() => start()} disabled={save.isPending}>
+              New poll
+            </Button>
+          )}
         </div>
       </div>
       {live && (
@@ -275,6 +281,7 @@ export function Polls({eventId}: {eventId: string}) {
           tone="success"
           title={`Live now: “${live.question}”`}
           action={
+            canManage && (
             <Button
               variant="secondary"
               size="sm"
@@ -285,6 +292,7 @@ export function Polls({eventId}: {eventId: string}) {
               onClick={() => act.mutate({id: live.id, action: 'close'})}>
               Close poll
             </Button>
+            )
           }>
           {live.results?.totalVoters ?? 0} {(live.results?.totalVoters ?? 0) === 1 ? 'answer' : 'answers'} so far. Guests can vote until you close it.
         </Notice>
@@ -305,9 +313,11 @@ export function Polls({eventId}: {eventId: string}) {
               icon="zap"
               title="No polls yet"
               action={
-                <Button variant="secondary" icon="plus" onClick={() => start()}>
-                  New poll
-                </Button>
+                canManage ? (
+                  <Button variant="secondary" icon="plus" onClick={() => start()}>
+                    New poll
+                  </Button>
+                ) : undefined
               }>
               Build your questions ahead of time, then open them one by one during the event.
             </EmptyState>

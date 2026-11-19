@@ -110,6 +110,8 @@ export const contactsExportUrl = (filter: ContactFilter) =>
 
 export type ContactRow = {
   email: string;
+  /** The newest RSVP's id: the contact's key in links (`/contacts/$key`), never the email. */
+  key: string;
   name: string;
   eventCount: number;
   lastEvent: {id: string; title: string; startAt: string};
@@ -152,10 +154,11 @@ export type ContactDetail = {
   }[];
 };
 
-export const contactDetailQuery = (email: string) =>
+/** `key`: one of the person's RSVP ids (ContactRow.key). */
+export const contactDetailQuery = (key: string) =>
   queryOptions({
-    queryKey: ['contacts', 'detail', email],
-    queryFn: () => getJson<ContactDetail>(`/contacts/detail${qs({email})}`),
+    queryKey: ['contacts', 'detail', key],
+    queryFn: () => getJson<ContactDetail>(`/contacts/detail${qs({key})}`),
   });
 
 /* ── Invites ────────────────────────────────────────────────────────── */

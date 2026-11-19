@@ -26,7 +26,7 @@ vi.mock('../src/server/webhook-delivery', async () => {
 });
 
 import {audit} from '../src/platform/auth';
-import {adminWebhookRoutes} from '../src/server/routes/admin-webhooks';
+import {adminWebhookRoutes, toRedactedEndpoint} from '../src/server/routes/admin-webhooks';
 
 const app = new Hono().route('/wh', adminWebhookRoutes);
 const ID = '0192f0a1-0000-7000-8000-000000000009';
@@ -43,7 +43,10 @@ beforeEach(() => {
       updateMany: vi.fn(async () => ({count: 1})),
       deleteMany: vi.fn(async () => ({count: 1})),
       findUnique: vi.fn(async () => row),
+      findMany: vi.fn(async () => [row]),
     },
+    $executeRaw: vi.fn(async () => 0),
+    $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(state.db)),
   };
 });
 
@@ -56,6 +59,17 @@ describe('webhook admin audit trail', () => {
     const actions = vi.mocked(audit).mock.calls.map(([, e]) => e.action);
     expect(actions).toEqual(['webhook_created', 'webhook_updated', 'webhook_tested', 'webhook_deleted']);
     expect(JSON.stringify(vi.mocked(audit).mock.calls)).not.toMatch(/hooks\.example|whsec_/);
+  });
+  it('refuses a create over the cap, counted under the advisory lock', async () => {
+    (state.db.webhookEndpoint as {count: ReturnType<typeof vi.fn>}).count.mockResolvedValueOnce(10_000);
+    expect((await req('/', 'POST', {url: row.url, events: ['rsvp.created']})).status).toBe(409);
+    expect(state.db.$executeRaw).toHaveBeenCalled();
+    expect((state.db.webhookEndpoint as {create: ReturnType<typeof vi.fn>}).create).not.toHaveBeenCalled();
+  });
+  it('shows a see-only viewer the host only, never the path or a secret hint', () => {
+    const out = toRedactedEndpoint({...row, url: 'https://hooks.example.com/catch/123/s3cr3t'});
+    expect(out).toEqual({id: ID, url: 'https://hooks.example.com/…', events: ['rsvp.created'], active: true, secretHint: ''});
+    expect(JSON.stringify(out)).not.toMatch(/s3cr3t|whsec_|abcd/);
   });
   it('rejects http: receiver URLs and audits nothing', async () => {
     expect((await req('/', 'POST', {url: 'http://hooks.example.com/x', events: ['rsvp.created']})).status).toBe(422);

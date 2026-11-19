@@ -1,8 +1,9 @@
 import {Hono} from 'hono';
 
-import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {problem, requireAuth, withDb, withViewer} from '../../platform/guards';
 import {audit} from '../../platform/auth';
 import {PERMISSIONS} from '../permissions';
+import {holdsPermission, requireReadOrWrite} from '../guards-ext';
 import {attemptDelivery, envelope, isWebhookEvent, newSecret, webhookUrlProblem, WEBHOOK_EVENTS, type WebhookEventName} from '../webhook-delivery';
 import {eventsOf, MAX_ENDPOINTS} from '../webhooks';
 import {isUuid, notFound} from '../validate';
@@ -22,6 +23,8 @@ import {isUuid, notFound} from '../validate';
 
 
 const select = {id: true, url: true, secret: true, events: true, active: true} as const;
+/** The advisory lock every endpoint create takes. */
+const WEBHOOK_LIMIT_LOCK = 'webhook-endpoint-limit';
 type Row = {id: string; url: string; secret: string; events: unknown; active: boolean};
 
 export const toEndpoint = (r: Row) => ({
@@ -31,6 +34,17 @@ export const toEndpoint = (r: Row) => ({
   active: r.active,
   secretHint: r.secret.slice(-4),
 });
+
+/** For viewers without `site:event:integrations`: the host only, no secret hint. */
+export const toRedactedEndpoint = (r: Row) => {
+  let host = '';
+  try {
+    host = new URL(r.url).host;
+  } catch {
+    // A stored URL always parses (validated on save); show nothing if not.
+  }
+  return {id: r.id, url: host ? `https://${host}/…` : '', events: eventsOf(r.events), active: r.active, secretHint: ''};
+};
 
 const invalid = (field: string, message: string) => ({...problem('invalid_webhook', message), fields: {[field]: message}});
 
@@ -61,21 +75,28 @@ export function parseEndpointInput(value: unknown, partial: boolean): Parsed {
 const body = (c: {req: {json: () => Promise<unknown>}}) => c.req.json().catch(() => null);
 
 export const adminWebhookRoutes = new Hono()
-  .use('*', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_INTEGRATIONS), withDb)
+  .use('*', withViewer, requireAuth, requireReadOrWrite([PERMISSIONS.EVENT_INTEGRATIONS, PERMISSIONS.EVENT_READ], [PERMISSIONS.EVENT_INTEGRATIONS]), withDb)
 
   .get('/', async c => {
     const rows = await c.var.db.webhookEndpoint.findMany({select, orderBy: {id: 'asc'}, take: MAX_ENDPOINTS + 1});
-    return c.json({endpoints: rows.map(toEndpoint), events: WEBHOOK_EVENTS});
+    // See-only admins (the store's demo) see THAT endpoints exist, never a credential: a hook URL's
+    // path is often its secret (Zapier, Slack), so only its host is shown, and no secret hint.
+    const full = await holdsPermission(c, PERMISSIONS.EVENT_INTEGRATIONS);
+    return c.json({endpoints: rows.map(full ? toEndpoint : toRedactedEndpoint), events: WEBHOOK_EVENTS});
   })
 
   .post('/', async c => {
     const parsed = parseEndpointInput(await body(c), false);
     if ('message' in parsed) return c.json(invalid(parsed.field, parsed.message), 422);
-    if ((await c.var.db.webhookEndpoint.count()) >= MAX_ENDPOINTS) {
-      return c.json(problem('too_many_webhooks', `You can have at most ${MAX_ENDPOINTS} webhook endpoints.`), 409);
-    }
     const secret = newSecret();
-    const row = await c.var.db.webhookEndpoint.create({data: {url: parsed.url!, events: parsed.events!, secret, active: true}, select});
+    // Count and insert under one transaction-scoped advisory lock (a fixed key: the cap is site-wide),
+    // so two creates at once can't both pass the cap.
+    const row = await c.var.db.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${WEBHOOK_LIMIT_LOCK}, 0))`;
+      if ((await tx.webhookEndpoint.count()) >= MAX_ENDPOINTS) return null;
+      return tx.webhookEndpoint.create({data: {url: parsed.url!, events: parsed.events!, secret, active: true}, select});
+    });
+    if (!row) return c.json(problem('too_many_webhooks', `You can have at most ${MAX_ENDPOINTS} webhook endpoints.`), 409);
     await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_created', target: ['webhook', row.id]});
     return c.json({endpoint: toEndpoint(row), secret}, 201);
   })

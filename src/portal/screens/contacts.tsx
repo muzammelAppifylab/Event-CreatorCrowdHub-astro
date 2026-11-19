@@ -12,7 +12,7 @@ import {
   EMPTY_CONTACT_FILTER,
 } from '../guests-queries';
 import {eventsListQuery} from '../events-queries';
-import {ago, when} from '../shared';
+import {ago, useCanManageEvents, when} from '../shared';
 import {
   Avatar,
   Badge,
@@ -88,6 +88,8 @@ export function Contacts() {
   const [pageIndex, setPageIndex] = useState(0);
   const [selected, setSelected] = useState<Map<string, ContactRow>>(new Map());
   const [exporting, setExporting] = useState(false);
+  // Read-only viewers (no `manageEvents`): the list and each profile, no selection, bulk actions or export.
+  const canManage = useCanManageEvents();
 
   const contacts = useInfiniteQuery(contactsQuery(filter, limit));
   const upcoming = useInfiniteQuery(eventsListQuery('upcoming'));
@@ -162,9 +164,10 @@ export function Contacts() {
   const chosen = [...selected.values()];
   const optedIn = chosen.filter(c => c.marketingConsent);
 
-  const open = (email: string) => void navigate({to: `/contacts/${encodeURIComponent(email)}` as never});
+  // Keyed by the contact's newest RSVP id: an email address never goes in a URL.
+  const open = (key: string) => void navigate({to: '/contacts/$key', params: {key}});
 
-  const columns: Column<ContactRow>[] = [
+  const allColumns: Column<ContactRow>[] = [
     {
       key: 'select',
       header: (
@@ -185,7 +188,7 @@ export function Contacts() {
         <span className="person">
           <Avatar name={c.name} size="sm" />
           <span className="person-text">
-            <Link className="person-name" to={`/contacts/${encodeURIComponent(c.email)}` as never}>
+            <Link className="person-name" to="/contacts/$key" params={{key: c.key}}>
               {c.name}
             </Link>
             <span className="person-detail">{c.email}</span>
@@ -240,7 +243,7 @@ export function Contacts() {
         <Menu
           label={`Actions for ${c.name}`}
           items={[
-            {label: 'View profile', icon: 'user', onSelect: () => open(c.email)},
+            {label: 'View profile', icon: 'user', onSelect: () => open(c.key)},
             {label: 'Open last event', icon: 'calendar', onSelect: () => void navigate({to: `/events/${c.lastEvent.id}` as never})},
             {label: 'Send an email', icon: 'mail', onSelect: () => window.location.assign(`mailto:${c.email}`)},
             {label: 'Copy email', icon: 'copy', onSelect: () => copy(c.email, 'Email copied')},
@@ -249,6 +252,7 @@ export function Contacts() {
       ),
     },
   ];
+  const columns = canManage ? allColumns : allColumns.filter(c => c.key !== 'select');
 
   return (
     <div className="app-page screen-contacts" data-selecting={selected.size > 0 ? '' : undefined}>
@@ -256,9 +260,11 @@ export function Contacts() {
         title="Contacts"
         description="Every guest across your events, once per email."
         actions={
-          <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
-            {filtered ? 'Export filtered CSV' : 'Export CSV'}
-          </Button>
+          canManage && (
+            <Button variant="secondary" icon="file" pending={exporting} pendingLabel="Exporting…" onClick={() => void exportCsv()}>
+              {filtered ? 'Export filtered CSV' : 'Export CSV'}
+            </Button>
+          )
         }
       />
 
@@ -285,6 +291,7 @@ export function Contacts() {
         </div>
       </div>
 
+      {canManage && (
       <BulkBar count={chosen.length} noun={chosen.length === 1 ? 'contact selected' : 'contacts selected'} onClear={clearSelection}>
         <BulkAction icon="copy" label="Copy emails" onClick={() => copy(chosen.map(c => c.email).join(', '), `${plural(chosen.length, 'email')} copied`)} />
         <BulkAction
@@ -295,6 +302,7 @@ export function Contacts() {
         />
         <BulkAction icon="file" label="Export selected" onClick={() => downloadRows(chosen)} />
       </BulkBar>
+      )}
 
       <Card
         flush

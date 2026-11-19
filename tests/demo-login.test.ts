@@ -3,7 +3,6 @@ import {readFileSync} from 'node:fs';
 import {env} from 'cloudflare:workers';
 import {afterEach, describe, expect, it} from 'vitest';
 
-// @ts-expect-error: a plain Node script, no type declarations.
 import {catalogueEntries, DEMO_ROLE, demoLoginSql, demoPasswordHash} from '../scripts/platform.mjs';
 import {config} from '../src/platform/config';
 import {verifyPassword} from '../src/platform/auth/password';

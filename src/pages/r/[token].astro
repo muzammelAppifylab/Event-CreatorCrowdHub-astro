@@ -60,7 +60,7 @@ const onWaitlist = guest?.rsvp.status === 'waitlisted';
 const joinUrl = confirmed && guest && guest.event.format !== 'in_person' ? guest.event.joinUrl : null;
 const showTicket = confirmed && !!guest?.rsvp.ticketCode && guest.event.format !== 'online';
 const qr = guest && showTicket ? renderSVG(`${Astro.url.origin}/dashboard/checkin/code/${encodeURIComponent(guest.rsvp.ticketCode ?? '')}`, {border: 1}) : '';
-// The live-poll link carries the manage token (`?g=`) so a non-anonymous poll can list this guest; the
+// The live-poll link carries a signed poll token (`?g=pg_…`, never the manage token) so a non-anonymous poll can list this guest; the
 // route answers only for a voting-eligible RSVP of a published event. This page is no-referrer.
 let pollPath: string | null = null;
 if (confirmed && token) {

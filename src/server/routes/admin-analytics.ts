@@ -1,8 +1,8 @@
 import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
-import {requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
-import {PERMISSIONS} from '../permissions';
+import {requireAuth, withDb, withViewer} from '../../platform/guards';
+import {requireEventRead} from '../guards-ext';
 import {isUuid, notFound} from '../validate';
 
 /**
@@ -135,7 +135,7 @@ export const adminAnalyticsRoutes = new Hono().get(
   eventParam,
   withViewer,
   requireAuth,
-  requirePermission(PERMISSIONS.EVENT_MANAGE),
+  requireEventRead(),
   withDb,
   async c => {
     const {eventId} = c.req.valid('param');

@@ -4,7 +4,7 @@ import {
   MAX_SOURCES, VIEWS_WINDOW_DAYS, conversion, goingCount, maybeCount, normaliseSource, pollParticipation, ratio, revenueByCurrency,
   showRate, topSources, viewsDayRange, zeroFillDays,
 } from '../src/server/routes/admin-analytics';
-import {BEACON_LIMIT, createLimiter, visitorHash} from '../src/server/routes/pageviews';
+import {BEACON_LIMIT, visitorHash} from '../src/server/routes/pageviews';
 
 describe('normaliseSource', () => {
   it('trims, lowercases, caps at 64, and maps blank/null to null', () => {
@@ -94,21 +94,8 @@ describe('revenueByCurrency', () => {
   it('empty in, empty out', () => expect(revenueByCurrency([])).toEqual([]));
 });
 
-describe('createLimiter eviction', () => {
-  it('different keys have separate counters and a window resets', () => {
-    let t = 0;
-    const hit = createLimiter(2, 1000, () => t);
-    expect([hit('a'), hit('a'), hit('a'), hit('b')]).toEqual([true, true, false, true]);
-    t = 1000;
-    expect(hit('a')).toBe(true);
-  });
-  it('stays bounded under a flood of distinct keys and still limits afterwards', () => {
-    const t = 0;
-    const hit = createLimiter(1, 60_000, () => t);
-    for (let i = 0; i < 12_000; i++) expect(hit(`ip-${i}`)).toBe(true);
-    expect(hit('fresh')).toBe(true);
-    expect(hit('fresh')).toBe(false);
-  });
+// The beacon limiter is in the database now (src/server/rate-attempts.ts, tests/rate-attempts.test.ts).
+describe('beacon limits', () => {
   it('beacon limits are sane', () => {
     expect(BEACON_LIMIT.perIp).toBeLessThan(BEACON_LIMIT.perEvent);
     expect(BEACON_LIMIT.windowMs).toBe(60_000);

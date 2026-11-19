@@ -6,6 +6,7 @@ import type {Prisma, PrismaClient} from '../../generated/prisma/client';
 import {can, forbidden, problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import type {Viewer} from '../../platform/types';
 import {PERMISSIONS} from '../permissions';
+import {requireDoorRead, requireEventRead} from '../guards-ext';
 import {checkedInPayload, emitWebhook} from '../webhook-emit';
 import {escapeLike} from '../like';
 import {isUuid, notFound} from '../validate';
@@ -79,6 +80,11 @@ const doorAccess = createMiddleware<{Variables: {viewer: Viewer}}>(async (c, nex
 /** Managers pass; door staff only inside the window. `can` is memoized per request (doorAccess asked). */
 async function doorWindowOk(c: unknown, endAt: Date): Promise<boolean> {
   return (await can(c as never, PERMISSIONS.EVENT_MANAGE)) || inDoorWindow(endAt);
+}
+
+/** READS only: managers and see-only admins see every event, like a manager (they see emails in the guest list anyway). */
+async function seesAll(c: unknown): Promise<boolean> {
+  return (await can(c as never, PERMISSIONS.EVENT_MANAGE)) || (await can(c as never, PERMISSIONS.EVENT_READ));
 }
 
 type Counts = {checkedInSeats: number; expectedSeats: number; checkedInGuests: number; expectedGuests: number};
@@ -155,7 +161,7 @@ const attendeesQuery = validator('query', value => ({
 
 export const adminCheckinRoutes = new Hono()
   // --- door staff (checkin OR manage) --------------------------------------
-  .get('/events', withViewer, requireAuth, doorAccess, withDb, async c => {
+  .get('/events', withViewer, requireAuth, requireDoorRead(), withDb, async c => {
     // Today's and upcoming events: anything that ended more than a day ago is done.
     const rows = await c.var.db.event.findMany({
       select: eventSelect,
@@ -166,12 +172,12 @@ export const adminCheckinRoutes = new Hono()
     return c.json({events: rows.map(toEvent)});
   })
 
-  .get('/events/:eventId', eventParam, searchQuery, withViewer, requireAuth, doorAccess, withDb, async c => {
+  .get('/events/:eventId', eventParam, searchQuery, withViewer, requireAuth, requireDoorRead(), withDb, async c => {
     const {eventId} = c.req.valid('param');
     const {q} = c.req.valid('query');
     // Staff search name and code only; managers may match email too (they see emails anyway).
     // `can` is memoized per request (doorAccess already asked): no database trip here.
-    const manager = await can(c as never, PERMISSIONS.EVENT_MANAGE);
+    const manager = await seesAll(c);
     const search: Prisma.RsvpWhereInput[] = q
       ? [
           {name: {contains: escapeLike(q), mode: 'insensitive' as const}},
@@ -192,14 +198,14 @@ export const adminCheckinRoutes = new Hono()
       doorCounts(c.var.db, eventId),
     ]);
     if (!event) return notFound(c, 'Event');
-    return c.json({event: toEvent(event), guests: rows.map(toDoorGuest), counts, canManage: manager});
+    return c.json({event: toEvent(event), guests: rows.map(toDoorGuest), counts, canManage: await can(c as never, PERMISSIONS.EVENT_MANAGE)});
   })
 
-  .get('/codes/:code', codeParam, withViewer, requireAuth, doorAccess, withDb, async c => {
+  .get('/codes/:code', codeParam, withViewer, requireAuth, requireDoorRead(), withDb, async c => {
     const {code} = c.req.valid('param');
     const rsvp = await c.var.db.rsvp.findUnique({where: {ticketCode: code}, select: {...guestSelect, event: {select: {...eventSelect, status: true, deletedAt: true}}}});
     // Outside the door window a code answers like an unknown one for door staff (L-5).
-    if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt || !(await doorWindowOk(c, rsvp.event.endAt))) {
+    if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt || !((await seesAll(c)) || inDoorWindow(rsvp.event.endAt))) {
       return c.json(problem('not_found', 'No guest has that ticket code.'), 404);
     }
     return c.json({event: toEvent(rsvp.event), guest: toDoorGuest(rsvp)});
@@ -234,7 +240,7 @@ export const adminCheckinRoutes = new Hono()
   })
 
   // --- online attendance (manage only) -------------------------------------
-  .get('/events/:eventId/attendees', eventParam, attendeesQuery, withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
+  .get('/events/:eventId/attendees', eventParam, attendeesQuery, withViewer, requireAuth, requireEventRead(), withDb, async c => {
     const {eventId} = c.req.valid('param');
     const {before} = c.req.valid('query');
     const rows = await c.var.db.rsvp.findMany({

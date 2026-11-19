@@ -5,6 +5,7 @@ import {useCallback, useEffect} from 'react';
 import {nextPollToOpen} from '../../domain/polls';
 import {type AdminPoll, closePoll, exportPollCsv, formatJoinCode, openPoll, presenterPollsQuery} from '../polls-queries';
 import {QrCode} from '../qr';
+import {useCanManageEvents} from '../shared';
 import {BarChart, Button, buttonClass, EmptyState, Icon, ErrorNote, LoadingBlock, StatusBadge, Stat, useToast} from '../ui';
 
 /** The poll on screen: the open one, else the last opened (its final results), else the first. */
@@ -38,6 +39,8 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
   const code = codeProp ?? params.code ?? '';
   const queryClient = useQueryClient();
   const toast = useToast();
+  // Read-only viewers (no `manageEvents`) watch the results; opening, closing and export are hidden.
+  const canManage = useCanManageEvents();
   const list = useQuery(presenterPollsQuery(code));
   const polls = list.data?.polls ?? [];
   const shown = displayed(polls);
@@ -78,16 +81,16 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (isTyping(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === 'ArrowRight') openNext();
-      else if (event.key.toLowerCase() === 'o') openShown();
-      else if (event.key.toLowerCase() === 'c') closeOpen();
+      if (canManage && event.key === 'ArrowRight') openNext();
+      else if (canManage && event.key.toLowerCase() === 'o') openShown();
+      else if (canManage && event.key.toLowerCase() === 'c') closeOpen();
       else if (event.key.toLowerCase() === 'f') fullscreen();
       else return;
       event.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [openNext, openShown, closeOpen, fullscreen]);
+  }, [canManage, openNext, openShown, closeOpen, fullscreen]);
 
   if (list.isPending) return <div className="app-page"><LoadingBlock rows={4} /></div>;
   if (list.error) return <div className="app-page"><ErrorNote error={list.error} /></div>;
@@ -138,6 +141,8 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
         </aside>
       </div>
       <div className="poll-present-controls toolbar-group" role="group" aria-label="Presenter controls">
+        {canManage && (
+          <>
         <Button variant="secondary" onClick={openNext} pending={open.isPending} disabled={busy}>
           <kbd>→</kbd> Next
         </Button>
@@ -150,6 +155,8 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
         <Button variant="ghost" onClick={() => shown && void exportPollCsv(shown.id, toast)} disabled={!shown || shown.status === 'draft'}>
           Export CSV
         </Button>
+          </>
+        )}
         <Button variant="ghost" onClick={fullscreen}>
           <kbd>F</kbd> Full screen
         </Button>

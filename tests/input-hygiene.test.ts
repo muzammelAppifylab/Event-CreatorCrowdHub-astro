@@ -69,7 +69,7 @@ describe('L-4: organiser routes check sign-in before validating', () => {
     ['/site-api/event-admin/events/not-a-uuid/guests?q=x'],
     [`/site-api/event-admin/events/${ID}/guests/export.csv?status=bogus`],
     ['/site-api/event-admin/events/not-a-uuid/invites?status=bogus'],
-    [`/site-api/event-admin/contacts/detail?event=nope`],
+    [`/site-api/event-admin/contacts/detail?key=nope`],
     ['/site-api/checkin/events/not-a-uuid?q=x'],
     ['/site-api/checkin/codes/!!'],
   ])('GET %s answers 401 to a visitor', async path => {

@@ -10,13 +10,15 @@ BEGIN;
 INSERT INTO "permissions" ("codename", "title", "description", "group_name") VALUES
   ('site:user:read', 'See users', 'List users with their email, status and roles.', 'Users'),
   ('site:role:read', 'See roles', 'See roles and what each one allows.', 'Roles'),
-  ('site:audit:read', 'See the activity log', 'Sign-ins, password changes, role changes.', 'Security')
+  ('site:audit:read', 'See the activity log', 'Sign-ins, password changes, role changes.', 'Security'),
+  ('site:event:read', 'See events', 'Open events, guests, invites, messages, polls, analytics and event settings without changing them.', 'Events'),
+  ('site:payments:read', 'View payment settings', 'See which payment provider takes ticket payments and whether its keys are set.', 'Payments')
 ON CONFLICT ("codename") DO NOTHING;
 
 -- Their default roles, as the permission sync grants them the first time.
 INSERT INTO "role_permissions" ("role_id", "permission_id")
 SELECT r."id", p."id"
-FROM (VALUES ('admin', 'site:role:read'), ('admin', 'site:audit:read')) AS g(slug, codename)
+FROM (VALUES ('admin', 'site:role:read'), ('admin', 'site:audit:read'), ('admin', 'site:event:read'), ('admin', 'site:payments:read')) AS g(slug, codename)
 JOIN "roles" r ON r."slug" = g.slug
 JOIN "permissions" p ON p."codename" = g.codename
 ON CONFLICT DO NOTHING;
@@ -29,13 +31,13 @@ ON CONFLICT ("slug") DO UPDATE SET "name" = EXCLUDED."name", "description" = EXC
 INSERT INTO "role_permissions" ("role_id", "permission_id")
 SELECT r."id", p."id"
 FROM "roles" r
-JOIN "permissions" p ON p."codename" IN ('site:user:read', 'site:role:read', 'site:audit:read')
+JOIN "permissions" p ON p."codename" IN ('site:user:read', 'site:role:read', 'site:audit:read', 'site:event:read', 'site:payments:read')
 WHERE r."slug" = 'demo-read-only'
 ON CONFLICT DO NOTHING;
 
 -- The demo admin: confirmed, active, no two-step sign-in.
 INSERT INTO "users" ("email", "name", "password_hash", "status", "email_verified_at", "updated_at") VALUES
-  ('demo@example.com', 'Demo admin', 'scrypt$v1$16384$8$5$jKJFAXRHpovseSxZJA4xLw$BJ1wwRhf_GQ8tO7Pud_S8WMXajIcAl-wDnp3nBNoYZ0', 'active', now(), now())
+  ('demo@example.com', 'Demo admin', 'scrypt$v1$16384$8$5$J00ZeNga6WjbIoP3RoGfMQ$d7Nggn_kkmysoNWXZ3dhi7Ob-112ybkIxBClF-hStEg', 'active', now(), now())
 ON CONFLICT ("email") DO UPDATE SET "name" = EXCLUDED."name", "password_hash" = EXCLUDED."password_hash", "status" = 'active',
   "email_verified_at" = now(), "totp_secret_sealed" = NULL, "totp_pending_sealed" = NULL, "totp_enabled_at" = NULL,
   "session_version" = "users"."session_version" + 1, "updated_at" = now();

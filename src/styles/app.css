@@ -5363,3 +5363,12 @@ html {
 .screen-payments .payments-events code {
   overflow-wrap: anywhere;
 }
+/* A read-only viewer's form: a `<fieldset disabled>` that disables every control inside without
+   changing the layout (src/portal/shared.tsx `ReadOnly`). */
+.fieldset-contents {
+  display: contents;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
