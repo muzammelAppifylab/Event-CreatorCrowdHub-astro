@@ -14,7 +14,8 @@ import {
 } from '../../platform/payment-providers';
 import {getPaypalCapture, isPaypalOrderId} from '../payments/paypal-orders';
 import {refundProviderCheckout, syncProviderCheckout} from '../payments/provider-confirm';
-import {getStripeCharge} from '../payments/stripe-charges';
+import {isProviderCheckoutId} from '../payments/provider-tickets';
+import {getStripeCharge, getStripePaymentIntentRef} from '../payments/stripe-charges';
 
 /**
  * Webhooks from the OWNER's own payment provider (docs/agent/payments-providers.md "Webhooks"):
@@ -34,8 +35,8 @@ import {getStripeCharge} from '../payments/stripe-charges';
  * Events this app needs (one-time ticket sales):
  *   Stripe   checkout.session.completed, checkout.session.async_payment_succeeded,
  *            checkout.session.async_payment_failed, checkout.session.expired, charge.refunded
- *   PayPal   CHECKOUT.ORDER.APPROVED, PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.DENIED,
- *            PAYMENT.CAPTURE.REFUNDED, PAYMENT.CAPTURE.REVERSED
+ *   PayPal   CHECKOUT.ORDER.APPROVED, PAYMENT.CAPTURE.COMPLETED, PAYMENT.CAPTURE.PENDING,
+ *            PAYMENT.CAPTURE.DENIED, PAYMENT.CAPTURE.REFUNDED, PAYMENT.CAPTURE.REVERSED
  *   Ezypay   payment.succeeded, payment.failed, payment.refunded
  * Anything else is acknowledged and ignored.
  */
@@ -76,10 +77,17 @@ async function apply(db: PrismaClient, provider: Provider, event: ProviderEvent)
       const charge = await getStripeCharge(event.objectId);
       if (!charge.ok) throw new RetryLater('re-read failed');
       if (!charge.data.refunded || !charge.data.paymentIntentId) return; // a partial refund leaves the ticket alone
-      const row = await db.providerCheckout.findFirst({
-        where: {provider: 'stripe', providerPaymentId: charge.data.paymentIntentId},
-        select: {id: true, amountMinor: true, currency: true},
-      });
+      const select = {id: true, amountMinor: true, currency: true} as const;
+      let row = await db.providerCheckout.findFirst({where: {provider: 'stripe', providerPaymentId: charge.data.paymentIntentId}, select});
+      if (!row) {
+        // The refund came before "paid" was recorded (no payment id stored yet): find the checkout
+        // by the `ref` the kit put on the PaymentIntent, read from Stripe.
+        const intent = await getStripePaymentIntentRef(charge.data.paymentIntentId);
+        if (!intent.ok) throw new RetryLater('re-read failed');
+        const ref = intent.data.ref;
+        row = ref && isProviderCheckoutId(ref) ? await db.providerCheckout.findFirst({where: {id: ref, provider: 'stripe'}, select}) : null;
+        if (row) await db.providerCheckout.updateMany({where: {id: row.id, providerPaymentId: null}, data: {providerPaymentId: charge.data.paymentIntentId}});
+      }
       if (row) await refundProviderCheckout(db, row);
     }
     return;

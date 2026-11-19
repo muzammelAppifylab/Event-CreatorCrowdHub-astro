@@ -67,7 +67,7 @@ the live value under **Production**. The mode follows the keys; a live key in th
 | --- | --- | --- | --- |
 | Ezypay | `EZYPAY_SECRET_KEY`, `EZYPAY_PUBLISHABLE_KEY`, `EZYPAY_WEBHOOK_SECRET` | `<site address>/site-api/payment-webhooks/ezypay` | `payment.succeeded`, `payment.failed`, `payment.refunded` |
 | Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | `<site address>/site-api/payment-webhooks/stripe` | `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded` |
-| PayPal | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, and `PAYPAL_MODE=live` under Production only | `<site address>/site-api/payment-webhooks/paypal` | `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` |
+| PayPal | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, and `PAYPAL_MODE=live` under Production only | `<site address>/site-api/payment-webhooks/paypal` | `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.PENDING`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` |
 
 Sandbox webhooks point at the staging site, live ones at the live site (or its custom domain). The
 Preview gets no webhooks: the thanks page confirms the payment with the provider there. Whichever way

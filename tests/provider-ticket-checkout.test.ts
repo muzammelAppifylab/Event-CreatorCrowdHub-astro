@@ -11,9 +11,15 @@ const hooks = vi.hoisted(() => ({confirmPaidTicket: vi.fn(async () => ({kind: 'c
 vi.mock('../src/server/ticket-checkout', async orig => ({...(await orig<object>()), ...hooks}));
 const holds = vi.hoisted(() => ({releaseHold: vi.fn(async () => ({released: true, promoted: []}))}));
 vi.mock('../src/server/jobs/holds', async orig => ({...(await orig<object>()), ...holds}));
+const store = vi.hoisted(() => ({db: null as unknown}));
+vi.mock('../src/platform/db', () => ({getDb: () => store.db}));
 
+import {Hono} from 'hono';
+
+import {resetWebhookLimitForTests, signTimestamped} from '../src/platform/payment-providers';
 import {syncProviderCheckout} from '../src/server/payments/provider-confirm';
 import {startProviderTicketCheckout} from '../src/server/payments/provider-tickets';
+import {providerWebhooks} from '../src/server/routes/provider-webhooks';
 
 const vars = env as Record<string, string | undefined>;
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), {status, headers: {'content-type': 'application/json'}});
@@ -123,16 +129,42 @@ describe('syncProviderCheckout', () => {
     ticketOrder: {findUnique: vi.fn(async () => ({status: 'pending'}))},
   });
   const session = (over: Record<string, unknown> = {}) =>
-    json(200, {id: 'cs_test_abcdef123456', status: 'complete', payment_status: 'paid', client_reference_id: row.id, mode: 'payment', payment_intent: 'pi_abcdef123456', livemode: false, ...over});
+    json(200, {
+      id: 'cs_test_abcdef123456',
+      status: 'complete',
+      payment_status: 'paid',
+      client_reference_id: row.id,
+      mode: 'payment',
+      payment_intent: 'pi_abcdef123456',
+      amount_total: 3000,
+      currency: 'usd',
+      livemode: false,
+      ...over,
+    });
 
   it('a paid session confirms the ticket through the shared confirmPaidTicket', async () => {
-    fetchMock.mockResolvedValueOnce(session());
+    fetchMock.mockImplementation(async () => session());
     const db = fakeDb();
     const out = await syncProviderCheckout(db as never, row.id);
     expect(out?.status).toBe('paid');
     expect(db.providerCheckout.updateMany).toHaveBeenCalledWith({where: {id: row.id, status: {in: ['open', 'failed']}}, data: {status: 'paid', providerPaymentId: 'pi_abcdef123456'}});
     expect(hooks.confirmPaidTicket).toHaveBeenCalledTimes(1);
     expect((hooks.confirmPaidTicket.mock.calls[0] as unknown[])[1]).toMatchObject({id: row.id, status: 'paid', amountCents: 3000, currency: 'USD', metadata: {rsvpId: RSVP}});
+  });
+
+  it('passes what Stripe actually charged, so a different total is caught as a mismatch', async () => {
+    fetchMock.mockImplementation(async () => session({amount_total: 100}));
+    const db = fakeDb();
+    await syncProviderCheckout(db as never, row.id);
+    expect((hooks.confirmPaidTicket.mock.calls[0] as unknown[])[1]).toMatchObject({amountCents: 100, currency: 'USD'});
+  });
+
+  it('a late "paid" after the refund was recorded never reopens the ticket', async () => {
+    fetchMock.mockImplementation(async () => session());
+    const db = fakeDb({status: 'refunded'});
+    expect((await syncProviderCheckout(db as never, row.id, {force: true}))?.status).toBe('refunded');
+    expect(hooks.confirmPaidTicket).not.toHaveBeenCalled();
+    expect(db.providerCheckout.updateMany).not.toHaveBeenCalled();
   });
 
   it('a session carrying another ref changes nothing (fails closed)', async () => {
@@ -155,5 +187,116 @@ describe('syncProviderCheckout', () => {
     const db = fakeDb({status: 'paid'});
     expect((await syncProviderCheckout(db as never, row.id))?.status).toBe('paid');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Ezypay refunds: only a FULL refund closes the ticket', () => {
+  const row = {
+    id: 'ppc_0123456789abcdef0123456789abcdef',
+    rsvpId: RSVP,
+    provider: 'ezypay',
+    mode: 'test',
+    providerRef: 'pay_abcdef123456',
+    providerPaymentId: null,
+    seats: 2,
+    amountMinor: 3000,
+    currency: 'USD',
+    status: 'open',
+    step: null,
+    createdAt: new Date(),
+    price: {key: BASE_KEY, providerPriceId: 'price_ezy123456'},
+  };
+  const fakeDb = (over: Record<string, unknown> = {}) => ({
+    providerCheckout: {findUnique: vi.fn(async () => ({...row, ...over})), updateMany: vi.fn(async () => ({count: 1}))},
+    ticketOrder: {findUnique: vi.fn(async () => ({status: 'pending'}))},
+  });
+  // The kit and the raw read both GET /payments/{id}: one answer serves both.
+  const payment = (status: string) => {
+    const calls: string[] = [];
+    fetchMock.mockImplementation(async (url: string) => {
+      calls.push(url);
+      return json(200, {
+        data: {mode: 'test', payment: {id: 'pay_abcdef123456', status, metadata: {ref: row.id}, priceId: 'price_ezy123456', currency: 'USD', amountMinor: '3000'}},
+      });
+    });
+    return calls;
+  };
+  beforeEach(() => {
+    vars.EZYPAY_SECRET_KEY = 'sk_test_FAKEFAKEFAKE';
+    vars.EZYPAY_PUBLISHABLE_KEY = 'pk_test_FAKEFAKEFAKE';
+    vars.EZYPAY_WEBHOOK_SECRET = 'whsec_fakefakefakefake';
+  });
+  afterEach(() => {
+    delete vars.EZYPAY_SECRET_KEY;
+    delete vars.EZYPAY_PUBLISHABLE_KEY;
+    delete vars.EZYPAY_WEBHOOK_SECRET;
+  });
+
+  it('a partial refund on a paid booking leaves the ticket confirmed', async () => {
+    const calls = payment('partially_refunded');
+    const db = fakeDb({status: 'paid'});
+    expect((await syncProviderCheckout(db as never, row.id, {force: true}))?.status).toBe('paid');
+    expect(calls.length).toBe(2); // the kit's read, then the raw status
+    expect(hooks.refundedTicket).not.toHaveBeenCalled();
+  });
+
+  it('a first read that is already partially refunded still confirms the paying guest', async () => {
+    payment('partially_refunded');
+    const db = fakeDb();
+    expect((await syncProviderCheckout(db as never, row.id))?.status).toBe('paid');
+    expect(db.providerCheckout.updateMany).toHaveBeenCalledWith({where: {id: row.id, status: {in: ['open', 'failed']}}, data: {status: 'paid', providerPaymentId: 'pay_abcdef123456'}});
+    expect(hooks.confirmPaidTicket).toHaveBeenCalledTimes(1);
+    expect((hooks.confirmPaidTicket.mock.calls[0] as unknown[])[1]).toMatchObject({amountCents: 3000, currency: 'USD'});
+  });
+
+  it('a full refund closes the order and frees the seat', async () => {
+    payment('refunded');
+    const db = fakeDb({status: 'paid'});
+    expect((await syncProviderCheckout(db as never, row.id, {force: true}))?.status).toBe('refunded');
+    expect(hooks.refundedTicket).toHaveBeenCalledTimes(1);
+    expect((hooks.refundedTicket.mock.calls[0] as unknown[])[1]).toMatchObject({checkoutId: row.id, full: true});
+  });
+});
+
+describe('Stripe charge.refunded before "paid" was recorded', () => {
+  const app = new Hono().route('/payment-webhooks', providerWebhooks);
+  const ID = 'ppc_0123456789abcdef0123456789abcdef';
+  const event = JSON.stringify({id: 'evt_refund123456', type: 'charge.refunded', livemode: false, data: {object: {id: 'ch_abcdef123456'}}});
+  const post = async () =>
+    app.request('/payment-webhooks/stripe', {
+      method: 'POST',
+      headers: {'content-type': 'application/json', 'stripe-signature': await signTimestamped(event, vars.STRIPE_WEBHOOK_SECRET!)},
+      body: event,
+    });
+  const charge = () => json(200, {id: 'ch_abcdef123456', payment_intent: 'pi_abcdef123456', refunded: true, livemode: false});
+
+  it('finds the checkout through the PaymentIntent ref and closes it', async () => {
+    resetWebhookLimitForTests();
+    fetchMock.mockImplementation(async (url: string) => (url.includes('/charges/') ? charge() : json(200, {id: 'pi_abcdef123456', metadata: {ref: ID}, livemode: false})));
+    const findFirst = vi.fn(async (args: {where: Record<string, unknown>}) => (args.where.id === ID ? {id: ID, amountMinor: 3000, currency: 'USD'} : null));
+    const db = {
+      providerEvent: {createMany: vi.fn(async () => ({count: 1})), deleteMany: vi.fn(async () => ({count: 1}))},
+      providerCheckout: {findFirst, findUnique: vi.fn(async () => null), updateMany: vi.fn(async () => ({count: 1}))},
+    };
+    store.db = db;
+    expect((await post()).status).toBe(200);
+    expect(findFirst).toHaveBeenCalledTimes(2); // by payment id (none yet), then by the ref
+    expect(db.providerCheckout.updateMany).toHaveBeenCalledWith({where: {id: ID, providerPaymentId: null}, data: {providerPaymentId: 'pi_abcdef123456'}});
+    expect(hooks.refundedTicket).toHaveBeenCalledTimes(1);
+    expect((hooks.refundedTicket.mock.calls[0] as unknown[])[1]).toMatchObject({checkoutId: ID, full: true});
+    expect(db.providerEvent.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('asks Stripe to send it again when the PaymentIntent cannot be read', async () => {
+    resetWebhookLimitForTests();
+    fetchMock.mockImplementation(async (url: string) => (url.includes('/charges/') ? charge() : json(500, {})));
+    const db = {
+      providerEvent: {createMany: vi.fn(async () => ({count: 1})), deleteMany: vi.fn(async () => ({count: 1}))},
+      providerCheckout: {findFirst: vi.fn(async () => null), findUnique: vi.fn(async () => null), updateMany: vi.fn()},
+    };
+    store.db = db;
+    expect((await post()).status).toBe(500);
+    expect(db.providerEvent.deleteMany).toHaveBeenCalled();
+    expect(hooks.refundedTicket).not.toHaveBeenCalled();
   });
 });

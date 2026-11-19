@@ -19,9 +19,34 @@ import {
   fail,
 } from '../../platform/payment-providers';
 import type {EmbeddedCheckout} from '../../platform/payments';
-import {isUniqueViolation} from '../jobs/shared';
+import {isUniqueViolation, seatsTakenOf} from '../jobs/shared';
 import type {StartTicketCheckout} from '../ticket-checkout';
+import {seatsRemaining} from '../../domain/capacity';
+import {getEzypayRawStatus} from './ezypay-payments';
 import {capturePaypalOrder, createPaypalOrder, getPaypalOrder} from './paypal-orders';
+import {getStripeSessionTotal} from './stripe-charges';
+
+/**
+ * May an approved PayPal order for this RSVP be captured? Only while the booking can still take
+ * the money: the event open and the RSVP holding its seats (`awaiting_payment`), or its hold lapsed
+ * (`cancelled`) with the seats still free. Otherwise the order is left uncaptured (PayPal voids it
+ * later): nothing is charged that would only become a refund. Best effort without a lock;
+ * confirmPaidTicket decides again under the event's lock.
+ */
+export async function paypalCaptureAllowed(db: PrismaClient, rsvpId: string, now = new Date()): Promise<boolean> {
+  const rsvp = await db.rsvp.findUnique({
+    where: {id: rsvpId},
+    select: {status: true, seats: true, eventId: true, event: {select: {status: true, capacity: true, deletedAt: true}}},
+  });
+  if (!rsvp || rsvp.event.deletedAt || rsvp.event.status !== 'published') return false;
+  if (rsvp.status === 'awaiting_payment') return true;
+  if (rsvp.status !== 'cancelled') return false;
+  const [taken, claimed] = await Promise.all([
+    seatsTakenOf(db, rsvp.eventId),
+    db.rsvp.aggregate({_sum: {seats: true}, where: {eventId: rsvp.eventId, status: 'waitlisted', claimExpiresAt: {gt: now}}}),
+  ]);
+  return rsvp.seats <= seatsRemaining(rsvp.event.capacity, taken + (claimed._sum.seats ?? 0));
+}
 
 /**
  * Paid tickets through the OWNER's own payment provider (docs/agent/payments-providers.md), when
@@ -268,7 +293,10 @@ const open: ProviderCheckoutState = {status: 'open', amountMinor: null, currency
  * this row. PayPal: an approved order is captured here (once: `capture:<id>`). Fails closed: any
  * error or unexpected answer is `ok: false`, never "paid".
  */
-export async function readProviderCheckout(row: ProviderCheckoutRow): Promise<ProviderResult<ProviderCheckoutState>> {
+export async function readProviderCheckout(
+  row: ProviderCheckoutRow,
+  {mayCapture = async () => true}: {mayCapture?: () => Promise<boolean>} = {},
+): Promise<ProviderResult<ProviderCheckoutState>> {
   if (!isProvider(row.provider)) return fail(422, 'wrong_provider');
   if (!row.providerRef) return {ok: true, data: open};
   if (providerMode(row.provider) !== row.mode) return fail(0, 'mode_mismatch');
@@ -277,9 +305,12 @@ export async function readProviderCheckout(row: ProviderCheckoutRow): Promise<Pr
     if (!res.ok) return res;
     if (res.data.ref !== row.id || (res.data.mode !== null && res.data.mode !== 'payment')) return fail(502, 'ref_mismatch');
     if (res.data.status === 'paid') {
-      // The session sold this row's stored price x seats, at Stripe's own amount for that price
-      // (prices never change), so the paid amount is the row's.
-      return {ok: true, data: {status: 'paid', amountMinor: row.amountMinor, currency: row.currency, paymentId: res.data.paymentIntentId}};
+      // What Stripe actually charged (the kit doesn't return it), so confirmPaidTicket's amount
+      // check compares the real total with the order's.
+      const total = await getStripeSessionTotal(row.providerRef);
+      if (!total.ok) return total;
+      if (total.data.ref !== row.id) return fail(502, 'ref_mismatch');
+      return {ok: true, data: {status: 'paid', amountMinor: total.data.amountMinor, currency: total.data.currency, paymentId: res.data.paymentIntentId}};
     }
     return {ok: true, data: res.data.status === 'expired' ? {...open, status: 'failed'} : open};
   }
@@ -287,12 +318,21 @@ export async function readProviderCheckout(row: ProviderCheckoutRow): Promise<Pr
     const res = await getEzypayPayment(row.providerRef);
     if (!res.ok) return res;
     if (res.data.ref !== row.id || (res.data.priceId !== null && res.data.priceId !== row.price.providerPriceId)) return fail(502, 'ref_mismatch');
-    const status = res.data.status === 'paid' ? 'paid' : res.data.status;
-    if ((status === 'paid' || status === 'refunded') && (res.data.amountMinor === null || !res.data.currency)) return fail(502, 'bad_response');
+    let status: ProviderCheckoutState['status'] = res.data.status;
+    if (status === 'refunded') {
+      // The kit folds `partially_refunded` into `refunded`: only a FULL refund closes the ticket.
+      const raw = await getEzypayRawStatus(row.providerRef);
+      if (!raw.ok) return raw;
+      status = raw.data.status === 'refunded' ? 'refunded' : 'partially_refunded';
+    }
+    if (status !== 'open' && status !== 'failed' && (res.data.amountMinor === null || !res.data.currency)) return fail(502, 'bad_response');
     return {ok: true, data: {status, amountMinor: res.data.amountMinor, currency: res.data.currency, paymentId: res.data.id}};
   }
   let res = await getPaypalOrder(row.providerRef);
-  if (res.ok && res.data.ref === row.id && res.data.status === 'approved') res = await capturePaypalOrder(row.providerRef, `capture:${row.id}`);
+  // Capture only money this booking can still honour: never take it to mark it refund_due at once.
+  if (res.ok && res.data.ref === row.id && res.data.status === 'approved' && (await mayCapture())) {
+    res = await capturePaypalOrder(row.providerRef, `capture:${row.id}`);
+  }
   if (!res.ok) return res;
   if (res.data.ref !== row.id) return fail(502, 'ref_mismatch');
   if (res.data.status === 'paid' && (res.data.amountMinor === null || !res.data.currency)) return fail(502, 'bad_response');

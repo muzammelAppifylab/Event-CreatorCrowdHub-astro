@@ -87,7 +87,7 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
       const e = res.json.event as Json;
       expect(e.status).toBe('draft');
       expect(e.slug).toBe('pricing-workshop');
-      expect(e.publicPath).toBe('/e/pricing-workshop');
+      expect(e.publicPath).toBe('/events/pricing-workshop/');
       expect(e.pollJoinCode).toMatch(/^[23456789A-HJKMNP-Z]{6}$/);
       expect([e.timezone, e.allowMaybe, e.showGuestList]).toEqual(['Europe/London', false, true]);
       expect(e.joinUrl).toBe('https://zoom.example/j/123');
@@ -190,7 +190,7 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
       expect(bad.status).toBe(422);
       expect(bad.json.fields).toHaveProperty('slug');
       const ok = await patch(admin, `${A}/${second.id}`, {slug: 'other-new'});
-      expect((ok.json.event as Json).publicPath).toBe('/e/other-new');
+      expect((ok.json.event as Json).publicPath).toBe('/events/other-new/');
     });
 
     it('saves a deleted event slug as free for another event', async () => {

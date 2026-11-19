@@ -28,7 +28,7 @@ import {PERMISSIONS} from '../permissions';
 export const WEBHOOK_EVENTS: Record<Provider, string[]> = {
   ezypay: ['payment.succeeded', 'payment.failed', 'payment.refunded'],
   stripe: ['checkout.session.completed', 'checkout.session.async_payment_succeeded', 'checkout.session.async_payment_failed', 'checkout.session.expired', 'charge.refunded'],
-  paypal: ['CHECKOUT.ORDER.APPROVED', 'PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.REFUNDED', 'PAYMENT.CAPTURE.REVERSED'],
+  paypal: ['CHECKOUT.ORDER.APPROVED', 'PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.PENDING', 'PAYMENT.CAPTURE.DENIED', 'PAYMENT.CAPTURE.REFUNDED', 'PAYMENT.CAPTURE.REVERSED'],
 };
 
 /** Where the owner gets each provider's keys (shown on the screen). */

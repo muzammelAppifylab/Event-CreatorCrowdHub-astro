@@ -2,7 +2,7 @@ import type {PrismaClient} from '../../generated/prisma/client';
 import type {Checkout} from '../../platform/payments';
 import {releaseHold} from '../jobs/holds';
 import {confirmPaidTicket, refundedTicket} from '../ticket-checkout';
-import {type ProviderCheckoutState, readProviderCheckout} from './provider-tickets';
+import {paypalCaptureAllowed, type ProviderCheckoutState, readProviderCheckout} from './provider-tickets';
 
 /**
  * A provider checkout, brought in step with the PROVIDER and handed to the SAME logic the built-in
@@ -87,7 +87,7 @@ export async function syncProviderCheckout(db: PrismaClient, id: string, {force 
   const row: SyncedRow | null = await db.providerCheckout.findUnique({where: {id}, select: rowSelect});
   if (!row) return null;
   if (!force && row.status !== 'open') return {row, status: storedStatus(row.status)};
-  const read = await readProviderCheckout(row);
+  const read = await readProviderCheckout(row, {mayCapture: () => paypalCaptureAllowed(db, row.rsvpId)});
   if (!read.ok) {
     console.warn(`[provider-checkout] ${row.provider} ${row.id}: could not confirm (${read.code})`.slice(0, 200));
     return {row, status: storedStatus(row.status), unavailable: true};
@@ -96,11 +96,14 @@ export async function syncProviderCheckout(db: PrismaClient, id: string, {force 
   switch (state.status) {
     case 'paid':
     case 'partially_refunded': {
+      // Already refunded here (a refund event came first): a late "paid" never reopens the ticket.
+      if (row.status === 'refunded') return {row, status: 'refunded'};
       await db.providerCheckout.updateMany({
         where: {id, status: {in: ['open', 'failed']}},
         data: {status: 'paid', providerPaymentId: state.paymentId},
       });
-      if (state.status === 'paid') await confirmPaidTicket(db, checkoutOf(row, state));
+      // A partial refund is still a paid booking: confirm it too (or the hold sweep cancels a payer).
+      await confirmPaidTicket(db, checkoutOf(row, state));
       return {row, status: 'paid'};
     }
     case 'failed': {
