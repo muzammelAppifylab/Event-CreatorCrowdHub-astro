@@ -3,7 +3,7 @@ import {Link} from '@tanstack/react-router';
 import {type ComponentType, lazy, Suspense, useState} from 'react';
 
 import {eventAnalyticsQuery, eventWhen} from '../checkin-queries';
-import {type ApiError} from '../api';
+import {ApiError} from '../api';
 import {HUB_TABS, type HubTabId, type TabProps, tabLoader} from '../event-tabs';
 import {hubEventQuery} from '../overview-queries';
 import {type AdminEventDetail} from '../../lib/event-schemas';
@@ -47,6 +47,9 @@ function HubOverview({eventId, onTab}: HubOverviewProps) {
   const analytics = useQuery(eventAnalyticsQuery(eventId));
   const a = analytics.data;
   const toast = useToast();
+  // Going = confirmed "Yes" only, the number Analytics shows. counts.confirmed also holds confirmed "Maybe"
+  // answers, which would read as "14 of 12 going".
+  const going = a ? a.rsvps.going : null;
   const where = e?.format === 'online' ? FORMAT_LABELS.online : [e?.venueName, e?.venueAddress].filter(Boolean).join(', ');
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
   const items: {label: string; value: React.ReactNode}[] = [];
@@ -68,7 +71,7 @@ function HubOverview({eventId, onTab}: HubOverviewProps) {
         <div className="hub-glance">
           <div className="hub-glance-head">
             <p className="hub-glance-count">
-              {counts ? counts.confirmed : '–'}
+              {going ?? '–'}
               <span className="muted"> {e?.capacity ? `of ${e.capacity} going` : 'going'}</span>
             </p>
             <div className="hub-glance-flags">
@@ -77,7 +80,7 @@ function HubOverview({eventId, onTab}: HubOverviewProps) {
               {a && a.rsvps.maybe > 0 && <Badge>{a.rsvps.maybe} maybe</Badge>}
             </div>
           </div>
-          {counts && e?.capacity ? <ProgressBar value={counts.confirmed} max={e.capacity} label={`${counts.confirmed} of ${e.capacity} seats taken`} /> : null}
+          {going !== null && e?.capacity ? <ProgressBar value={Math.min(going, e.capacity)} max={e.capacity} label={`${going} of ${e.capacity} going`} /> : null}
         </div>
       </Card>
       <div className="hub-quick">
@@ -143,6 +146,37 @@ export function EventHub({eventId}: {eventId: string}) {
     }
   };
 
+  // The header read failed and there is nothing to show: say so instead of leaving every tab loading.
+  if (!e && event.error) {
+    const missing = event.error instanceof ApiError && (event.error.status === 404 || event.error.status === 403);
+    return (
+      <div className="app-page screen-event-hub">
+        <header className="hub-head">
+          <Link className="hub-crumb" to={'/events' as never}>
+            <Icon name="arrow-left" size={16} />
+            Events
+          </Link>
+        </header>
+        <Card>
+          {missing ? (
+            <EmptyState
+              icon="search"
+              title="Event not found"
+              action={
+                <Link className={buttonClass({variant: 'secondary'})} to={'/events' as never}>
+                  Back to events
+                </Link>
+              }>
+              It may have been deleted, or the link is wrong.
+            </EmptyState>
+          ) : (
+            <ErrorNote error={event.error} />
+          )}
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="app-page screen-event-hub">
       <header className="hub-head">
@@ -176,7 +210,16 @@ export function EventHub({eventId}: {eventId: string}) {
             )}
             {e && (
               <HubActions
-                event={{id: e.id, title: e.title, status: e.status, startAt: e.startAt, endAt: e.endAt, timezone: (e as HubDetail).timezone ?? 'UTC'}}
+                event={{
+                  id: e.id,
+                  title: e.title,
+                  status: e.status,
+                  startAt: e.startAt,
+                  endAt: e.endAt,
+                  timezone: (e as HubDetail).timezone ?? 'UTC',
+                  counts: (e as HubDetail).counts,
+                  hasHeld: (e as HubDetail).hasHeld,
+                }}
                 onPublishProblem={setProblem}
               />
             )}

@@ -12,8 +12,9 @@
  * prefetched first (astro.config.mjs). Page scripts run on `astro:page-load`
  * (performance.md "Scripts with the ClientRouter"); the portal has no router, so
  * it is a full load. Only links to PRERENDERED pages carry `data-astro-prefetch` (fetched on hover;
- * the header nav as soon as it is on screen). Pages rendered per visit
- * (`/events/*`, `/dashboard`) answer `no-store`: a prefetch of them is thrown away.
+ * the header nav as soon as it is on screen). Pages rendered per visit answer `no-store`
+ * (`/dashboard`; unlisted, cancelled and invite event pages): a prefetch of them is thrown away.
+ * A public event page reads no visitor (`publicPageContext`) and passes `isStatic`, like a prerendered page.
  *
  * Structured data (JSON-LD, src/lib/seo.ts): the home page gets `WebSite` +
  * `Organization`; a page passes its own in `jsonLd` (a post, an event).
@@ -23,6 +24,8 @@ import '../styles/public.css';
 import '../styles/poster.css';
 
 import {ClientRouter} from 'astro:transitions';
+// The body font's latin file, fetched with the HTML instead of after the CSS (every page's first text uses it).
+import uiFontUrl from '@fontsource-variable/hanken-grotesk/files/hanken-grotesk-latin-wght-normal.woff2?url';
 
 import BrandMark from '../components/BrandMark.astro';
 import {NAV, SITE, withName} from '../content/site';
@@ -54,6 +57,8 @@ interface Props {
    * a renamed site (`/site-api/site`) after load.
    */
   isStatic?: boolean;
+  /** A list page's JSON route (`/site-api/...`): the browser starts fetching it with the page, not after it. */
+  preloadData?: string;
   /** Keep the page out of search results (account pages, private pages). */
   noindex?: boolean;
   /** The page URL carries a secret (a reset or confirmation token): send no Referer. */
@@ -63,7 +68,6 @@ interface Props {
   /**
    * A guest-facing page (event, RSVP, invite, poll, privacy, errors): like the original app's
    * PublicLayout it has no site header, only a skip link, the page and a thin "Powered by" footer.
-   * `?embed=1` drops that chrome too (the iframe embed).
    */
   guest?: boolean;
   /** A guest page that wants no "Powered by / Privacy" footer (the live poll, used on a phone in the room). */
@@ -83,6 +87,7 @@ const {
   publishedAt,
   updatedAt,
   isStatic = false,
+  preloadData,
   noindex = false,
   secretInUrl = false,
   jsonLd,
@@ -94,7 +99,6 @@ const {
 const brand = brandProp !== undefined ? brandProp : guest ? await read<{brandColor: string | null; fontPreset: string; logoUrl?: string | null}>(backend(Astro.request)['event-settings'].brand.$get()) : null;
 const brandColor = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : undefined;
 const fontPreset = brand?.fontPreset === 'serif' || brand?.fontPreset === 'rounded' ? brand.fontPreset : undefined;
-const embed = guest && Astro.url.searchParams.get('embed') === '1';
 // The host's own logo (a public file on this site), else the site logo; shown in the guest header.
 const guestLogo = brand?.logoUrl?.startsWith('/__platform/files/') ? brand.logoUrl : (site?.logo ?? null);
 const name = site?.name ?? 'CreatorCrowdHub';
@@ -127,6 +131,8 @@ const structured = indexable
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
     {canonical && <link rel="canonical" href={canonical} />}
+    <link rel="preload" href={uiFontUrl} as="font" type="font/woff2" crossorigin="anonymous" />
+    {preloadData && <link rel="preload" href={preloadData} as="fetch" crossorigin="anonymous" />}
     {noindex && <meta name="robots" content="noindex" />}
     {secretInUrl && <meta name="referrer" content="no-referrer" />}
     <meta property="og:site_name" content={name} />
@@ -173,7 +179,7 @@ const structured = indexable
     </script>
   </head>
   <body class:list={['pub', {'pub-guest': guest}]} data-viewer={viewer.state} data-static={hydrate ? '1' : undefined}>
-    {!embed && <a class={guest ? 'g-skip' : 'skip-link'} href="#main">Skip to content</a>}
+    <a class={guest ? 'g-skip' : 'skip-link'} href="#main">Skip to content</a>
     {!guest && (
     <header class="site-header">
       <div class="wrap site-header-inner">
@@ -235,7 +241,7 @@ const structured = indexable
     </header>
     )}
 
-    {guest && !embed && guestLogo && (
+    {guest && guestLogo && (
       <header class="g-brand">
         <div class="page-container">
           <a href="/" data-astro-prefetch><img class="g-brand-logo" src={guestLogo} alt={name} height="36" /></a>
@@ -245,7 +251,7 @@ const structured = indexable
 
     <slot />
 
-    {guest && !embed && !noFooter && (
+    {guest && !noFooter && (
       <footer class="g-footer">
         <div class="page-container g-footer-in">
           <span>Powered by <a href="/" data-astro-prefetch>{name}</a></span>
@@ -313,6 +319,9 @@ const structured = indexable
       import {hydrateStaticPage} from '../platform/static-page';
       import {notifyPaymentOpener} from '../lib/checkout-session';
       import {applyPageBrand} from '../lib/event-brand';
+      import {installPageProgress} from '../lib/page-progress';
+
+      installPageProgress();
 
       // Every button shows when it is busy (AGENTS.md "Buttons and forms").
       const busy = (button: HTMLButtonElement, label?: string) => {

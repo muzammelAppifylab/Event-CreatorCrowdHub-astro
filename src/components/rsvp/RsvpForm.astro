@@ -16,6 +16,11 @@ interface Props {
   token?: string;
   /** From an invite landing: sent with the RSVP so a private event accepts it. */
   inviteToken?: string;
+  /**
+   * A private event opened with an invite: only the invited address may RSVP (the server refuses any
+   * other, audit M-5), so the email shows read-only. Only on the invitee's own (uncached) invite page.
+   */
+  lockEmail?: boolean;
   /** The host's name, for the marketing-consent line ("Send me news and offers from …"). */
   hostName?: string;
   values?: {
@@ -29,8 +34,14 @@ interface Props {
   };
 }
 
-const {view, mode, token, inviteToken, hostName = 'this host', values = {}} = Astro.props;
+const {view, mode, token, inviteToken, lockEmail = false, hostName = 'this host', values = {}} = Astro.props;
 const editing = mode === 'edit';
+const emailLocked = editing || (lockEmail && !!values.email);
+const emailHint = editing
+  ? 'To use a different email, cancel this RSVP and RSVP again.'
+  : emailLocked
+    ? `This invitation is for ${values.email}.`
+    : 'Your confirmation and reminders go here.';
 const id = editing ? 'rsvp-edit' : 'rsvp-create';
 const answers = values.answers ?? {};
 const anyPaid = view.ticketTypes.some(t => t.priceCents > 0);
@@ -83,13 +94,13 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
       autocapitalize="none"
       spellcheck="false"
       value={values.email ?? ''}
-      readonly={editing}
+      readonly={emailLocked}
       aria-required="true"
-      aria-readonly={editing ? 'true' : undefined}
+      aria-readonly={emailLocked ? 'true' : undefined}
       aria-describedby={`${id}-email-hint`}
     />
     <p class="field-hint" id={`${id}-email-hint`}>
-      {editing ? 'To use a different email, cancel this RSVP and RSVP again.' : 'Your confirmation and reminders go here.'}
+      {emailHint}
     </p>
   </div>
 
@@ -172,7 +183,7 @@ const optional = (required: boolean) => (required ? 'required' : 'optional');
   }
 
   <div class="g-check">
-    <input id={`${id}-consent`} name="marketingConsent" type="checkbox" checked={values.marketingConsent === true} aria-describedby={`${id}-consent-hint`} />
+    <input id={`${id}-consent`} name="marketingConsent" type="checkbox" checked={values.marketingConsent !== false} aria-describedby={`${id}-consent-hint`} />
     <div class="g-check-text">
       <label for={`${id}-consent`}>Send me news and offers from {hostName}</label>
       <p class="g-check-hint" id={`${id}-consent-hint`}>Optional. Unsubscribe any time.</p>

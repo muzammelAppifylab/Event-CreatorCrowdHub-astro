@@ -182,8 +182,12 @@ function Broadcast({eventId}: {eventId: string}) {
     mutationFn: (values: {segment: string; subject: string; body: string}) =>
       sendJson<BroadcastResult>('POST', `/events/${eventId}/messages/broadcast`, {...values, expectedCount: expected, idempotencyKey: key}),
     onSuccess: data => {
+      const n = data.queued ?? data.message.sentCount;
+      const guests = `${n} ${n === 1 ? 'guest' : 'guests'}`;
       toast.success(
-        data.failed ? `Sent to ${data.message.sentCount}. ${data.failed} could not be delivered.` : `Sent to ${data.message.sentCount} ${data.message.sentCount === 1 ? 'guest' : 'guests'}.`
+        data.message.sentCount + data.failed >= n
+          ? data.failed ? `Sent to ${data.message.sentCount}. ${data.failed} could not be delivered.` : `Sent to ${guests}.`
+          : `Sending to ${guests}. The log shows each email as it goes out.`
       );
       form.reset({segment: form.values.segment, subject: '', body: ''});
       setKey(crypto.randomUUID());
@@ -542,8 +546,8 @@ function MessageLog({eventId}: {eventId: string}) {
             </EmptyState>
           }
         />
+        <LoadMore query={log} count={rows?.length} noun={['message', 'messages']} />
       </Card>
-      <LoadMore query={log} />
     </>
   );
 }

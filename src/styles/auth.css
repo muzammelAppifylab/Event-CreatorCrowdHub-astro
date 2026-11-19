@@ -195,6 +195,7 @@
 @media (max-width: 59.99rem) {
   .auth-main {
     align-items: flex-start;
-    padding-top: clamp(28px, 8vw, 56px);
+    /* keep the 4.5rem the shell is pulled up under the sticky header, or the h1 hides behind it */
+    padding-top: calc(clamp(28px, 8vw, 56px) + 4.5rem);
   }
 }

@@ -3,11 +3,13 @@
  * Invite landing (`/i/<token>`): the link in an invitation email. Works for private events too (the invite
  * token is what makes them visible). It shows the event page of the original app with the RSVP form
  * pre-filled with the invitee; the token travels with the RSVP so it counts as invited. Never cached,
- * never indexed. A bad or bounced invite is a real 404.
+ * never indexed. A bad or bounced invite is a real 404. A live invite whose event the host unpublished
+ * or deleted is a 410 "no longer available" page (title only, no RSVP form).
  */
 import ErrorScreen from '../../components/ErrorScreen.astro';
 import EventView from '../../components/EventView.astro';
-import {rsvpRead} from '../../components/rsvp/server';
+import EventUnavailable from '../../components/rsvp/EventUnavailable.astro';
+import {rsvpReadOr410} from '../../components/rsvp/unavailable';
 import Base from '../../layouts/Base.astro';
 import {routeCopy} from '../../lib/guest-format';
 import type {InviteView} from '../../lib/rsvp-types';
@@ -16,15 +18,17 @@ import {pageContext} from '../../server/page';
 const token = Astro.params.token ?? '';
 const [{site, viewer}, found] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  rsvpRead<InviteView>(Astro.request, `/invite/${encodeURIComponent(token)}`),
+  rsvpReadOr410<InviteView>(Astro.request, `/invite/${encodeURIComponent(token)}`),
 ]);
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 Astro.response.headers.set('X-Robots-Tag', 'noindex');
 const data = found.data;
-const missing = !data && found.status === 404;
+// 410: a live invite whose event the host unpublished or deleted: a friendly page, no RSVP form.
+const {unavailable} = found;
+const missing = !data && !unavailable && found.status === 404;
 if (!data) {
-  Astro.response.status = missing ? 404 : 503;
-  if (!missing) Astro.response.headers.set('Retry-After', '60');
+  Astro.response.status = unavailable ? 410 : missing ? 404 : 503;
+  if (!unavailable && !missing) Astro.response.headers.set('Retry-After', '60');
 }
 const event = data?.event;
 const incomplete = routeCopy.inviteIncomplete;
@@ -42,6 +46,10 @@ const failed = routeCopy.loadFailed;
           invite={{name: data.invite.name, email: data.invite.email, token: data.invite.token, alreadyResponded: data.alreadyResponded}}
         />
       </main>
+    </Base>
+  ) : unavailable ? (
+    <Base site={site} viewer={viewer} title="Event no longer available" noindex secretInUrl guest>
+      <EventUnavailable title={unavailable.event.title} />
     </Base>
   ) : missing ? (
     <Base site={site} viewer={viewer} title="Invite not found" noindex guest>

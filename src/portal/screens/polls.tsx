@@ -32,9 +32,12 @@ import {
   EmptyState,
   ErrorNote,
   Field,
+  Icon,
   IconButton,
   Menu,
+  Notice,
   PageHeader,
+  ProgressBar,
   RadioCards,
   rules,
   StatusBadge,
@@ -43,7 +46,7 @@ import {
   useToast,
 } from '../ui';
 
-const STATUS_TONES: Record<PollStatus, 'neutral' | 'success' | 'warning'> = {draft: 'neutral', open: 'success', closed: 'warning'};
+const STATUS_TONES: Record<PollStatus, 'neutral' | 'success' | 'info'> = {draft: 'neutral', open: 'success', closed: 'info'};
 const STATUS_LABELS: Record<PollStatus, string> = {draft: 'Draft', open: 'Open', closed: 'Closed'};
 const MAX_OPTIONS = 10;
 const CHOICE: PollType[] = ['single_choice', 'multi_choice'];
@@ -164,19 +167,20 @@ export function Polls({eventId}: {eventId: string}) {
         <div>
           <span className="cell-title">{p.question}</span>
           <span className="cell-sub">
-            {POLL_TYPE_LABELS[p.type].label}
-            {p.results ? ` · ${p.results.totalVoters} ${p.results.totalVoters === 1 ? 'vote' : 'votes'}` : ''} · {p.anonymous ? 'Anonymous' : 'Named'}
+            {POLL_TYPE_LABELS[p.type].label} · {p.anonymous ? 'Anonymous' : 'Named'}
           </span>
-          {p.results && p.results.options.length > 0 && (
-            <div className="poll-result-bars" aria-label="Results">
+          {p.results && p.results.totalVoters > 0 && p.results.options.length > 0 && (
+            <ul className="poll-result-bars" aria-label={`Results: ${p.question}`}>
               {p.results.options.map(o => (
-                <div key={o.id} className="poll-result-row">
-                  <span>{o.label}</span>
-                  <progress max={100} value={o.percent} aria-label={`${o.label}: ${o.percent}%`} />
-                  <span>{Math.round(o.percent)}%</span>
-                </div>
+                <li key={o.id} className="poll-result-row">
+                  <span className="poll-result-label">{o.label}</span>
+                  <ProgressBar value={o.percent} label={`${o.label}: ${Math.round(o.percent)}%`} />
+                  <span className="poll-result-value">
+                    {Math.round(o.percent)}% <span className="muted">({o.count})</span>
+                  </span>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
           {p.results?.rating && p.results.rating.count > 0 && (
             <span className="cell-sub">Average {p.results.rating.average?.toFixed(1)} of 5</span>
@@ -217,61 +221,74 @@ export function Polls({eventId}: {eventId: string}) {
   const isNew = editing === 'new';
   const saveFailed = save.error && !(save.error instanceof ApiError && Object.keys(save.error.fields).length);
 
+  const voteUrl = event ? `${window.location.origin}/p/${event.pollJoinCode}` : '';
+  const live = list?.find(p => p.status === 'open');
+
   return (
     <div className="app-page screen-polls">
-      <div className="toolbar">
-        <div>
-          <p className="muted">{
-            event ? (
-              <>
-                Guests vote at{' '}
-                <strong>
-                  {window.location.host}/p/{event.pollJoinCode}
-                </strong>
-                . One poll is open at a time.
-              </>
-            ) : (
-              'Ask the room a question and watch the answers arrive.'
-            )
-          }
-          </p>
-          {event && (
-            <p className="muted">
-              Join code <strong>{formatJoinCode(event.pollJoinCode)}</strong>
-            </p>
-          )}
-        </div>
-        <div className="toolbar-group">
-          <>
-            {event && (
-              <Button
-                variant="secondary"
-                icon="copy"
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(`${window.location.origin}/p/${event.pollJoinCode}`)
-                    .then(() => toast.success('Vote link copied.'), () => toast.danger('Could not copy the link.'))
-                }>
-                Copy vote link
-              </Button>
-            )}
-            {event && <QrCode value={`${window.location.origin}/p/${event.pollJoinCode}`} label={`QR code to vote, join code ${formatJoinCode(event.pollJoinCode)}`} size={72} />}
-            {list && list.some(p => p.status !== 'draft') && (
-              <Button variant="secondary" icon="file" onClick={() => void exportEventPollsCsv(eventId, toast)}>
-                Export CSV
-              </Button>
-            )}
-            {event && (
-              <Link to={`/polls/${event.pollJoinCode}/present` as never} className={buttonClass({variant: 'secondary'})}>
-                Presenter view
-              </Link>
-            )}
-            <Button icon="plus" onClick={() => start()} disabled={save.isPending}>
-              New poll
+      <div className="polls-head">
+        {event ? (
+          <Card as="div" className="polls-join">
+            <QrCode value={voteUrl} label={`QR code to vote, join code ${formatJoinCode(event.pollJoinCode)}`} size={96} />
+            <div className="polls-join-text">
+              <span className="polls-join-label">Join code</span>
+              <strong className="polls-join-code">{formatJoinCode(event.pollJoinCode)}</strong>
+              <span className="muted polls-join-url">
+                {window.location.host}/p/{event.pollJoinCode}
+              </span>
+              <span className="muted">Guests scan or open the link to vote. One poll is open at a time.</span>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="copy"
+              onClick={() =>
+                void navigator.clipboard.writeText(voteUrl).then(
+                  () => toast.success('Vote link copied.'),
+                  () => toast.danger('Could not copy the link.'),
+                )
+              }>
+              Copy link
             </Button>
-          </>
+          </Card>
+        ) : (
+          <p className="muted">Ask the room a question and watch the answers arrive.</p>
+        )}
+        <div className="toolbar-group polls-actions">
+          {list && list.some(p => p.status !== 'draft') && (
+            <Button variant="ghost" icon="file" onClick={() => void exportEventPollsCsv(eventId, toast)}>
+              Export CSV
+            </Button>
+          )}
+          {event && (
+            <Link to={`/polls/${event.pollJoinCode}/present` as never} className={buttonClass({variant: 'secondary'})}>
+              <Icon name="monitor" size={16} /> Presenter view
+            </Link>
+          )}
+          <Button icon="plus" onClick={() => start()} disabled={save.isPending}>
+            New poll
+          </Button>
         </div>
       </div>
+      {live && (
+        <Notice
+          tone="success"
+          title={`Live now: “${live.question}”`}
+          action={
+            <Button
+              variant="secondary"
+              size="sm"
+              icon="ban"
+              pending={act.isPending && act.variables?.id === live.id}
+              pendingLabel="Closing…"
+              disabled={busyKey !== null}
+              onClick={() => act.mutate({id: live.id, action: 'close'})}>
+              Close poll
+            </Button>
+          }>
+          {live.results?.totalVoters ?? 0} {(live.results?.totalVoters ?? 0) === 1 ? 'answer' : 'answers'} so far. Guests can vote until you close it.
+        </Notice>
+      )}
       {act.error && <ErrorNote error={act.error} />}
       {remove.error && <ErrorNote error={remove.error} />}
       <Card flush>

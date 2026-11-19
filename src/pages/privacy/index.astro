@@ -20,8 +20,10 @@ const {site, viewer} = await staticContext(Astro.request);
       </p>
       <h2>Updates from the host</h2>
       <p>
-        Updates are off unless you tick the box when you RSVP, and they only start once you click "Yes, send me updates" in the email
-        we send you. Every update has an unsubscribe link, and it takes one click.
+        Marketing updates are off unless you tick the box when you RSVP, and they only start once you click "Yes, send me updates"
+        in the email we send you. Every email we send you has an unsubscribe link. Unsubscribing stops marketing updates and the
+        host's announcements to all of your RSVPs with that address; emails about your RSVP itself (confirmation, reminders,
+        a cancellation) still arrive.
       </p>
       <h2>Your link</h2>
       <p>
@@ -31,17 +33,28 @@ const {site, viewer} = await staticContext(Astro.request);
       <h2>Download or erase your data</h2>
       <p>
         From your private link you can download everything we hold about you for that event as a JSON file, or erase it. Erasing
-        removes your name, email and answers and frees your seat. Payment records stay, without your name.
+        removes your name, email, answers and the host's invitation to you, and frees your seat for the next person on the waitlist.
+        Payment records stay for accounting (amount, currency, status and date), without your name, email or a link back to you.
+        We keep a one-way fingerprint (a hash) of your email address and the event, only so that we can erase your RSVP again if
+        restoring a backup of our data ever brings it back.
       </p>
       <h2>How long we keep it</h2>
       <p>
-        Guest details are removed two years after the event ends. The download link works for 180 days after the event; erasing and
-        unsubscribing always work.
+        Guest details, and the host's invitations to people who never replied, are removed two years after the event ends. Until then
+        you can download, erase or unsubscribe at any time, even if the event was cancelled or taken down.
       </p>
       <h2>Visits</h2>
       <p>
-        We count event page visits with a salted hash that changes every day, so a visit cannot be tied to you or followed from one
-        day to the next. We do not store your IP address.
+        We count event page visits with a hash of your IP address and browser, salted with a random value created each day and deleted
+        after two days, so visits are not followed from one day to the next. We do not store your IP address, and once a day's value
+        is deleted nobody, us included, can tell from the hash who visited.
+      </p>
+      <h2>Who handles your data for us</h2>
+      <p>
+        The site runs on Cloudflare. Emails are sent through our email provider (Resend, when the host has set it up). Ticket payments
+        are handled by the payment platform; we never see card details. If the host connects webhooks, your RSVP (name, email,
+        answer and status) is sent to the address the host chose. Event cover images may be loaded from the host's image host,
+        which then sees your IP address like any website you visit.
       </p>
     </div>
   </div></main>

@@ -194,11 +194,13 @@ export function formatDay(iso: string, timeZone?: string): string {
   }
 }
 
-/** "18:30–20:00 GMT+1" in `timeZone`. */
+/** "18:30–20:00 GMT+1" in `timeZone`; an end on a later day names it: "22:00–Sun 2 Nov, 02:00 GMT". */
 export function formatRange(startIso: string, endIso: string | undefined, timeZone?: string): string {
   try {
     const zone = new Intl.DateTimeFormat('en-GB', {timeZoneName: 'short', timeZone}).formatToParts(new Date(startIso)).find(p => p.type === 'timeZoneName')?.value ?? '';
-    return `${formatClock(startIso, timeZone)}${endIso ? `–${formatClock(endIso, timeZone)}` : ''} ${zone}`.trim();
+    const nextDay = endIso && formatDay(endIso, timeZone) !== formatDay(startIso, timeZone);
+    const end = endIso ? (nextDay ? formatShortWhen(endIso, timeZone) : formatClock(endIso, timeZone)) : '';
+    return `${formatClock(startIso, timeZone)}${end ? `–${end}` : ''} ${zone}`.trim();
   } catch {
     return '';
   }

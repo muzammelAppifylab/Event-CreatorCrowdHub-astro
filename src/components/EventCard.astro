@@ -35,11 +35,11 @@ const price =
 const venue = event.format === 'online' ? guestCopy.format.online : (event.venueName ?? guestCopy.format[event.format]);
 ---
 
-<a class="g-tile" href={href} data-astro-prefetch>
+<a class="g-tile" href={href}>
   <div class="g-tile-art">
     {
       event.coverImageUrl ? (
-        <img src={event.coverImageUrl} alt="" loading="lazy" width="300" height="400" />
+        <img src={event.coverImageUrl} alt="" loading="lazy" decoding="async" width="300" height="400" />
       ) : (
         <Poster design={event.coverPoster} seed={event.id ?? event.slug} text={posterTextFor(event, event.coverStyle)} palette={event.coverStyle?.palette} />
       )

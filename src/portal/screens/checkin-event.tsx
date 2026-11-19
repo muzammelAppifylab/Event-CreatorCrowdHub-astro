@@ -400,7 +400,7 @@ export function OnlineAttendance({eventId}: {eventId: string}) {
               </div>
             ))}
           </div>
-          <LoadMore query={attendees} />
+          <LoadMore query={attendees} count={rows?.length} noun={['guest', 'guests']} />
           <p className="muted">Tick the guests who joined, then mark them attended.</p>
           <BulkBar count={selected.size} noun={selected.size === 1 ? 'guest selected' : 'guests selected'} onClear={() => setSelected(new Set())}>
             <BulkAction icon="check-circle" label={`Mark ${selected.size} attended`} pending={mark.isPending} onClick={() => mark.mutate([...selected])} />

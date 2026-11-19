@@ -1,10 +1,11 @@
-import {Hono} from 'hono';
+import {Hono, type Context} from 'hono';
 import {validator} from 'hono/validator';
 
 import {Prisma} from '../../generated/prisma/client';
 import type {PrismaClient} from '../../generated/prisma/client';
 import {pollJoinCode, withUniqueRetry} from '../../domain/codes';
 import {uniqueSlug} from '../../domain/slug';
+import {clearPublicEvents} from '../event-cache';
 import {
   type AdminEventDetail,
   type AdminEventSummary,
@@ -26,23 +27,26 @@ import {
   type QuestionInput,
   type QuestionType,
   type ReminderRuleValues,
+  RESERVED_SLUGS,
   ticketPriceError,
   type TicketValues,
   toIso,
   DEFAULT_EVENT_SETTINGS,
 } from '../../lib/event-schemas';
+import {keysetAfter} from '../../lib/text';
 import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import type {Viewer} from '../../platform/types';
 import {STARTER_REMINDER_RULES} from '../../domain/reminders';
 import {PERMISSIONS} from '../permissions';
 import {nextSortOrder, validateOrder} from '../sort-order';
-import {queueGuestEmail} from '../jobs/guest-emails';
+import {enqueueEventCancelledEmails, kickGuestEmails} from '../jobs/outbox';
 import {notifyPromoted} from '../jobs/holds';
-import {lockEvent} from '../jobs/shared';
+import {type Db, lockEvent} from '../jobs/shared';
 import {promoteWaitlist} from '../jobs/waitlist';
 import {markEventOrdersRefundDue} from '../ticket-checkout';
 import {emitSeated} from '../webhook-emit';
+import {notFound as notFoundProblem, parsePageCursor} from '../validate';
 
 /**
  * Events, admin side. Everything here needs `site:event:manage` (`EVENT_MANAGE`);
@@ -52,10 +56,10 @@ import {emitSeated} from '../webhook-emit';
  *   POST   /                                      create a draft (defaults from event settings)
  *   GET    /:id                                   one event, with its questions
  *   PATCH  /:id                                   edit; only the keys sent change
- *   POST   /:id/publish | /unpublish | /cancel    status changes
+ *   POST   /:id/publish | /unpublish | /cancel    status changes (unpublish: 409 event_has_guests while guests or paid orders remain)
  *   GET    /:id/cancel-preview                    who a cancellation affects
  *   POST   /:id/duplicate {startAt,endAt,title?}  a draft copy (questions, tickets, email rules)
- *   DELETE /:id                                   soft delete (drafts only)
+ *   DELETE /:id                                   soft delete (drafts with no guests or paid orders only)
  *   GET    /:id/ticket-types                      ticket types of an event
  *   POST   /:id/ticket-types                      add one
  *   PATCH  /:id/ticket-types/:ticketId            edit
@@ -166,7 +170,7 @@ const toQuestion = (q: QuestionRow): AdminQuestion => ({
   required: q.required,
 });
 
-function toSummary(e: SummaryRow, counts: AdminEventSummary['counts']): AdminEventSummary {
+function toSummary(e: SummaryRow, guests: GuestState): AdminEventSummary {
   return {
     id: e.id,
     slug: e.slug,
@@ -180,13 +184,14 @@ function toSummary(e: SummaryRow, counts: AdminEventSummary['counts']): AdminEve
     capacity: e.capacity,
     coverImageUrl: e.coverImageUrl,
     coverPoster: e.coverPoster,
-    counts,
+    counts: guests.counts,
+    hasHeld: guests.hasHeld,
   };
 }
 
-function toDetail(e: EventRow, questions: QuestionRow[], counts: AdminEventSummary['counts']): AdminEventDetail {
+function toDetail(e: EventRow, questions: QuestionRow[], guests: GuestState): AdminEventDetail {
   return {
-    ...toSummary(e, counts),
+    ...toSummary(e, guests),
     description: e.description,
     coverStyle: coverStyleOf(e.coverStyle),
     venueName: e.venueName,
@@ -283,30 +288,57 @@ function columnsOf(v: EventValues) {
 const isUniqueViolation = (err: unknown) => (err as {code?: unknown} | null)?.code === 'P2002';
 const slugTaken = () => invalid({slug: 'Another event already uses this link.'});
 
-async function emptyCountsFor(db: PrismaClient, ids: string[]) {
-  const byEvent = new Map<string, AdminEventSummary['counts']>();
-  for (const id of ids) byEvent.set(id, {confirmed: 0, waitlisted: 0, pending: 0});
+/** Per event: the guest counts the dashboard shows, and whether the server would refuse unpublish / delete. */
+export type GuestState = {counts: AdminEventSummary['counts']; hasHeld: boolean};
+
+type GuestStateRow = {eventId: string; confirmed: number; waitlisted: number; pending: number; hasHeld: boolean};
+
+/**
+ * ONE query for a page of events (at most PAGE_SIZE ids): the counts, plus `hasHeld`, the same rule
+ * as `hasGuestsOrPaidOrders` (a guest holding or waiting for a place, awaiting payment included, or a
+ * paid order), so the dashboard offers Unpublish / Delete only when the server will accept it.
+ * Indexed EXISTS probes, no extra round trip; the 409 stays the safety net.
+ */
+async function guestStateFor(db: PrismaClient, ids: string[]): Promise<Map<string, GuestState>> {
+  const byEvent = new Map<string, GuestState>();
+  for (const id of ids) byEvent.set(id, {counts: {confirmed: 0, waitlisted: 0, pending: 0}, hasHeld: false});
   if (!ids.length) return byEvent;
-  const rows = await db.rsvp.groupBy({
-    by: ['eventId', 'status'],
-    where: {eventId: {in: ids}, status: {in: ['confirmed', 'waitlisted', 'pending']}},
-    _count: {_all: true},
-  });
+  const rows = await db.$queryRaw<GuestStateRow[]>`
+    SELECT e.id::text AS "eventId", c.confirmed, c.waitlisted, c.pending,
+      (c.confirmed + c.waitlisted + c.pending > 0
+        OR EXISTS (SELECT 1 FROM rsvps r WHERE r.event_id = e.id AND r.status = 'awaiting_payment')
+        OR EXISTS (SELECT 1 FROM ticket_orders o JOIN rsvps r ON r.id = o.rsvp_id
+                   WHERE r.event_id = e.id AND o.status = 'paid')) AS "hasHeld"
+    FROM unnest(${ids}::uuid[]) AS e(id)
+    CROSS JOIN LATERAL (
+      SELECT count(*) FILTER (WHERE r.status = 'confirmed')::int AS confirmed,
+             count(*) FILTER (WHERE r.status = 'waitlisted')::int AS waitlisted,
+             count(*) FILTER (WHERE r.status = 'pending')::int AS pending
+      FROM rsvps r
+      WHERE r.event_id = e.id AND r.status IN ('confirmed', 'waitlisted', 'pending')
+    ) AS c`;
   for (const r of rows) {
-    const counts = byEvent.get(r.eventId);
-    if (counts && (r.status === 'confirmed' || r.status === 'waitlisted' || r.status === 'pending')) counts[r.status] = r._count._all;
+    if (!byEvent.has(r.eventId)) continue;
+    byEvent.set(r.eventId, {
+      counts: {confirmed: Number(r.confirmed) || 0, waitlisted: Number(r.waitlisted) || 0, pending: Number(r.pending) || 0},
+      hasHeld: r.hasHeld === true,
+    });
   }
   return byEvent;
 }
 
+/** The event's questions, in the host's order (bounded: the form allows far fewer). */
+const questionsOf =(db: PrismaClient, eventId: string) =>
+  db.rsvpQuestion.findMany({where: {eventId}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}], take: 100});
+
+/** One round trip: the event, its questions and its counts are all keyed by the id, so they are read together. */
 async function loadDetail(db: PrismaClient, id: string): Promise<AdminEventDetail | null> {
-  const event = await db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect});
-  if (!event) return null;
-  const [questions, counts] = await Promise.all([
-    db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]}),
-    emptyCountsFor(db, [id]),
+  const [event, questions, guests] = await Promise.all([
+    db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}),
+    questionsOf(db, id),
+    guestStateFor(db, [id]),
   ]);
-  return toDetail(event, questions, counts.get(id)!);
+  return event ? toDetail(event, questions, guests.get(id)!) : null;
 }
 
 /** Event settings the create flow inherits (timezone, Maybe, guest list, poster, email rules). */
@@ -346,13 +378,16 @@ const questionData = (eventId: string, q: QuestionInput, id: string) => ({
   required: q.required,
 });
 
-/** Makes the event's questions exactly `wanted`: kept ids update in place, the rest are created or deleted. */
-async function saveQuestions(db: PrismaClient, eventId: string, wanted: QuestionInput[]) {
-  const existing = await db.rsvpQuestion.findMany({where: {eventId}, select: {id: true}});
+/**
+ * The writes that make the event's questions exactly `wanted` (kept ids update in place, the rest
+ * are created or deleted), for the caller's batch transaction. `existing` is the event's questions
+ * as just read, so nothing is read again.
+ */
+function questionWrites(db: PrismaClient, eventId: string, existing: {id: string}[], wanted: QuestionInput[]) {
   const own = new Set(existing.map(q => q.id));
   const keep = new Set(wanted.flatMap(q => (q.id && own.has(q.id) ? [q.id] : [])));
   const drop = [...own].filter(id => !keep.has(id));
-  await db.$transaction([
+  return [
     ...(drop.length ? [db.rsvpQuestion.deleteMany({where: {eventId, id: {in: drop}}})] : []),
     ...wanted.map((q, sortOrder) =>
       q.id && own.has(q.id)
@@ -362,7 +397,7 @@ async function saveQuestions(db: PrismaClient, eventId: string, wanted: Question
           })
         : db.rsvpQuestion.create({data: {...questionData(eventId, q, uuidV7()), sortOrder}, select: {id: true}})
     ),
-  ]);
+  ];
 }
 
 /** A normalised JSON body, or a 422 with the fields. */
@@ -378,13 +413,6 @@ const listQuery = validator('query', (value, c) => {
   if (!(EVENT_LIST_TABS as readonly string[]).includes(tab)) return c.json(invalid({tab: 'Choose upcoming, past or drafts.'}), 422);
   return {tab: tab as EventListTab, before: typeof value.before === 'string' ? value.before : ''};
 });
-
-/** Cursor `<sort ISO>_<id>`; anything malformed means "first page". */
-function parseCursor(raw: string): {at: Date; id: string} | null {
-  const [iso, id] = raw.split('_');
-  const at = new Date(iso ?? '');
-  return isUuid(id) && !Number.isNaN(at.getTime()) ? {at, id} : null;
-}
 
 const duplicateBody = validator('json', (value, c) => {
   const v = (value ?? {}) as Record<string, unknown>;
@@ -409,8 +437,30 @@ const ticketBody = (partial: boolean) =>
     return parsed.ok ? parsed.value : c.json(invalid(parsed.fields), 422);
   });
 
-const notFound = <T extends {json: (body: unknown, status: 404) => Response}>(c: T, what = 'event') =>
-  c.json(problem('not_found', `No such ${what}.`), 404);
+/** This route's 404 wording ("No such event."), in the shared shape (`validate.ts`). */
+const notFound = (c: Context, what = 'event') => notFoundProblem(c, what, `No such ${what}.`);
+
+/**
+ * H-1: does anyone still expect this event (a guest holding a place or waiting for one) or has anyone
+ * paid for it? Then it can't quietly become a draft or vanish: it has to go through Cancel, which emails
+ * the guests and queues the refunds. ONE query, two EXISTS probes (rsvps(event_id, status), ticket_orders(rsvp_id)).
+ * Call it inside a transaction that already holds `lockEvent`, so no RSVP lands between the check and the write.
+ */
+async function hasGuestsOrPaidOrders(tx: Db, eventId: string): Promise<boolean> {
+  const [row] = await tx.$queryRaw<Array<{held: boolean; paid: boolean}>>`
+    SELECT
+      EXISTS (SELECT 1 FROM rsvps WHERE event_id = ${eventId}::uuid
+              AND status IN ('pending', 'confirmed', 'waitlisted', 'awaiting_payment')) AS held,
+      EXISTS (SELECT 1 FROM ticket_orders o JOIN rsvps r ON r.id = o.rsvp_id
+              WHERE r.event_id = ${eventId}::uuid AND o.status = 'paid') AS paid`;
+  return !!row && (row.held || row.paid);
+}
+
+const hasGuests = (doing: 'unpublished' | 'deleted') =>
+  problem(
+    'event_has_guests',
+    `This event has guests or paid tickets, so it can’t be ${doing}. Cancel the event instead: guests are emailed and paid tickets are marked for refund.`
+  );
 
 // ------------------------------------------------------------------ routes --
 
@@ -421,7 +471,7 @@ export const adminEventRoutes = new Hono<Env>()
     const {tab, before} = c.req.valid('query');
     const db = c.var.db;
     const now = new Date();
-    const cursor = parseCursor(before);
+    const cursor = parsePageCursor(before);
     // upcoming: soonest first; past: latest first; drafts: last edited first.
     const field = tab === 'drafts' ? 'updatedAt' : 'startAt';
     const dir = tab === 'upcoming' ? 'asc' : 'desc';
@@ -431,10 +481,8 @@ export const adminEventRoutes = new Hono<Env>()
         : tab === 'upcoming'
           ? {status: 'published', endAt: {gte: now}}
           : {OR: [{status: 'cancelled'}, {status: 'published', endAt: {lt: now}}]};
-    const op = dir === 'asc' ? 'gt' : 'lt';
-    const cursorWhere: Prisma.EventWhereInput = cursor
-      ? {OR: [{[field]: {[op]: cursor.at}}, {[field]: cursor.at, id: {[op]: cursor.id}}]}
-      : {};
+    // Millisecond cursor vs microsecond column: `keysetAfter` compares at the cursor's precision.
+    const cursorWhere: Prisma.EventWhereInput = cursor ? keysetAfter(field, dir, cursor) : {};
     const rows = await db.event.findMany({
       select: {...summarySelect, updatedAt: true},
       where: {AND: [{deletedAt: null}, tabWhere, cursorWhere]},
@@ -442,10 +490,10 @@ export const adminEventRoutes = new Hono<Env>()
       take: PAGE_SIZE + 1,
     });
     const page = rows.slice(0, PAGE_SIZE);
-    const counts = await emptyCountsFor(db, page.map(e => e.id));
+    const guests = await guestStateFor(db, page.map(e => e.id));
     const last = page.at(-1);
     return c.json({
-      events: page.map(e => toSummary(e, counts.get(e.id)!)),
+      events: page.map(e => toSummary(e, guests.get(e.id)!)),
       nextBefore: rows.length > PAGE_SIZE && last ? `${(field === 'updatedAt' ? last.updatedAt : last.startAt).toISOString()}_${last.id}` : null,
     });
   })
@@ -473,7 +521,7 @@ export const adminEventRoutes = new Hono<Env>()
     if (!done.ok) return c.json(invalid(done.fields), 422);
     const values = done.value;
 
-    const taken = async (slug: string) => (await db.event.findFirst({where: {slug, deletedAt: null}, select: {id: true}})) !== null;
+    const taken = async (slug: string) => RESERVED_SLUGS.has(slug) || (await db.event.findFirst({where: {slug, deletedAt: null}, select: {id: true}})) !== null;
     if (values.slug && (await taken(values.slug))) return c.json(slugTaken(), 422);
     const id = uuidV7();
     // A link the server chose may be taken by a concurrent create between the check and the insert: pick again.
@@ -511,31 +559,38 @@ export const adminEventRoutes = new Hono<Env>()
   .patch('/:id', jsonBody(true), async c => {
     const db = c.var.db;
     const id = c.req.param('id');
-    const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}) : null;
+    if (!isUuid(id)) return notFound(c);
+    const [row, questions] = await Promise.all([db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}), questionsOf(db, id)]);
     if (!row) return notFound(c);
     if (row.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t be edited. Duplicate it to run it again.'), 409);
     const patch = c.req.valid('json');
-    const questions = await db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]});
     const done = completeEvent(valuesOf(row, questions), patch);
     if (!done.ok) return c.json(invalid(done.fields), 422);
     const values = done.value;
-    // More plus-ones means bigger parties: every existing ticket price must still fit (as when a ticket is saved).
-    if (values.maxPlusOnes > row.maxPlusOnes) {
-      const tickets = await db.ticketType.findMany({where: {eventId: id}, select: {priceCents: true, currency: true}, take: MAX_TICKET_TYPES});
-      const tooHigh = tickets.find(t => ticketPriceError(t.priceCents, t.currency, 1 + values.maxPlusOnes));
-      if (tooHigh) return c.json(invalid({maxPlusOnes: 'A ticket price is too high for that many plus-ones. Lower the price or the plus-ones.'}), 422);
-    }
     const slug = patch.slug ?? row.slug;
-    if (slug !== row.slug && (await db.event.findFirst({where: {slug, deletedAt: null, id: {not: id}}, select: {id: true}}))) {
-      return c.json(slugTaken(), 422);
+    // The checks that need a read run together.
+    const [tickets, slugOwner] = await Promise.all([
+      // More plus-ones means bigger parties: every existing ticket price must still fit (as when a ticket is saved).
+      values.maxPlusOnes > row.maxPlusOnes
+        ? db.ticketType.findMany({where: {eventId: id}, select: {priceCents: true, currency: true}, take: MAX_TICKET_TYPES})
+        : Promise.resolve([]),
+      slug !== row.slug ? db.event.findFirst({where: {slug, deletedAt: null, id: {not: id}}, select: {id: true}}) : Promise.resolve(null),
+    ]);
+    if (tickets.some(t => ticketPriceError(t.priceCents, t.currency, 1 + values.maxPlusOnes))) {
+      return c.json(invalid({maxPlusOnes: 'A ticket price is too high for that many plus-ones. Lower the price or the plus-ones.'}), 422);
     }
+    if (slugOwner) return c.json(slugTaken(), 422);
     try {
-      await db.event.update({where: {id}, data: {...columnsOf(values), slug}, select: {id: true}});
+      // The event and its questions change together: one batch transaction.
+      const update = db.event.update({where: {id}, data: {...columnsOf(values), slug}, select: {id: true}});
+      if (patch.questions) await db.$transaction([update, ...questionWrites(db, id, questions, values.questions)]);
+      else await update;
     } catch (err) {
       if (isUniqueViolation(err)) return c.json(slugTaken(), 422);
       throw err;
     }
-    if (patch.questions) await saveQuestions(db, id, values.questions);
+    // The public page shows these columns (and maybe the old slug): clear it now that the save committed.
+    await clearPublicEvents();
     // US-4: more seats (or no limit) go straight to the waitlist; emails are queued after the commit.
     if (row.status === 'published' && (values.capacity === null ? row.capacity !== null : row.capacity !== null && values.capacity > row.capacity)) {
       try {
@@ -543,7 +598,7 @@ export const adminEventRoutes = new Hono<Env>()
           await lockEvent(tx, id);
           return promoteWaitlist(tx, id, new Date());
         });
-        emitSeated(db, id, promoted);
+        await emitSeated(db, id, promoted);
         await notifyPromoted(promoted.map(p => ({rsvpId: p.rsvpId, kind: p.kind, ...(p.kind === 'offer_claim' ? {claimExpiresAt: p.claimExpiresAt} : {})})));
       } catch (err) {
         console.error(`event edit: waitlist promotion failed: ${(err as Error).message}`.slice(0, 200));
@@ -555,16 +610,17 @@ export const adminEventRoutes = new Hono<Env>()
   .post('/:id/publish', async c => {
     const db = c.var.db;
     const id = c.req.param('id');
-    const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}) : null;
+    if (!isUuid(id)) return notFound(c);
+    const [row, questions] = await Promise.all([db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}), questionsOf(db, id)]);
     if (!row) return notFound(c);
     if (row.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t be published again.'), 409);
     if (row.status === 'published') return c.json({event: await loadDetail(db, id)});
     if (row.endAt < new Date()) return c.json(problem('conflict', 'This event has already ended. Change its dates before publishing.'), 409);
     // Saves already require a complete event; re-check anyway, since the rules or stored data may have moved on.
-    const questions = await db.rsvpQuestion.findMany({where: {eventId: id}, select: questionSelect});
     const check = completeEvent(valuesOf(row, questions), {});
     if (!check.ok) return c.json({...problem('conflict', 'Fill in the missing details before publishing.'), fields: check.fields}, 409);
     await db.event.updateMany({where: {id, status: 'draft'}, data: {status: 'published'}});
+    await clearPublicEvents();
     await audit(db, {actorUserId: c.var.viewer.id, action: 'event_published', target: ['event', id]});
     return c.json({event: await loadDetail(db, id)});
   })
@@ -572,11 +628,23 @@ export const adminEventRoutes = new Hono<Env>()
   .post('/:id/unpublish', async c => {
     const db = c.var.db;
     const id = c.req.param('id');
-    const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, status: true}}) : null;
-    if (!row) return notFound(c);
-    if (row.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t be unpublished.'), 409);
-    if (row.status === 'published') {
-      await db.event.updateMany({where: {id, status: 'published'}, data: {status: 'draft'}});
+    if (!isUuid(id)) return notFound(c);
+    // Lock, check and write in one transaction: no RSVP or payment can land between the check and the unpublish.
+    const outcome = await db.$transaction(async tx => {
+      await lockEvent(tx, id);
+      const row = await tx.event.findFirst({where: {id, deletedAt: null}, select: {status: true}});
+      if (!row) return 'missing' as const;
+      if (row.status === 'cancelled') return 'cancelled' as const;
+      if (row.status !== 'published') return 'unchanged' as const;
+      if (await hasGuestsOrPaidOrders(tx, id)) return 'has_guests' as const;
+      await tx.event.updateMany({where: {id, status: 'published'}, data: {status: 'draft'}});
+      return 'unpublished' as const;
+    });
+    if (outcome === 'missing') return notFound(c);
+    if (outcome === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t be unpublished.'), 409);
+    if (outcome === 'has_guests') return c.json(hasGuests('unpublished'), 409);
+    if (outcome === 'unpublished') {
+      await clearPublicEvents();
       await audit(db, {actorUserId: c.var.viewer.id, action: 'event_unpublished', target: ['event', id]});
     }
     return c.json({event: await loadDetail(db, id)});
@@ -608,6 +676,7 @@ export const adminEventRoutes = new Hono<Env>()
     if (!row) return notFound(c);
     if (row.status === 'cancelled') return c.json(problem('conflict', 'This event is already cancelled.'), 409);
     await db.event.updateMany({where: {id, status: {not: 'cancelled'}}, data: {status: 'cancelled'}});
+    await clearPublicEvents();
     // Paid tickets become `refund_due` so the owner sees what to refund; the cancel itself already committed.
     let refundDue = 0;
     try {
@@ -640,7 +709,7 @@ export const adminEventRoutes = new Hono<Env>()
         orderBy: {sortOrder: 'asc'},
       }),
     ]);
-    const taken = async (slug: string) => (await db.event.findFirst({where: {slug, deletedAt: null}, select: {id: true}})) !== null;
+    const taken = async (slug: string) => RESERVED_SLUGS.has(slug) || (await db.event.findFirst({where: {slug, deletedAt: null}, select: {id: true}})) !== null;
     const slug = await uniqueSlug(title, taken);
     const code = await withUniqueRetry(pollJoinCode, async v => (await db.event.findUnique({where: {pollJoinCode: v}, select: {id: true}})) !== null);
     const values = valuesOf(source, questions);
@@ -696,11 +765,23 @@ export const adminEventRoutes = new Hono<Env>()
   .delete('/:id', async c => {
     const db = c.var.db;
     const id = c.req.param('id');
-    const row = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, status: true}}) : null;
-    if (!row) return notFound(c);
-    // Published and cancelled events have guests and history; only drafts can vanish.
-    if (row.status !== 'draft') return c.json(problem('conflict', 'Only drafts can be deleted. Cancel the event instead.'), 409);
-    await db.event.updateMany({where: {id, status: 'draft', deletedAt: null}, data: {deletedAt: new Date()}});
+    if (!isUuid(id)) return notFound(c);
+    // Published and cancelled events have guests and history; only drafts can vanish, and only drafts nobody
+    // holds a place in or paid for (a draft can still carry guests from before it was unpublished).
+    // Lock, check and write in one transaction, so nothing lands between the check and the delete.
+    const outcome = await db.$transaction(async tx => {
+      await lockEvent(tx, id);
+      const row = await tx.event.findFirst({where: {id, deletedAt: null}, select: {status: true}});
+      if (!row) return 'missing' as const;
+      if (row.status !== 'draft') return 'not_draft' as const;
+      if (await hasGuestsOrPaidOrders(tx, id)) return 'has_guests' as const;
+      await tx.event.updateMany({where: {id, status: 'draft', deletedAt: null}, data: {deletedAt: new Date()}});
+      return 'deleted' as const;
+    });
+    if (outcome === 'missing') return notFound(c);
+    if (outcome === 'not_draft') return c.json(problem('conflict', 'Only drafts can be deleted. Cancel the event instead.'), 409);
+    if (outcome === 'has_guests') return c.json(hasGuests('deleted'), 409);
+    await clearPublicEvents();
     await audit(db, {actorUserId: c.var.viewer.id, action: 'event_deleted', target: ['event', id]});
     return c.json({ok: true});
   })
@@ -723,18 +804,22 @@ export const adminEventRoutes = new Hono<Env>()
   .post('/:id/ticket-types', ticketBody(false), async c => {
     const db = c.var.db;
     const id = c.req.param('id');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true, status: true}}) : null;
+    if (!isUuid(id)) return notFound(c);
+    // Every read here is keyed by the event id: one round trip.
+    const [event, existing, last] = await Promise.all([
+      db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true, status: true}}),
+      db.ticketType.findMany({where: {eventId: id}, select: {currency: true}, take: MAX_TICKET_TYPES + 1}),
+      db.ticketType.aggregate({where: {eventId: id}, _max: {sortOrder: true}}),
+    ]);
     if (!event) return notFound(c);
     if (event.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event can’t get new tickets.'), 409);
     const input = c.req.valid('json') as TicketValues;
-    const existing = await db.ticketType.findMany({where: {eventId: id}, select: {currency: true}, take: MAX_TICKET_TYPES + 1});
     if (existing.length >= MAX_TICKET_TYPES) return c.json(problem('conflict', `Use at most ${MAX_TICKET_TYPES} ticket types.`), 409);
     if (existing[0] && existing[0].currency !== input.currency) {
       return c.json(invalid({currency: `All tickets for an event use one currency (${existing[0].currency}).`}), 422);
     }
     const priceError = ticketPriceError(input.priceCents, input.currency, 1 + event.maxPlusOnes);
     if (priceError) return c.json(invalid({priceCents: priceError}), 422);
-    const last = await db.ticketType.aggregate({where: {eventId: id}, _max: {sortOrder: true}});
     const created = await db.ticketType.create({
       data: {
         id: uuidV7(),
@@ -768,8 +853,11 @@ export const adminEventRoutes = new Hono<Env>()
     const db = c.var.db;
     const id = c.req.param('id');
     const ticketId = c.req.param('ticketId');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true, status: true}}) : null;
-    const ticket = event && isUuid(ticketId) ? await db.ticketType.findFirst({where: {id: ticketId, eventId: id}, select: ticketSelect}) : null;
+    if (!isUuid(id) || !isUuid(ticketId)) return notFound(c, 'ticket type');
+    const [event, ticket] = await Promise.all([
+      db.event.findFirst({where: {id, deletedAt: null}, select: {id: true, maxPlusOnes: true, status: true}}),
+      db.ticketType.findFirst({where: {id: ticketId, eventId: id}, select: ticketSelect}),
+    ]);
     if (!event || !ticket) return notFound(c, 'ticket type');
     if (event.status === 'cancelled') return c.json(problem('conflict', 'A cancelled event’s tickets can’t be changed.'), 409);
     const patch = c.req.valid('json') as Partial<TicketValues>;
@@ -804,34 +892,39 @@ export const adminEventRoutes = new Hono<Env>()
     const db = c.var.db;
     const id = c.req.param('id');
     const ticketId = c.req.param('ticketId');
-    const ticket = isUuid(id) && isUuid(ticketId) ? await db.ticketType.findFirst({where: {id: ticketId, eventId: id, event: {deletedAt: null}}, select: {id: true}}) : null;
-    if (!ticket) return notFound(c, 'ticket type');
+    if (!isUuid(id) || !isUuid(ticketId)) return notFound(c, 'ticket type');
+    // Under the event lock (every RSVP placement takes it too), so no guest picks this ticket between
+    // the check and the delete. Any guest on it is enough to refuse: no need to count them all.
+    const outcome = await db.$transaction(async tx => {
+      await lockEvent(tx, id);
+      const ticket = await tx.ticketType.findFirst({where: {id: ticketId, eventId: id, event: {deletedAt: null}}, select: {id: true}});
+      if (!ticket) return 'missing' as const;
+      const chosen = await tx.rsvp.findFirst({where: {ticketTypeId: ticketId, eventId: id}, select: {id: true}});
+      if (chosen) return 'chosen' as const;
+      await tx.ticketType.deleteMany({where: {id: ticketId, eventId: id}});
+      return 'deleted' as const;
+    });
+    if (outcome === 'missing') return notFound(c, 'ticket type');
     // RSVPs (and through them orders) point at the type: end its sales instead.
-    if ((await db.rsvp.count({where: {ticketTypeId: ticketId}})) > 0) {
+    if (outcome === 'chosen') {
       return c.json(problem('conflict', 'Guests already chose this ticket. Set its sales end to a past date to stop selling it.'), 409);
     }
-    await db.ticketType.deleteMany({where: {id: ticketId, eventId: id}});
     return c.json({ok: true});
   });
 
-/** US-11: one queued email per guest still expecting the event (keyed, so a repeat is a no-op). Bounded; never throws. */
+/**
+ * US-11: one email per guest still expecting the event, as guest email outbox rows inserted in ONE
+ * statement (keyed, so a repeat is a no-op), then one drain kick. The outbox sends them in batches
+ * (audit H-3: never one platform job per guest). Never throws.
+ */
 async function queueCancelEmails(db: PrismaClient, eventId: string): Promise<void> {
   try {
-    let after: string | undefined;
-    for (let page = 0; page < 20; page++) {
-      const rows = await db.rsvp.findMany({
-        where: {eventId, status: {in: ['confirmed', 'waitlisted', 'pending', 'awaiting_payment']}, ...(after ? {id: {gt: after}} : {})},
-        select: {id: true},
-        orderBy: {id: 'asc'},
-        take: 250,
-      });
-      for (let i = 0; i < rows.length; i += 25) await Promise.all(rows.slice(i, i + 25).map(r => queueGuestEmail('event_cancelled', r.id)));
-      if (rows.length < 250) return;
-      after = rows.at(-1)!.id;
-    }
+    await enqueueEventCancelledEmails(db, eventId);
   } catch (err) {
     console.error(`event cancel: queueing guest emails failed: ${(err as Error).message}`.slice(0, 200));
+    return;
   }
+  await kickGuestEmails();
 }
 
 /** Seats held per ticket type: confirmed and awaiting-payment "going" RSVPs. */

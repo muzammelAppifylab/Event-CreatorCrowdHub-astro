@@ -35,10 +35,40 @@ export function venueLine(event: EmailEventInfo): string | null {
   return parts.length ? parts.join(", ") : null
 }
 
+/** True for a guest's manage link (`/r/<token>/`): the token is a secret. */
+export function isManageLink(url: string): boolean {
+  try {
+    return /^\/r\//.test(new URL(url, "https://x.invalid").pathname)
+  } catch {
+    return true
+  }
+}
+
+/**
+ * The event page to put in another service's URL (Google Calendar): the public page, never a
+ * manage link (audit L-1 made a private event's pageUrl the guest's `/r/<token>/`). Null = none.
+ */
+export function shareablePageUrl(event: EmailEventInfo): string | null {
+  if (event.publicPageUrl !== undefined) {
+    return event.publicPageUrl && !isManageLink(event.publicPageUrl) ? event.publicPageUrl : null
+  }
+  return isManageLink(event.pageUrl) ? null : event.pageUrl
+}
+
+/**
+ * The "View event" link, or null when there is no event page the guest can open: a private event
+ * sends `pageUrl` = the site home with `publicPageUrl: null`, and a button to the home page is not
+ * "View event". A manage link (`/r/<token>/`) works for its guest; otherwise the public page.
+ */
+export function viewEventUrl(event: EmailEventInfo): string | null {
+  if (isManageLink(event.pageUrl)) return event.pageUrl
+  return shareablePageUrl(event)
+}
+
 export function calendarLink(event: EmailEventInfo): string {
   return googleCalendarUrl({
     title: event.title,
-    description: event.pageUrl,
+    description: shareablePageUrl(event),
     startAt: event.startAt,
     endAt: event.endAt,
     location: venueLine(event) ?? (event.format === "in_person" ? null : "Online"),

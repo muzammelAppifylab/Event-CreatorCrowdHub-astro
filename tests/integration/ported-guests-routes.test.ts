@@ -23,7 +23,7 @@ const app = new Hono()
   .use(csrf)
   .use(bodyLimit({maxSize: 64 * 1024}))
   .use(syncPermissions(CATALOGUE))
-  .route('/auth', authRoutes({...authSettings, requireEmailVerification: true}))
+  .route('/auth', authRoutes(authSettings))
   .route('/admin-events', adminEventRoutes)
   .route('/event-admin', adminGuestRoutes)
   .route('/privacy', privacyRoutes);
@@ -49,9 +49,8 @@ describe.skipIf(!DATABASE_URL)('ported guests routes (integration, real Postgres
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
-    await userOnApp('first@example.test', ['owner'], '203.0.113.1');
     admin = await userOnApp('admin@example.test', ['admin'], '203.0.113.2');
-    staff = await userOnApp('staff@example.test', ['checkin_staff'], '203.0.113.3');
+    staff = await userOnApp('staff@example.test', ['checkin-staff'], '203.0.113.3');
     member = await userOnApp('member@example.test', ['member'], '203.0.113.4');
     adminId = (await db.user.findFirstOrThrow({where: {email: 'admin@example.test'}})).id;
   });
@@ -155,8 +154,8 @@ describe.skipIf(!DATABASE_URL)('ported guests routes (integration, real Postgres
     expect(await names(ev.id, 'q=NAVY.example')).toEqual(['Grace Hopper']);
     expect(await names(ev.id, `q=${grace.ticketCode.toLowerCase()}`)).toEqual(['Grace Hopper']);
     expect(await names(ev.id, 'q=nobody')).toEqual([]);
-    // BUG #1 in docs/porting/verify/test-findings-guests.md: a literal '%' should match only '100% Real' but matches all.
-    expect((await names(ev.id, `q=${encodeURIComponent('%')}`)).length).toBe(3); // pins current behaviour (todo: expect ['100% Real'])
+    // A literal '%' is escaped (escapeLike): it matches only the name that contains one.
+    expect(await names(ev.id, `q=${encodeURIComponent('%')}`)).toEqual(['100% Real']);
   });
 
   it('lists answers keyed by question id, ordered questions, payment status; detail carries a timeline', async () => {
@@ -278,7 +277,7 @@ describe.skipIf(!DATABASE_URL)('ported guests routes (integration, real Postgres
       await db.ticketOrder.create({data: {rsvpId: r.id, checkoutId: 'cs_e', amountCents: 2500, currency: 'USD', status: 'paid'}});
       const before = (await db.rsvp.findUniqueOrThrow({where: {id: r.id}})).manageToken;
       const res = await bulk(ev.id, 'erase', [r.id]);
-      expect(res.json).toEqual({action: 'erase', succeeded: [r.id], failed: []});
+      expect(res.json).toEqual({action: 'erase', succeeded: [r.id], failed: [], emailsQueued: 1});
       const after = await db.rsvp.findUniqueOrThrow({where: {id: r.id}});
       expect(after).toMatchObject({
         name: 'Removed guest',
@@ -465,7 +464,7 @@ describe.skipIf(!DATABASE_URL)('ported guests routes (integration, real Postgres
       const text = res.json.text as string;
       expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename="contacts-.*\.csv"/);
       const lines = csvLines(text);
-      expect(lines[0]).toBe('Name,Email,Events,Last event,Last event date,Marketing consent');
+      expect(lines[0]).toBe('Name,Email,Events,Attended,Last event,Last event date,First seen,Marketing consent');
       expect(lines).toHaveLength(4);
       expect(lines.some(l => /^"?'=HYPERLINK/.test(l))).toBe(true);
       expect(lines.some(l => l.startsWith('='))).toBe(false);

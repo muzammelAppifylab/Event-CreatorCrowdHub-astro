@@ -10,7 +10,8 @@ import { createHmac, timingSafeEqual } from "node:crypto"
 
 // poll: a guest's personal vote link (low privilege, separate from manage tokens).
 // consent: the one-time "yes, send me updates" link that only the inbox owner receives.
-export type TokenPurpose = "manage" | "invite" | "checkin" | "session" | "poll" | "consent"
+// unsubscribe: a signed, non-expiring link that only switches marketing off (src/server/privacy.ts).
+export type TokenPurpose = "manage" | "invite" | "checkin" | "session" | "poll" | "consent" | "unsubscribe"
 
 interface TokenBody<T> {
   /** purpose */

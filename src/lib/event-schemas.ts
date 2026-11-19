@@ -10,18 +10,21 @@
  */
 
 import {formatInZone, zonedLocalToUtc} from '../domain/time';
+import {POSTER_DESIGNS, POSTER_HEX, POSTER_PALETTES, type PosterDesign, type PosterPalette} from './poster-constants';
+import {hasNul, isUuid, NUL_MESSAGE} from './text';
+
+export {isUuid};
+
+// The poster's sets live in a module with no imports (public pages load it; audit M-30): re-exported here.
+export {POSTER_DESIGNS, POSTER_HEX, POSTER_PALETTES, type PosterDesign, type PosterPalette} from './poster-constants';
 
 export const EVENT_FORMATS = ['in_person', 'online', 'hybrid'] as const;
 export const EVENT_VISIBILITIES = ['public', 'unlisted', 'private'] as const;
 export const QUESTION_TYPES = ['short_text', 'long_text', 'single_choice', 'multi_choice', 'checkbox'] as const;
 export const FONT_PRESETS = ['inter', 'serif', 'rounded'] as const;
 export const REMINDER_KINDS = ['confirmation', 'reminder', 'live_now', 'thank_you'] as const;
-export const POSTER_DESIGNS = ['breakfast', 'launch', 'ama', 'mastermind', 'workshop', 'kickoff'] as const;
-export const POSTER_PALETTES = ['butter', 'cobalt', 'night', 'plum', 'tomato', 'mint', 'cream', 'teal', 'pink'] as const;
 /** The six colour sets the cover picker offers (the others still render on events that saved them). */
 export const POSTER_PRESETS = ['butter', 'cobalt', 'night', 'plum', 'tomato', 'mint'] as const;
-/** A custom poster colour: `#rrggbb`, stored lower-cased. */
-export const POSTER_HEX = /^#[0-9a-f]{6}$/;
 export const SUPPORTED_CURRENCIES = [
   'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'NZD', 'CHF', 'SEK', 'NOK', 'DKK', 'SGD', 'HKD', 'INR', 'MXN', 'BRL', 'ZAR', 'PLN', 'AED',
 ] as const;
@@ -32,8 +35,6 @@ export type EventStatus = 'draft' | 'published' | 'cancelled';
 export type QuestionType = (typeof QUESTION_TYPES)[number];
 export type FontPreset = (typeof FONT_PRESETS)[number];
 export type ReminderKind = (typeof REMINDER_KINDS)[number];
-export type PosterDesign = (typeof POSTER_DESIGNS)[number];
-export type PosterPalette = (typeof POSTER_PALETTES)[number];
 export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
 
 export const MAX_RSVP_QUESTIONS = 10;
@@ -153,8 +154,6 @@ export interface EventSettingsValues {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isIn = <T extends string>(list: readonly T[], v: unknown): v is T => typeof v === 'string' && (list as readonly string[]).includes(v);
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v);
 
 export function isValidTimeZone(tz: string): boolean {
   try {
@@ -201,7 +200,9 @@ function text(c: Collector, name: string, v: unknown, {min = 0, max, label}: {mi
     return undefined;
   }
   const s = v.trim();
-  if (s.length < min) c.fail(name, min === 1 ? `Enter ${label}.` : `${label} needs at least ${min} characters.`);
+  // Postgres text can't hold NUL: a field error, never a 500 (22021).
+  if (hasNul(s)) c.fail(name, NUL_MESSAGE);
+  else if (s.length < min) c.fail(name, min === 1 ? `Enter ${label}.` : `${label} needs at least ${min} characters.`);
   else if (s.length > max) c.fail(name, `Keep ${label} under ${max + 1} characters.`);
   return s;
 }
@@ -247,8 +248,11 @@ export function slugError(slug: string): string | null {
   return null;
 }
 
-/** `/e/<slug>` is public: these first segments belong to other routes. */
-export const RESERVED_SLUGS: ReadonlySet<string> = new Set(['sitemap', 'new', 'api']);
+/**
+ * `/events/<slug>/` (and `/site-api/events/<slug>`) is public: these segments belong to other routes
+ * (`/site-api/events/past`, `/sitemap`), so an event with one of them as its link could never be shown.
+ */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set(['sitemap', 'past', 'new', 'api', 'index', 'edit', 'page', 'rss', 'feed', 'search']);
 
 // ------------------------------------------------------------------ events --
 
@@ -295,6 +299,7 @@ export function parseQuestions(c: Collector, v: unknown, field = 'questions'): Q
       for (const o of rawOptions) {
         const s = typeof o === 'string' ? o.trim() : '';
         if (!s || s.length > 100) c.fail(`${name}.options`, 'Options need 1 to 100 characters.');
+        else if (hasNul(s)) c.fail(`${name}.options`, NUL_MESSAGE);
         else options.push(s);
       }
       if (new Set(options.map(o => o.toLowerCase())).size !== options.length) c.fail(`${name}.options`, 'Each option must be different.');
@@ -561,7 +566,8 @@ export function parseSettingsPatch(raw: unknown): Parsed<Partial<EventSettingsVa
     else c.fail('defaultTimezone', 'Choose a valid timezone, e.g. Europe/London.');
   }
   if (has('senderName')) {
-    const s = text(c, 'senderName', raw.senderName, {min: 1, max: 80, label: 'a sender name'});
+    // Blank or null clears it (the column is NOT NULL, default ''): emails then fall back to "Your host".
+    const s = raw.senderName === null ? '' : text(c, 'senderName', raw.senderName, {max: 80, label: 'a sender name'});
     if (s !== undefined) out.senderName = s;
   }
   if (has('replyToEmail')) {
@@ -650,6 +656,11 @@ export interface AdminEventSummary {
   coverImageUrl: string | null;
   coverPoster: string | null;
   counts: RsvpCounts;
+  /**
+   * Someone holds or waits for a place (awaiting payment included) or has paid: the server refuses
+   * unpublish and delete (409 event_has_guests), so the dashboard offers Cancel instead.
+   */
+  hasHeld: boolean;
 }
 
 export interface AdminQuestion {

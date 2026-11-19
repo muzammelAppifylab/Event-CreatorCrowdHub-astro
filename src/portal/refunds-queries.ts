@@ -22,11 +22,11 @@ export const refundsQuery = infiniteQueryOptions({
   getNextPageParam: last => last.nextBefore ?? undefined,
 });
 
-/** Cheap count, for the cards and badges. Pass an event id for one event. */
+/** Cheap capped count (`more`: over the cap, shown as "25+"), for the cards and badges. Pass an event id for one event. */
 export const refundsCountQuery = (eventId?: string) =>
   queryOptions({
     queryKey: ['refunds', 'count', eventId ?? 'all'],
-    queryFn: () => read<{count: number}>(siteFetch(`${BASE}/count${qs({eventId})}`)),
+    queryFn: () => read<{count: number; more: boolean}>(siteFetch(`${BASE}/count${qs({eventId})}`)),
     staleTime: 30_000,
   });
 

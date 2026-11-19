@@ -5,14 +5,15 @@ import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {PERMISSIONS} from '../permissions';
 import {refundedTicket} from '../ticket-checkout';
-import {isUuid} from './admin-invites';
+import {keysetAfter} from '../../lib/text';
+import {isUuid, parsePageCursor} from '../validate';
 
 /**
  * Refunds to finish (ported from CreatorCrowdHub `FailedRefunds`). Holders of `site:event:manage`.
  * Mounted at `/site-api/refunds`:
  *
  *   GET  /refunds?eventId&before        paid orders waiting for a refund (keyset, 50 a page, newest first)
- *   GET  /refunds/count?eventId         how many (cheap, for badges and cards)
+ *   GET  /refunds/count?eventId         how many, capped: {count, more} ("25+"; for badges and cards)
  *   POST /refunds/:id/mark-refunded     the owner refunded it in the platform dashboard: close the order
  *
  * The platform has no refund API for site code (docs/agent/payments.md): the owner refunds in the
@@ -51,20 +52,14 @@ export const toRefundRow = (o: OrderRow): RefundRow => ({
   since: o.createdAt.toISOString(),
 });
 
-export function parseCursor(raw: unknown): {at: Date; id: string} | null {
-  if (typeof raw !== 'string') return null;
-  const [iso, id] = raw.split('_');
-  const at = new Date(iso ?? '');
-  return id && isUuid(id) && !Number.isNaN(at.getTime()) ? {at, id} : null;
-}
-
 const baseWhere = (eventId?: string) => ({status: 'refund_due', ...(eventId ? {rsvp: {eventId}} : {})});
 
 /** One keyset page, newest first. `nextBefore` is null on the last page. */
 export async function listRefundDue(db: PrismaClient, opts: {eventId?: string; before?: unknown} = {}): Promise<{items: RefundRow[]; nextBefore: string | null}> {
-  const cursor = parseCursor(opts.before);
+  const cursor = parsePageCursor(opts.before);
   const where = baseWhere(opts.eventId);
-  const paged = cursor ? {AND: [where, {OR: [{createdAt: {lt: cursor.at}}, {createdAt: cursor.at, id: {lt: cursor.id}}]}]} : where;
+  // Millisecond cursor vs microsecond column: `keysetAfter` (text.ts) compares at the cursor's precision.
+  const paged = cursor ? {AND: [where, keysetAfter('createdAt', 'desc', cursor)]} : where;
   const rows = (await db.ticketOrder.findMany({
     where: paged,
     select: orderSelect,
@@ -76,7 +71,16 @@ export async function listRefundDue(db: PrismaClient, opts: {eventId?: string; b
   return {items: page.map(toRefundRow), nextBefore: rows.length > REFUNDS_PAGE_SIZE && last ? `${last.createdAt.toISOString()}_${last.id}` : null};
 }
 
-export const countRefundDue = (db: PrismaClient, eventId?: string) => db.ticketOrder.count({where: baseWhere(eventId)});
+export const REFUNDS_COUNT_CAP = 25;
+
+/**
+ * How many orders wait for a refund, capped: never a COUNT() per request (AGENTS.md). Reads at most
+ * `REFUNDS_COUNT_CAP + 1` ids; `more` is true when there are over `REFUNDS_COUNT_CAP` ("25+").
+ */
+export async function countRefundDue(db: PrismaClient, eventId?: string): Promise<{count: number; more: boolean}> {
+  const rows = await db.ticketOrder.findMany({where: baseWhere(eventId), select: {id: true}, take: REFUNDS_COUNT_CAP + 1});
+  return {count: Math.min(rows.length, REFUNDS_COUNT_CAP), more: rows.length > REFUNDS_COUNT_CAP};
+}
 
 /**
  * Close one order the owner refunded. Idempotent: an order already `refunded` answers `already`.
@@ -101,7 +105,7 @@ export const adminRefundRoutes = new Hono()
   // Registered before `/:id/...` routes; `/count` is its own path.
   .get('/count', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     c.header('Cache-Control', 'private, no-store');
-    return c.json({count: await countRefundDue(c.var.db, eventFilter(c.req.query('eventId')))});
+    return c.json(await countRefundDue(c.var.db, eventFilter(c.req.query('eventId'))));
   })
 
   .get('/', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {

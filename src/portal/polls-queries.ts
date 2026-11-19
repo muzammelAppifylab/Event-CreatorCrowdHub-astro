@@ -1,5 +1,6 @@
 import {queryOptions} from '@tanstack/react-query';
 
+import {pollingInterval} from '../domain/polls';
 import {siteFetch} from '../platform/browser';
 import {read} from './api';
 import {downloadExport} from './guests-queries';
@@ -57,12 +58,35 @@ export const eventPollsQuery = (eventId: string) =>
     queryFn: () => read<PollList>(siteFetch(`/site-api/polls/event/${encodeURIComponent(eventId)}`)),
   });
 
-/** The presenter's list, found by join code, short-polled every 2s while the tab is visible. */
+/** What a presenter refresh can change on screen: each poll's status and answer count. */
+export const presenterSignature = (list: PollList | undefined) =>
+  (list?.polls ?? []).map(p => `${p.id}:${p.status}:${p.results?.totalVoters ?? 0}`).join('|');
+
+/** When each presenter list last changed (by code), for the idle backoff below. */
+const lastChange = new Map<string, {signature: string; at: number}>();
+
+/**
+ * The presenter's list, found by join code, short-polled while the tab is visible: every 2s while
+ * answers come in, every 10s after 5 quiet minutes (`pollingInterval`, the same rule as the vote
+ * page), paused while hidden. The server counts with one GROUP BY per refresh (audit M-28).
+ */
 export const presenterPollsQuery = (code: string) =>
   queryOptions({
     queryKey: ['polls', 'code', code],
-    queryFn: () => read<PollList>(siteFetch(`/site-api/polls/by-code/${encodeURIComponent(code)}`)),
-    refetchInterval: 2000,
+    queryFn: async () => {
+      const list = await read<PollList>(siteFetch(`/site-api/polls/by-code/${encodeURIComponent(code)}`));
+      const signature = presenterSignature(list);
+      if (lastChange.get(code)?.signature !== signature) lastChange.set(code, {signature, at: Date.now()});
+      return list;
+    },
+    // Hidden tabs are paused by `refetchIntervalInBackground: false`, not here: returning `false` from a
+    // fetch that lands while hidden would stop the interval for good (nothing re-evaluates it on return).
+    refetchInterval: () =>
+      pollingInterval({
+        msSinceLastChange: Date.now() - (lastChange.get(code)?.at ?? Date.now()),
+        hidden: false,
+        role: 'presenter',
+      }) ?? false,
     refetchIntervalInBackground: false,
   });
 

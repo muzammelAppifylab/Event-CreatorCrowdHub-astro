@@ -4,6 +4,8 @@
  * route reject exactly the same things (US-7, US-8, US-16).
  */
 
+import {hasNul, isUuid, NUL_MESSAGE} from './text';
+
 export type RsvpResponse = 'going' | 'maybe' | 'not_going';
 export type RsvpStatus = 'pending' | 'confirmed' | 'waitlisted' | 'declined' | 'cancelled' | 'awaiting_payment';
 export type QuestionType = 'short_text' | 'long_text' | 'single_choice' | 'multi_choice' | 'checkbox';
@@ -74,7 +76,6 @@ export interface RsvpRules {
 
 export const RSVP_RESPONSES: readonly RsvpResponse[] = ['going', 'maybe', 'not_going'];
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const NAME_MAX = 120;
 export const EMAIL_MAX = 254;
 
@@ -121,10 +122,26 @@ export interface GuestRsvpView {
 
 /** `invite` landing (`GET /site-api/rsvp/invite/:token`). */
 export interface InviteView {
-  event: RsvpEventView & {description: string; venueName: string | null; venueAddress: string | null};
+  event: RsvpEventView & {
+    description: string;
+    venueName: string | null;
+    venueAddress: string | null;
+    /** A private event only accepts the invited email, so the invite form shows it read-only. */
+    visibility: 'public' | 'unlisted' | 'private';
+  };
   invite: {name: string | null; email: string; token: string};
   /** This email already has an RSVP: the page points the guest to their email link. */
   alreadyResponded: boolean;
+}
+
+/**
+ * 410 from `GET /site-api/rsvp/manage/:token` and `/invite/:token` when the token is valid but the host
+ * unpublished or deleted the event: only its title, never guest data. An unknown token is a 404.
+ */
+export interface EventUnavailable {
+  error: 'event_unavailable';
+  message: string;
+  event: {title: string};
 }
 
 export type FieldErrors = Record<string, string>;
@@ -168,12 +185,15 @@ export function validateRsvp(
 
   const name = typeof v.name === 'string' ? v.name.trim() : '';
   if (!name) fields.name = 'Add your name.';
+  // Postgres text and jsonb can't hold NUL: a field error, never a 500.
+  else if (hasNul(name)) fields.name = NUL_MESSAGE;
   else if (name.length > NAME_MAX) fields.name = `Use at most ${NAME_MAX} characters.`;
 
   let email = options.fixedEmail ?? '';
   if (!options.fixedEmail) {
     email = typeof v.email === 'string' ? v.email.trim().toLowerCase() : '';
     if (!email) fields.email = 'Add your email.';
+    else if (hasNul(email)) fields.email = NUL_MESSAGE;
     else if (email.length > EMAIL_MAX || !EMAIL_RE.test(email)) fields.email = 'Enter a valid email address, like name@example.com.';
   }
 
@@ -193,7 +213,7 @@ export function validateRsvp(
 
   let ticketTypeId: string | undefined;
   if (v.ticketTypeId !== undefined && v.ticketTypeId !== null && v.ticketTypeId !== '') {
-    if (typeof v.ticketTypeId !== 'string' || !UUID_RE.test(v.ticketTypeId) || !rules.ticketTypeIds.includes(v.ticketTypeId)) {
+    if (!isUuid(v.ticketTypeId) || !rules.ticketTypeIds.includes(v.ticketTypeId)) {
       fields.ticketTypeId = 'Choose one of the listed tickets.';
     } else ticketTypeId = v.ticketTypeId;
   }
@@ -209,6 +229,10 @@ export function validateRsvp(
     }
     if (!(typeof value === 'string' || typeof value === 'boolean' || Array.isArray(value)) || !answerOk(q, value as AnswerValue)) {
       fields[`answers.${id}`] = 'Choose one of the listed options.';
+      continue;
+    }
+    if (typeof value === 'string' ? hasNul(value) : Array.isArray(value) && value.some(x => typeof x === 'string' && hasNul(x))) {
+      fields[`answers.${id}`] = NUL_MESSAGE;
       continue;
     }
     answers[id] = value as AnswerValue;

@@ -5,13 +5,11 @@ const state = vi.hoisted(() => ({db: {} as Record<string, any>, stop: null as Re
 
 vi.mock('../src/platform/guards', async () => {
   const actual = await vi.importActual<typeof import('../src/platform/guards')>('../src/platform/guards');
-  const dbMw = async (c: any, next: () => Promise<void>) => { c.set('db', state.db); await next(); };
+  const dbMw = async (c: any, next: () => Promise<void>) => { c.set('db', state.db); c.set('secret', 's'.repeat(40)); await next(); };
   return {...actual, withDb: dbMw, withAuthCore: dbMw};
 });
-vi.mock('../src/platform/auth/kit', async () => {
-  const actual = await vi.importActual<typeof import('../src/platform/auth/kit')>('../src/platform/auth/kit');
-  return {...actual, attempt: vi.fn(async () => ({stop: state.stop})), keysFor: vi.fn(async () => ({}))};
-});
+// The limits are counts on poll_attempts: a stop is a count at the IP's ceiling.
+const atCeiling = () => (state.stop ? [{ip: 10_000, fresh: 0, device: 0}] : [{ip: 0, fresh: 0, device: 0}]);
 
 import {pollPublicRoutes, invalidateResults} from '../src/server/routes/polls-public';
 
@@ -31,7 +29,11 @@ beforeEach(() => {
     poll: {findFirst: vi.fn(async () => poll)},
     pollOption: {findMany: vi.fn(async () => [{id: O1, pollId: POLL, label: 'A'}, {id: O2, pollId: POLL, label: 'B'}])},
     pollVote: {findUnique: vi.fn(async () => null), findMany: vi.fn(async () => []), upsert: vi.fn(async () => ({}))},
+    $queryRaw: vi.fn(async (strings: TemplateStringsArray) => (strings.join('?').includes('AS fresh') ? atCeiling() : [])),
+    $executeRaw: vi.fn(async () => 1),
   };
+  // The vote route reads the poll with its options in one query.
+  state.db.poll.findFirst.mockImplementation(async (args: any) => (args?.select?.pollOptions && poll ? {...poll, pollOptions: [{id: O1, label: 'A', sortOrder: 0}, {id: O2, label: 'B', sortOrder: 1}]} : poll));
 });
 
 describe('public poll routes', () => {

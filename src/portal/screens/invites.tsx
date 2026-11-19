@@ -6,7 +6,6 @@ import {ApiError} from '../api';
 import {QrCode} from '../qr';
 import {
   type CreateInvitesResult,
-  embedCode,
   invitesQuery,
   type InviteRow,
   resendPreviewQuery,
@@ -142,7 +141,9 @@ export function InvitesTab({eventId}: {eventId: string}) {
       toast.success('Invite sent again.');
       return refresh();
     },
-    onError: err => toast.danger(err instanceof Error ? err.message : 'The invite could not be sent.'),
+    // The server's 409s say why in words (resend_cooldown, invite_pending, invite_bounced,
+    // daily_invite_limit, already_responded, event_not_published): show that message as it is.
+    onError: err => toast.danger(err instanceof ApiError ? err.message : 'The invite could not be sent. Check your connection and try again.'),
   });
   const remove = useMutation({
     mutationFn: (id: string) => sendJson<{ok: true}>('DELETE', `/events/${eventId}/invites/${id}`),
@@ -257,8 +258,8 @@ export function InvitesTab({eventId}: {eventId: string}) {
             </EmptyState>
           }
         />
+        <LoadMore query={invites} count={rows?.length} noun={['invite', 'invites']} />
       </Card>
-      <LoadMore query={invites} />
       </div>
 
       <ShareKit eventId={eventId} />
@@ -306,7 +307,7 @@ export function InvitesTab({eventId}: {eventId: string}) {
   );
 }
 
-/** The public link, an embed snippet and share buttons. */
+/** The public link, share buttons and a QR code. */
 function ShareKit({eventId}: {eventId: string}) {
   const toast = useToast();
   const kit = useQuery(shareKitQuery(eventId));
@@ -346,12 +347,6 @@ function ShareKit({eventId}: {eventId: string}) {
             icon="file"
             onClick={() => (downloadQrPng(data.eventUrl, `${data.slug}-qr.png`) ? toast.success('QR code downloaded.') : toast.danger('Your browser could not draw the QR code.'))}>
             Download QR (PNG)
-          </Button>
-          <Field label="Embed on your site" id="share-embed" hint="Shows the RSVP page without its header.">
-            <textarea id="share-embed" rows={3} readOnly value={embedCode(data.base, data.slug, data.title)} onFocus={event => event.target.select()} />
-          </Field>
-          <Button variant="secondary" icon="copy" onClick={() => void copyText(embedCode(data.base, data.slug, data.title), toast, 'Embed code')}>
-            Copy embed code
           </Button>
         </>
       )}

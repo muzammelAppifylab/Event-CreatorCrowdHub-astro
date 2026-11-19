@@ -7,7 +7,7 @@
  * What changes often is filled in by the browser after load, from the Site API:
  *   - the visitor (`<Base isStatic>`): signed-in users see "Open your dashboard"
  *     (`data-user-only`), guests "Create an account" (`data-guest-only`)
- *   - the next 3 public events and open roles (`data-live` sections, below). Events are
+ *   - the next 3 public events (a `data-live` section, below). Events are
  *     public data but change often, so they load client-side from `GET /site-api/events`
  *     and are never baked into this static file.
  * The latest posts come from `src/content/blog/` at build time.
@@ -101,12 +101,22 @@ const headline =
       <div class="wrap">
         <div class="home-head home-head-row">
           <h2 id="events-title">{HOME.events.title}</h2>
-          <a class="home-more" href="/events/">
-            {HOME.events.link}
-            <Icon name="arrow-right" size={16} />
-          </a>
+          <div class="home-rail-actions">
+            <a class="home-more" href="/events/">
+              {HOME.events.link}
+              <Icon name="arrow-right" size={16} />
+            </a>
+            <button class="home-rail-btn" type="button" aria-label="Previous events" aria-controls="home-event-rail" data-rail="-1" disabled>
+              <Icon name="arrow-right" size={18} class="flip" />
+            </button>
+            <button class="home-rail-btn" type="button" aria-label="Next events" aria-controls="home-event-rail" data-rail="1" disabled>
+              <Icon name="arrow-right" size={18} />
+            </button>
+          </div>
         </div>
-        <ul class="home-event-grid" data-list></ul>
+        <div class="home-rail" data-edge-end>
+          <ul class="home-event-grid" id="home-event-rail" data-list></ul>
+        </div>
       </div>
     </section>
 
@@ -282,10 +292,10 @@ const headline =
         } catch {
           // Unknown zone: UTC.
         }
-        const when = new Intl.DateTimeFormat('en', {weekday: 'short', day: 'numeric', month: 'short', timeZone: zone}).format(new Date(event.startAt));
+        const start = new Date(event.startAt);
+        const part = (opts: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en', {...opts, timeZone: zone}).format(start);
         const art = el('div', 'home-event-art');
         art.dataset.pal = String(i % 4);
-        art.append(el('span', 'home-event-date', when));
         if (event.coverImageUrl) {
           const img = el('img');
           img.src = event.coverImageUrl;
@@ -293,12 +303,24 @@ const headline =
           img.loading = 'lazy';
           art.append(img);
         } else {
-          art.append(el('span', 'home-event-name', event.title));
+          // No cover: a big calendar date is the poster (the title is under it, said once).
+          const date = el('span', 'home-event-bigdate');
+          date.append(el('span', 'home-event-month', part({month: 'short'})), el('span', 'home-event-day', part({day: 'numeric'})));
+          art.append(date);
         }
-        const where = event.format === 'online' ? 'Online' : (event.venueName ?? (event.format === 'hybrid' ? 'Hybrid' : 'In person'));
+        const formatLabel = event.format === 'online' ? 'Online' : event.format === 'hybrid' ? 'Hybrid' : 'In person';
+        art.append(el('span', 'home-event-tag', formatLabel));
+        const where = event.format === 'online' ? 'Online' : (event.venueName ?? formatLabel);
         const price = event.fromPrice ? (event.free ? 'Free' : 'Tickets') : '';
-        const text = el('div');
-        text.append(el('h3', '', event.title), el('p', '', new Intl.DateTimeFormat('en', {hour: 'numeric', minute: '2-digit', timeZone: zone}).format(new Date(event.startAt)) + ' · ' + where), ...(price ? [el('p', '', price)] : []));
+        const text = el('div', 'home-event-body');
+        const meta = el('p', 'home-event-meta');
+        meta.append(el('span', 'home-event-when', `${part({weekday: 'short', day: 'numeric', month: 'short'})} · ${part({hour: 'numeric', minute: '2-digit'})}`), el('span', 'home-event-where', where));
+        text.append(meta, el('h3', '', event.title));
+        if (price) {
+          const chip = el('span', 'home-event-price', price);
+          if (event.free) chip.dataset.free = '';
+          text.append(chip);
+        }
         const row = el('a', 'home-event');
         row.href = `/events/${encodeURIComponent(event.slug)}/`;
         row.append(art, text);
@@ -306,7 +328,32 @@ const headline =
         item.append(row);
         list.append(item);
       });
+      requestAnimationFrame(syncRail);
       return shown.length;
     });
+
+    // Rail arrows: scroll by most of a view; each end disables its arrow and drops its edge fade.
+    const rail = document.querySelector<HTMLElement>('#home-event-rail');
+    const frame = rail?.parentElement;
+    const arrows = document.querySelectorAll<HTMLButtonElement>('[data-rail]');
+    function syncRail() {
+      if (!rail || !frame) return;
+      const max = rail.scrollWidth - rail.clientWidth - 2;
+      const atStart = rail.scrollLeft <= 2;
+      const atEnd = rail.scrollLeft >= max;
+      frame.toggleAttribute('data-edge-start', !atStart);
+      frame.toggleAttribute('data-edge-end', !atEnd);
+      arrows.forEach(button => {
+        button.disabled = button.dataset.rail === '-1' ? atStart : atEnd;
+      });
+    }
+    rail?.addEventListener('scroll', syncRail, {passive: true});
+    arrows.forEach(button =>
+      button.addEventListener('click', () => {
+        if (!rail) return;
+        const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+        rail.scrollBy({left: Number(button.dataset.rail) * rail.clientWidth * 0.85, behavior: reduce ? 'auto' : 'smooth'});
+      }),
+    );
   });
 </script>

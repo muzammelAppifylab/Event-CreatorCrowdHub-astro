@@ -210,6 +210,11 @@ export function CoverPicker({values: v, event, seed, set, error, inputProps}: Pr
                         <input type="radio" name="cover-template" checked={on} onChange={() => useTemplate(t)} />
                         <PosterArt design={t.design} palette={t.palette} text={textFor} />
                         <span className="cp-tile-name">{t.name}</span>
+                        {on && (
+                          <span className="cp-check" aria-hidden="true">
+                            <Icon name="check" size={12} />
+                          </span>
+                        )}
                       </label>
                     );
                   })}
@@ -224,6 +229,11 @@ export function CoverPicker({values: v, event, seed, set, error, inputProps}: Pr
                       <input type="radio" name="cover-design" checked={v.coverPoster === d.value} onChange={() => set('coverPoster', d.value)} />
                       <span className="cp-chip-name">{d.name}</span>
                       <span className="cp-chip-sub">{d.style}</span>
+                      {v.coverPoster === d.value && (
+                        <span className="cp-check" aria-hidden="true">
+                          <Icon name="check" size={12} />
+                        </span>
+                      )}
                     </label>
                   ))}
                 </div>
@@ -262,11 +272,6 @@ export function CoverPicker({values: v, event, seed, set, error, inputProps}: Pr
                 <p className="muted cp-note">Leave a line blank and it fills itself from the event (title, date, venue). Type to say something different.</p>
                 <div className="form-stack">{lines}</div>
                 <div className="cp-fills" role="group" aria-label="Quick fills">
-                  {date && (
-                    <Button type="button" size="sm" variant="secondary" onClick={() => set('eyebrow', date)}>
-                      Top: date
-                    </Button>
-                  )}
                   {place && (
                     <Button type="button" size="sm" variant="secondary" onClick={() => set('footer', place)}>
                       Bottom: {event.format === 'online' ? 'online' : 'venue'}

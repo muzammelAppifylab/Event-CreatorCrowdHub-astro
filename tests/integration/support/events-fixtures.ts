@@ -39,18 +39,18 @@ export const eventsApp = new Hono()
   .route('/privacy', privacyRoutes);
 
 export async function resetEvents() {
-  await db.$executeRawUnsafe('TRUNCATE "events", "webhook_endpoints", "event_settings" RESTART IDENTITY CASCADE');
+  await db.$executeRawUnsafe('TRUNCATE "events", "webhook_endpoints", "event_settings", "guest_email_outbox" RESTART IDENTITY CASCADE');
   emails.length = 0;
 }
 
-/** Exactly these roles for the user, whatever sign-up gave (the first account becomes owner). */
+/** Exactly these roles for the user, whatever sign-up gave. Use `ownerSignedIn` for the site owner: an `owner` role row alone is not the owner. */
 export async function setRoles(email: string, ...slugs: string[]) {
-  // resetDatabase() deletes non-system roles, including the migration-seeded checkin_staff.
+  // resetDatabase() deletes non-system roles, including the migration-seeded checkin-staff.
   await db.$executeRawUnsafe(
-    `INSERT INTO "roles" ("slug", "name", "description", "is_system", "updated_at") VALUES ('checkin_staff', 'Check-in staff', 'Door staff', false, CURRENT_TIMESTAMP) ON CONFLICT ("slug") DO NOTHING`
+    `INSERT INTO "roles" ("slug", "name", "description", "is_system", "updated_at") VALUES ('checkin-staff', 'Check-in staff', 'Door staff', false, CURRENT_TIMESTAMP) ON CONFLICT ("slug") DO NOTHING`
   );
   await db.$executeRawUnsafe(
-    `INSERT INTO "role_permissions" ("role_id", "permission_id") SELECT r."id", p."id" FROM "roles" r, "permissions" p WHERE r."slug" = 'checkin_staff' AND p."codename" = 'site:event:checkin' ON CONFLICT DO NOTHING`
+    `INSERT INTO "role_permissions" ("role_id", "permission_id") SELECT r."id", p."id" FROM "roles" r, "permissions" p WHERE r."slug" = 'checkin-staff' AND p."codename" = 'site:event:checkin' ON CONFLICT DO NOTHING`
   );
   const id = await userId(email);
   const roles = await db.role.findMany({where: {slug: {in: slugs}}, select: {id: true}});
@@ -59,7 +59,7 @@ export async function setRoles(email: string, ...slugs: string[]) {
   await db.userRole.createMany({data: roles.map(role => ({userId: id, roleId: role.id}))});
 }
 
-/** A signed-in browser holding exactly `roles`. The first signed-in account is a throwaway owner. */
+/** A signed-in browser holding exactly `roles`. */
 export async function userWith(email: string, roles: string[], ip: string) {
   const b = await signedIn(eventsApp, email, undefined, ip);
   await setRoles(email, ...roles);

@@ -14,7 +14,7 @@ import {
 } from '../src/server/routes/admin-analytics';
 import {BEACON_LIMIT, createLimiter, utcDay, visitorHash} from '../src/server/routes/pageviews';
 
-const base = {secret: 'test-secret', at: new Date('2026-10-30T10:00:00Z'), ip: '203.0.113.7', userAgent: 'UA/1', eventId: 'e1'};
+const base = {salt: 'a'.repeat(64), ip: '203.0.113.7', userAgent: 'UA/1', eventId: 'e1'};
 
 describe('visitorHash', () => {
   it('is a stable sha256 hex that does not contain the ip', async () => {
@@ -23,14 +23,9 @@ describe('visitorHash', () => {
     expect(a).toBe(await visitorHash(base));
     expect(a).not.toContain('203.0.113.7');
   });
-  it('is the same all day, different the next day (salt rotates)', async () => {
+  it('differs per ip, user agent, event and day salt', async () => {
     const a = await visitorHash(base);
-    expect(await visitorHash({...base, at: new Date('2026-10-30T23:59:59Z')})).toBe(a);
-    expect(await visitorHash({...base, at: new Date('2026-10-31T00:00:01Z')})).not.toBe(a);
-  });
-  it('differs per ip, user agent, event and secret', async () => {
-    const a = await visitorHash(base);
-    for (const change of [{ip: '203.0.113.8'}, {userAgent: 'UA/2'}, {eventId: 'e2'}, {secret: 'other'}]) {
+    for (const change of [{ip: '203.0.113.8'}, {userAgent: 'UA/2'}, {eventId: 'e2'}, {salt: 'b'.repeat(64)}]) {
       expect(await visitorHash({...base, ...change})).not.toBe(a);
     }
   });

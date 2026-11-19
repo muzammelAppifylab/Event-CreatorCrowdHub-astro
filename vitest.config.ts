@@ -15,7 +15,7 @@ import {defineConfig} from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: [
-      {find: /^@[/]/, replacement: fileURLToPath(new URL("./src/", import.meta.url))},
+      {find: /^@[/]/, replacement: fileURLToPath(new URL('./src/', import.meta.url))},
       {
         find: 'cloudflare:workers',
         replacement: fileURLToPath(new URL('./tests/integration/support/cloudflare-workers.ts', import.meta.url)),

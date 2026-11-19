@@ -11,18 +11,18 @@ const box = {base: 25, width: 84, height: 82, lineHeight: 0.9, glyph: 0.52};
 describe('posterTextFor', () => {
   const event = {title: 'Pricing clinic', startAt: '2026-11-14T19:00:00Z', timezone: 'UTC', format: 'in_person' as const, venueName: 'The Loft'};
   it('uses title, date and venue by default', () => {
-    expect(posterTextFor(event)).toEqual({headline: 'Pricing clinic', eyebrow: 'Sat 14 Nov · 7:00 PM', footer: 'The Loft'});
+    expect(posterTextFor(event)).toEqual({headline: 'Pricing clinic', eyebrow: 'Sat 14 Nov · 19:00', footer: 'The Loft'});
   });
   it('says Online for online events', () => expect(posterTextFor({...event, format: 'online'}).footer).toBe('Online'));
   it('lets the creator override lines, ignoring blanks', () => {
     expect(posterTextFor(event, {headline: '  Price it right ', eyebrow: '', footer: 'Doors 6:30'} as never)).toEqual({
-      headline: 'Price it right', eyebrow: 'Sat 14 Nov · 7:00 PM', footer: 'Doors 6:30',
+      headline: 'Price it right', eyebrow: 'Sat 14 Nov · 19:00', footer: 'Doors 6:30',
     });
   });
 });
 
 describe('posterDate', () => {
-  it('formats in the event zone', () => expect(posterDate('2026-11-14T19:00:00Z', 'Asia/Dhaka')).toBe('Sun 15 Nov · 1:00 AM'));
+  it('formats in the event zone', () => expect(posterDate('2026-11-14T19:00:00Z', 'Asia/Dhaka')).toBe('Sun 15 Nov · 01:00'));
   it('is empty for a missing date or bad zone', () => {
     expect(posterDate('', 'UTC')).toBe('');
     expect(posterDate(null, 'UTC')).toBe('');

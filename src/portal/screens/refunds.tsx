@@ -73,7 +73,7 @@ export function Refunds() {
             </EmptyState>
           }
         />
-        <LoadMore query={list} />
+        <LoadMore query={list} count={rows?.length} noun={['order', 'orders']} />
       </Card>
     </div>
   );

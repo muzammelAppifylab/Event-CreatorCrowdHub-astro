@@ -41,7 +41,16 @@ function fakeDb(initial: Row = {}, eventOver: Row = {}) {
     ticketOrder: {findMany: async () => [{amountCents: 500, currency: 'USD', seats: 1, status: 'paid', createdAt: now}]},
     pollVote: {findMany: async () => [], updateMany: async () => ({})},
     messageDelivery: {findMany: async () => [{id: 'd1', channel: 'email', status: 'sent', sentAt: now, message: {subject: 'Hello'}}], updateMany: async () => ({})},
-    invite: {deleteMany: async () => ({})},
+    invite: {deleteMany: async () => ({}), findMany: async () => []},
+    order: {findMany: async () => []},
+    $executeRaw: async (strings: TemplateStringsArray, ...vals: unknown[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('unsubscribed_at = COALESCE')) Object.assign(rsvp, {marketingConsent: false, consentConfirmedAt: null, unsubscribedAt: rsvp.unsubscribedAt ?? vals[0]});
+      if (sql.includes('SET unsubscribed_at = NULL')) rsvp.unsubscribedAt = null;
+      return 1;
+    },
+    $queryRaw: async (strings: TemplateStringsArray) =>
+      strings.join('?').includes('bool_or(unsubscribed_at') ? [{unsubscribed: Boolean(rsvp.unsubscribedAt)}] : [],
   };
   tx.$transaction = async (fn: (t: unknown) => unknown) => fn(tx);
   return {db: tx as unknown as PrismaClient, rsvp, token, lookups};
@@ -66,7 +75,8 @@ describe('privacy links and constants', () => {
     expect(verifyToken(signToken('manage', {rsvpId: RSVP_ID}, SECRET), 'consent', SECRET)).toBeNull();
   });
   it('retention and export windows', () => {
-    expect(exportDeadline(new Date('2026-01-01T00:00:00Z')).getTime() - Date.parse('2026-01-01T00:00:00Z')).toBe(MANAGE_READ_DAYS * 86400_000);
+    expect(exportDeadline(new Date('2026-01-01T00:00:00Z')).getTime() - Date.parse('2026-01-01T00:00:00Z')).toBe(RETENTION_DAYS * 86400_000);
+    expect(MANAGE_READ_DAYS).toBeLessThan(RETENTION_DAYS);
     expect(now.getTime() - retentionCutoff(now).getTime()).toBe(RETENTION_DAYS * 86400_000);
   });
   it('exportFilename strips unsafe slug characters', () => {
@@ -119,12 +129,12 @@ describe('token lookups', () => {
     expect(await consentState(f.db, bad, SECRET, now)).toBeNull();
     expect(await confirmConsent(f.db, bad, SECRET, now)).toBe('invalid');
   });
-  it('unsubscribe state needs both consent and its confirmation', async () => {
-    const f = fakeDb({marketingConsent: true});
-    expect((await unsubscribeState(f.db, f.token))?.state).toBe('off');
-    f.rsvp.consentConfirmedAt = now;
-    expect((await unsubscribeState(f.db, f.token))?.state).toBe('confirmed');
-    expect(await unsubscribeState(f.db, 'x'.repeat(43))).toBeNull();
+  it('unsubscribe state is off only once this person unsubscribed (a guest who never opted in can still opt out of broadcasts)', async () => {
+    const f = fakeDb({marketingConsent: false});
+    expect((await unsubscribeState(f.db, f.token, SECRET))?.state).toBe('confirmed');
+    f.rsvp.unsubscribedAt = now;
+    expect((await unsubscribeState(f.db, f.token, SECRET))?.state).toBe('off');
+    expect(await unsubscribeState(f.db, 'x'.repeat(43), SECRET)).toBeNull();
   });
 });
 
@@ -138,9 +148,11 @@ describe('guestSummary', () => {
     f.rsvp.status = 'awaiting_payment';
     expect((await guestSummary(f.db, f.token))?.canErase).toBe(false);
   });
-  it('is null for a draft event', async () => {
+  it('still works when the event went back to draft (M-23); null for an erased guest', async () => {
     const f = fakeDb({}, {status: 'draft'});
-    expect(await guestSummary(f.db, f.token)).toBeNull();
+    expect((await guestSummary(f.db, f.token))?.name).toBe('Ada');
+    const gone = fakeDb({email: 'removed+x@invalid'});
+    expect(await guestSummary(gone.db, gone.token)).toBeNull();
   });
 });
 

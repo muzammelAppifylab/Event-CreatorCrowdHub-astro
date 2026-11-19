@@ -1,7 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
-import {createEvent, eventsApp, resetEvents, rsvpBody, userWith} from './support/events-fixtures';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
+import {createEvent, eventBody, eventsApp, resetEvents, rsvpBody, userWith} from './support/events-fixtures';
+import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, resetDatabase} from './support/harness';
 
 const A = '/site-api/admin-events';
 
@@ -16,14 +16,13 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
-    await userWith('first@example.test', ['owner'], '203.0.113.1'); // throwaway: takes the owner slot
-    owner = await userWith('owner@example.test', ['owner'], '203.0.113.5');
+    owner = await ownerSignedIn(eventsApp, undefined, '203.0.113.5');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.2');
-    staff = await userWith('staff@example.test', ['checkin_staff'], '203.0.113.3');
+    staff = await userWith('staff@example.test', ['checkin-staff'], '203.0.113.3');
     member = await userWith('member@example.test', ['member'], '203.0.113.4');
   });
 
-  it('gates event management: guest 401, member 403, checkin_staff 403, admin ok', async () => {
+  it('gates event management: guest 401, member 403, checkin-staff 403, admin ok', async () => {
     const guest = new Browser(eventsApp, '203.0.113.9');
     expect((await guest.get(A)).status).toBe(401);
     expect((await member.get(A)).status).toBe(403);
@@ -45,6 +44,27 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
     expect((await guest.get(`/site-api/events/${ev.slug}`)).status).toBe(404);
   });
 
+  it('a cancelled event stays readable (noindex) so its page can show the Cancelled banner (M-7)', async () => {
+    const guest = new Browser(eventsApp, '203.0.113.9');
+    const ev = await createEvent(admin);
+    expect((await admin.post(`/site-api/admin-events/${ev.id}/cancel`)).status).toBe(200);
+    const res = await guest.get(`/site-api/events/${ev.slug}`);
+    expect(res.status).toBe(200);
+    expect((res.json.event as {status: string}).status).toBe('cancelled');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+    // Still out of the public list and the sitemap, and RSVPs are refused.
+    expect(((await guest.get('/site-api/events')).json.events as {slug: string}[]).map(e => e.slug)).not.toContain(ev.slug);
+    expect((await guest.post(`/site-api/rsvp/events/${ev.slug}`, rsvpBody('late@example.test'))).status).toBe(409);
+  });
+
+  it('never gives an event a link that belongs to a route, like /events/past (M-13)', async () => {
+    const made = await admin.post(A, eventBody({title: 'Past'}));
+    expect(made.status).toBe(201);
+    expect((made.json.event as {slug: string}).slug).not.toBe('past');
+    const explicit = await admin.post(A, eventBody({title: 'Anything', slug: 'past'}));
+    expect(explicit.status).toBe(422);
+  });
+
   it('refuses an event without a venue', async () => {
     const bad = await admin.post(A, {
       title: 'No venue',
@@ -56,7 +76,7 @@ describe.skipIf(!DATABASE_URL)('events admin (integration, real Postgres)', () =
     expect(bad.status).toBe(422);
   });
 
-  it('checkin_staff can only check in by ticket code, and only confirmed guests', async () => {
+  it('checkin-staff can only check in by ticket code, and only confirmed guests', async () => {
     const ev = await createEvent(admin);
     const made = await new Browser(eventsApp, '203.0.113.20').post(`/site-api/rsvp/events/${ev.slug}`, rsvpBody('guest1@example.test'));
     expect(made.status).toBe(202);

@@ -11,12 +11,21 @@ import GIcon from '../../components/GIcon.astro';
 import Base from '../../layouts/Base.astro';
 import {guestCopy} from '../../lib/guest-format';
 import type {EventsPage} from '../../lib/types';
+import {hasNul, parseKeysetCursor} from '../../lib/text';
 import {backend, read} from '../../server/backend';
 import {pageContext} from '../../server/page';
 
 const params = Astro.url.searchParams;
-const before = params.get('before') ?? undefined;
-const q = (params.get('q') ?? '').trim().slice(0, 80);
+// A crafted or broken `?before=` cursor is the visitor's error (400), not an outage (503):
+// show the first page with that status instead of asking the API.
+const rawBefore = params.get('before') ?? undefined;
+const badCursor = parseKeysetCursor(rawBefore) === 'invalid';
+// A NUL in `?q=` can't be searched for (the API answers 422): like a bad cursor, the visitor's error
+// (400), never an outage. Show the first page without the search.
+const rawQ = params.get('q') ?? '';
+const badQuery = hasNul(rawQ);
+const before = badCursor || badQuery ? undefined : rawBefore;
+const q = badQuery ? '' : rawQ.trim().slice(0, 80);
 const format = ['in_person', 'online', 'hybrid'].includes(params.get('format') ?? '') ? params.get('format')! : '';
 const when = ['week', 'month'].includes(params.get('when') ?? '') ? params.get('when')! : '';
 const filtered = !!(q || format || when);
@@ -31,7 +40,8 @@ const [{site, viewer}, result, pastResult] = await Promise.all([
 ]);
 const events = result?.events ?? [];
 const past = pastResult?.events ?? [];
-if (!result) Astro.response.status = 503;
+if (badCursor || badQuery) Astro.response.status = 400;
+else if (!result) Astro.response.status = 503;
 
 /** A link to this page with one filter changed (the others kept, paging reset). */
 function link(change: Record<string, string>): string {
@@ -112,7 +122,7 @@ const windows = [
       {
         moreHref && (
           <nav class="g-pager" aria-label="More events">
-            <a class="g-btn g-btn-outline g-btn-lg" href={moreHref} data-astro-prefetch>
+            <a class="g-btn g-btn-outline g-btn-lg" href={moreHref}>
               Later events
               <GIcon name="arrow-right" />
             </a>

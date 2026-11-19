@@ -209,10 +209,9 @@ export function Activity() {
               })}
             </ul>
           )}
+          <LoadMore query={events} count={rows.length} noun={['event', 'events']} />
         </Card>
       )}
-      {events.error && rows.length > 0 && <ErrorNote error={events.error} />}
-      <LoadMore query={events} />
     </div>
   );
 }

@@ -2,9 +2,9 @@ import {Hono} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
 
 import {isPreview} from '../platform/api';
-import {adminRoutes, authRoutes, getAccess, getViewer, ownerClaimMode} from '../platform/auth';
+import {adminRoutes, authRoutes, getAccess, getViewer} from '../platform/auth';
 import {config} from '../platform/config';
-import {csrf, previewCookies, problem, sameOrigin} from '../platform/guards';
+import {csrf, previewCookies, problem, requireAuth, sameOrigin, withViewer} from '../platform/guards';
 import {syncPermissions} from '../platform/permission-sync';
 import {authSettings} from './auth-settings';
 import {adminAnalyticsRoutes} from './routes/admin-analytics';
@@ -29,6 +29,7 @@ import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {abilitiesFor, CATALOGUE} from './permissions';
 import {eventRoutes} from './routes/events';
 import {siteRoutes} from './routes/site';
+import {inputGuard, onSiteApiError} from './validate';
 
 // Paid tickets: the RSVP route holds the seat, the platform checkout takes the money. ONE path:
 // `startTicketCheckout` here, then `confirmPaidTicket` / `releaseHold` from payments-hooks.ts
@@ -40,6 +41,32 @@ setPaidCheckoutHook(async ({origin, rsvp, manageToken}) => {
   return started.ok ? {checkoutUrl: started.redirectUrl} : null;
 });
 
+/** `/health/deep`: whether the Site Database answers within 3 s (a public boolean, cached ~10 s). */
+const HEALTH_TTL_MS = 10_000;
+let lastHealth: {at: number; ok: boolean} | null = null;
+async function databaseReachable(): Promise<boolean> {
+  if (lastHealth && Date.now() - lastHealth.at < HEALTH_TTL_MS) return lastHealth.ok;
+  const db = getDb();
+  let ok = false;
+  if (db) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      ok = await Promise.race([
+        db.$queryRaw`SELECT 1`.then(() => true),
+        new Promise<boolean>(resolve => {
+          timer = setTimeout(() => resolve(false), 3000);
+        }),
+      ]);
+    } catch {
+      ok = false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  lastHealth = {at: Date.now(), ok};
+  return ok;
+}
+
 /**
  * The Site API: this site's ONLY backend, one Hono app at `/site-api/*`.
  *
@@ -49,6 +76,7 @@ setPaidCheckoutHook(async ({origin, rsvp, manageToken}) => {
  * Mounted by ONE catch-all page, `src/pages/site-api/[...path].ts`.
  *
  *   GET  /health        what this site has been given (booleans only)
+ *   GET  /health/deep   200 when the Site Database answers, else 503 (uptime monitors)
  *   GET  /me            the visitor + what the UI may show them
  *   *    /auth/...      sign-up, sign-in, sessions, passwords   platform/auth/routes.ts
  *   *    /admin/...     users, roles, audit log (admins)        platform/auth/admin.ts
@@ -74,6 +102,20 @@ export const app = new Hono()
   .use(csrf)
   // No route here takes a big body; uploads never pass through the Worker.
   .use(bodyLimit({maxSize: 64 * 1024, onError: c => c.json(problem('too_large', 'That request is too large.'), 413)}))
+  // Events organiser routes (site:event:manage / site:event:checkin): signed-in first, before
+  // `inputGuard` and any route's validator, so an anonymous caller gets 401, never 404/415/422
+  // (getViewer is memoised per request; each route still runs its own full guard chain).
+  .use('/event-admin/*', withViewer, requireAuth)
+  .use('/checkin/*', withViewer, requireAuth)
+  .use('/admin-events/*', withViewer, requireAuth)
+  .use('/overview/*', withViewer, requireAuth)
+  .use('/analytics/*', withViewer, requireAuth)
+  .use('/polls/*', withViewer, requireAuth)
+  .use('/refunds/*', withViewer, requireAuth)
+  .use('/webhook-endpoints/*', withViewer, requireAuth)
+  // Not /event-settings (its /brand route is public) nor /polls-public.
+  // JSON bodies only on writes (415), no NUL in the URL or body (422): src/server/validate.ts.
+  .use(inputGuard)
   // New catalogue codenames reach the `permissions` table (once per isolate; no migration).
   .use(syncPermissions(CATALOGUE))
 
@@ -84,10 +126,15 @@ export const app = new Hono()
       database: Boolean(config.databaseUrl),
       auth: Boolean(config.jwtSecret && config.databaseUrl),
       siteKey: Boolean(config.siteKey),
-      // false = the live site has no owner email, so nobody can become owner.
-      ownerSetup: !authSettings.firstUserBecomesOwner || ownerClaimMode(authSettings) !== 'off',
     })
   )
+  // For uptime monitors: 200 only when the Site Database answers (503 otherwise). One `SELECT 1`
+  // with a short timeout, remembered per isolate for a few seconds so a busy monitor costs little.
+  .get('/health/deep', async c => {
+    c.header('Cache-Control', 'no-store');
+    const database = await databaseReachable();
+    return c.json({ok: database, database}, database ? 200 : 503);
+  })
 
   // `abilities` only decides what the UI SHOWS; every guarded route checks again.
   .get('/me', async c => {
@@ -103,7 +150,7 @@ export const app = new Hono()
   .route('/site', siteRoutes)
   .route('/events', eventRoutes)
   .route('/memberships', membershipRoutes)
-  // Events: organiser routes (site:event:manage / site:event:checkin) ...
+  // Events: organiser routes (their 401 gates are mounted above, before inputGuard) ...
   .route('/admin-events', adminEventRoutes)
   .route('/event-admin', adminGuestRoutes)
   .route('/event-admin', adminInviteRoutes)
@@ -123,10 +170,7 @@ export const app = new Hono()
   .route('/pageviews', pageViewRoutes)
 
   .notFound(c => c.json(problem('not_found', 'No such Site API route.'), 404))
-  .onError((err, c) => {
-    // The message only: an error object can carry request details.
-    console.error(`site-api ${c.req.method} ${c.req.path}: ${err.message}`);
-    return c.json(problem('internal_error', 'Something went wrong.'), 500);
-  });
+  // Hono's own client errors keep their status; anything else is a logged 500 (tokens redacted).
+  .onError(onSiteApiError);
 
 export type AppType = typeof app;

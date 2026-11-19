@@ -12,10 +12,8 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
-import {useEffect, useRef, useState} from 'react';
+import {lazy, Suspense, useEffect, useRef, useState} from 'react';
 
-
-import {EventHub} from './screens/event-hub';
 import type {Abilities} from '../lib/types';
 import {logout} from '../platform/browser';
 import {
@@ -33,6 +31,7 @@ import {
 } from './queries';
 import {doorEventsQuery, doorListQuery} from './checkin-queries';
 import {eventsListQuery, eventSettingsQuery} from './events-queries';
+import {hubEventQuery} from './overview-queries';
 import {presenterPollsQuery} from './polls-queries';
 import {firstSettingsPath, isSettingsPath, SettingsLayout} from './settings-layout';
 import {useMe, useSite} from './shared';
@@ -125,10 +124,11 @@ export function RouteError({error}: ErrorComponentProps) {
   );
 }
 
-type NavItem = {to: string; label: string; icon: IconName; exact?: boolean; ability?: keyof Abilities};
+/** `abilities`: shown when the visitor has ANY of them (the same rule as the route's `needs(...)`). */
+type NavItem = {to: string; label: string; icon: IconName; exact?: boolean; abilities?: (keyof Abilities)[]};
 
 /**
- * The sidebar, in groups. `ability` hides an item the visitor may not use;
+ * The sidebar, in groups. `abilities` hides an item the visitor may not use;
  * that only HIDES it, the route's guard is the enforcement. A group with no
  * visible item is not shown.
  */
@@ -137,13 +137,17 @@ const NAV_GROUPS: {label: string; items: NavItem[]}[] = [
     label: '',
     items: [
       {to: '/', label: 'Overview', icon: 'dashboard', exact: true},
-      {to: '/events', label: 'Events', icon: 'calendar', ability: 'manageEvents'},
-      {to: '/checkin', label: 'Check-in', icon: 'check-circle', ability: 'checkinGuests'},
-      {to: '/contacts', label: 'Contacts', icon: 'users', ability: 'manageEvents'},
+      {to: '/events', label: 'Events', icon: 'calendar', abilities: ['manageEvents']},
+      {to: '/checkin', label: 'Check-in', icon: 'check-circle', abilities: ['checkinGuests', 'manageEvents']},
+      {to: '/contacts', label: 'Contacts', icon: 'users', abilities: ['manageEvents']},
     ],
   },
   // Settings, Account, Users, Roles, Activity and Integrations are ONE sidebar entry (below) with a
   // secondary nav: src/portal/settings-layout.tsx.
+  // Only in the Preview and `npm run dev` (never in a build): the UI kit, on screen.
+  ...(import.meta.env.DEV
+    ? [{label: 'Build', items: [{to: '/components', label: 'Components', icon: 'layers' as const}]}]
+    : []),
 ];
 
 /** The screen's title for the top bar and the tab: the deepest route's `staticData.title`. */
@@ -238,6 +242,9 @@ const rootRoute = createRootRouteWithContext<{queryClient: QueryClient}>()({
   ),
 });
 
+/** Whether the sidebar is a drawer (small screens), the width `app.css` switches at. */
+const drawerWidth = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 960px)').matches;
+
 function Shell() {
   const me = useMe();
   const site = useSite();
@@ -263,6 +270,26 @@ function Shell() {
   }, [signedOut]);
   // The drawer closes on navigation and on Esc.
   useEffect(() => setOpen(false), [resolved]);
+  // Drawer widths only: opening moves focus into the sidebar (the rest is inert), closing returns it to the
+  // menu button. The button is found in the shell, as the kit's IconButton takes no ref.
+  const shell = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
+  // Closed BY a navigation (a drawer link): focus goes to the new screen's <h1>, as on every navigation
+  // (the heading could not take it while `.app-main` was still inert).
+  const openedOn = useRef(resolved);
+  const resolvedNow = useRef(resolved);
+  resolvedNow.current = resolved;
+  useEffect(() => {
+    const drawer = window.matchMedia('(max-width: 960px)').matches;
+    if (open && drawer) {
+      openedOn.current = resolvedNow.current;
+      shell.current?.querySelector<HTMLElement>('.app-sidebar a')?.focus();
+    } else if (!open && wasOpen.current && drawer) {
+      if (resolvedNow.current !== openedOn.current) heading.current?.focus({preventScroll: true});
+      else shell.current?.querySelector<HTMLElement>('.app-menu-button')?.focus();
+    }
+    wasOpen.current = open;
+  }, [open, heading]);
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && setOpen(false);
@@ -273,14 +300,17 @@ function Shell() {
 
   const name = siteName ?? 'CreatorCrowdHub';
   return (
-    <div className="app-shell" data-nav-open={open ? '' : undefined}>
+    <div className="app-shell" data-nav-open={open ? '' : undefined} ref={shell}>
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
       <aside className="app-sidebar" aria-label="Sidebar">
         <a className="app-brand" href="/">
           <span className="app-brand-name">{name}</span>
         </a>
         <nav className="app-nav" aria-label="Dashboard">
           {NAV_GROUPS.map(group => {
-            const items = group.items.filter(item => !item.ability || abilities?.[item.ability]);
+            const items = group.items.filter(item => !item.abilities || item.abilities.some(a => abilities?.[a]));
             if (!items.length) return null;
             return (
               <div className="app-nav-group" key={group.label}>
@@ -308,7 +338,7 @@ function Shell() {
       </aside>
       <button type="button" className="app-scrim" aria-label="Close the menu" tabIndex={-1} onClick={() => setOpen(false)} />
 
-      <div className="app-main">
+      <div className="app-main" inert={(open && drawerWidth()) || undefined}>
         <header className="app-topbar">
           <IconButton
             className="app-menu-button"
@@ -358,7 +388,7 @@ function Shell() {
             )}
           </div>
         </header>
-        <main className="app-content" id="main">
+        <main className="app-content" id="main" tabIndex={-1}>
           {inSettings ? (
             <SettingsLayout>
               <Outlet />
@@ -436,9 +466,16 @@ const activityRoute = createRoute({
 });
 
 // Events (admin): the list, the editor, the tabbed hub, settings.
+// The hub is LAZY like every screen (audit L-25): imported eagerly it put its tabs and their
+// date libraries in the dashboard's first bundle.
+const EventHub = lazy(() => import('./screens/event-hub').then(m => ({default: m.EventHub})));
 function EventHubRoute() {
   const {id} = eventHubRoute.useParams();
-  return <EventHub eventId={id} />;
+  return (
+    <Suspense fallback={<RoutePending />}>
+      <EventHub eventId={id} />
+    </Suspense>
+  );
 }
 const eventsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -467,6 +504,8 @@ const eventHubRoute = createRoute({
   path: '/events/$id',
   beforeLoad: needs('manageEvents'),
   staticData: {title: 'Event'},
+  // `warm` swallows a failed read (a 404 included): the hub shows its own "Event not found" state.
+  loader: ({context: {queryClient}, params}) => warm(queryClient.ensureQueryData(hubEventQuery(params.id))),
   component: EventHubRoute,
 });
 const contactsRoute = createRoute({
@@ -537,6 +576,19 @@ const integrationsRoute = createRoute({
   component: lazyRouteComponent(() => import('./screens/refunds'), 'Refunds'),
 });
 
+// The UI kit on screen, for the owner and their agent. Dev only: the whole route (and its
+// chunk) is left out of a build, because `import.meta.env.DEV` is `false` there.
+const devRoutes = import.meta.env.DEV
+  ? [
+      createRoute({
+        getParentRoute: () => rootRoute,
+        path: '/components',
+        staticData: {title: 'Components'},
+        component: lazyRouteComponent(() => import('./screens/components'), 'Components'),
+      }),
+    ]
+  : [];
+
 export const routeTree = rootRoute.addChildren([
   overviewRoute,
   accountRoute,
@@ -555,4 +607,6 @@ export const routeTree = rootRoute.addChildren([
   checkinEventRoute,
   pollPresenterRoute,
   integrationsRoute,
+  refundsRoute,
+  ...devRoutes,
 ]);

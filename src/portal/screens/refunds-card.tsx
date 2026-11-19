@@ -6,7 +6,10 @@ import {buttonClass, Card, Icon} from '../ui';
 
 /** "Refunds to finish": shown ONLY when something is waiting (count > 0). `eventId` scopes it to one event. */
 export function RefundsCard({eventId}: {eventId?: string}) {
-  const count = useQuery(refundsCountQuery(eventId)).data?.count ?? 0;
+  const data = useQuery(refundsCountQuery(eventId)).data;
+  const count = data?.count ?? 0;
+  // Capped server side: "25+" when there are more.
+  const shown = data?.more ? `${count}+` : String(count);
   if (count <= 0) return null;
   return (
     <Card
@@ -18,7 +21,7 @@ export function RefundsCard({eventId}: {eventId?: string}) {
         </Link>
       }>
       <p>
-        {count === 1 ? '1 paid order needs' : `${count} paid orders need`} a refund. Refund {count === 1 ? 'it' : 'them'} in the platform dashboard.
+        {count === 1 ? '1 paid order needs' : `${shown} paid orders need`} a refund. Refund {count === 1 ? 'it' : 'them'} in the platform dashboard.
       </p>
     </Card>
   );

@@ -1,6 +1,6 @@
 import {Hono} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
-import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {authRoutes} from '../../src/platform/auth';
 import {csrf, previewCookies, sameOrigin} from '../../src/platform/guards';
@@ -8,22 +8,35 @@ import {syncPermissions} from '../../src/platform/permission-sync';
 import {authSettings} from '../../src/server/auth-settings';
 import {CATALOGUE} from '../../src/server/permissions';
 import {adminInviteRoutes} from '../../src/server/routes/admin-invites';
+import {defineBackground} from '../../src/platform/background';
+import {OUTBOX_LIST} from '../../src/server/jobs/outbox';
+import {drainGuestEmailOutbox, type Deliver} from '../../src/server/jobs/outbox-drain';
 import {verifyToken} from '../../src/domain/tokens';
 import {resetEvents, setRoles} from './support/events-fixtures';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn} from './support/harness';
 
-const mail = vi.hoisted(() => ({sent: [] as {to: string; subject: string}[], fail: new Set<string>()}));
-vi.mock('../../src/server/guest-mail', async importOriginal => {
-  const real = await importOriginal<typeof import('../../src/server/guest-mail')>();
-  return {
-    ...real,
-    sendMail: async (m: {to: string; subject: string}) => {
-      if (mail.fail.has(m.to)) return {ok: false};
-      mail.sent.push({to: m.to, subject: m.subject});
-      return {ok: true};
+const mail = {sent: [] as {to: string; subject: string}[], fail: new Set<string>()};
+
+/**
+ * Invites are only QUEUED in the guest email outbox; the kick after the commit runs the outbox
+ * drain inline (jobs run locally in tests), sending through this fake provider. An address in
+ * `fail` is refused (permanent: the outbox row is failed, the invite stays as it was).
+ */
+const deliver: Deliver = async email => {
+  if (mail.fail.has(email.to)) return {outcome: 'rejected'};
+  mail.sent.push({to: email.to, subject: email.content.subject});
+  return {outcome: 'sent'};
+};
+function registerOutboxDrain() {
+  defineBackground({
+    [OUTBOX_LIST]: async () => {
+      for (let i = 0; i < 10; i++) {
+        const run = await drainGuestEmailOutbox(db as never, new Date(), {deliver, providerConfigured: true});
+        if (!run.more) break;
+      }
     },
-  };
-});
+  });
+}
 
 /** Same middleware chain as src/server/app.ts, with the event admin routes mounted at /event-admin. */
 export const app = new Hono()
@@ -33,7 +46,7 @@ export const app = new Hono()
   .use(csrf)
   .use(bodyLimit({maxSize: 1024 * 1024}))
   .use(syncPermissions(CATALOGUE))
-  .route('/auth', authRoutes({...authSettings, requireEmailVerification: true}))
+  .route('/auth', authRoutes(authSettings))
   .route('/event-admin', adminInviteRoutes);
 
 /** Sign up through THIS app (email verification on, as the harness expects), then hold exactly `roles`. */
@@ -74,14 +87,16 @@ describe.skipIf(!DATABASE_URL)('admin invites (integration, real Postgres)', () 
   let member: Browser;
   let guest: Browser;
 
-  beforeAll(configureEnv);
+  beforeAll(() => {
+    configureEnv();
+    registerOutboxDrain();
+  });
   afterAll(() => db.$disconnect());
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
     mail.sent.length = 0;
     mail.fail.clear();
-    await userWith('first@example.test', ['owner'], '203.0.113.1');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.2');
     member = await userWith('member@example.test', ['member'], '203.0.113.4');
     guest = new Browser(app, '203.0.113.9');
@@ -124,14 +139,16 @@ describe.skipIf(!DATABASE_URL)('admin invites (integration, real Postgres)', () 
     const audits = await db.auditEvent.findMany({where: {action: 'invites_sent'}});
     expect(audits).toHaveLength(1);
     expect(audits[0]).toMatchObject({targetType: 'event', targetId: e.id});
-    expect(audits[0]!.meta).toEqual({queued: 2, sent: 2});
+    expect(audits[0]!.meta).toEqual({queued: 2});
   });
 
   it('keeps an invite queued when the mailer fails', async () => {
     const e = await ev();
     mail.fail.add('bad@x.com');
     const res = await admin.post(inv(e.id), {emails: 'ok@x.com bad@x.com'});
-    expect(res.json).toMatchObject({queued: 2, sent: 1});
+    expect(res.json).toMatchObject({queued: 2});
+    expect(mail.sent.map(m => m.to)).toEqual(['ok@x.com']);
+    expect(await db.guestEmailOutbox.count({where: {kind: 'invite', status: 'failed'}})).toBe(1);
     const rows = await db.invite.findMany({select: {email: true, status: true}});
     expect(Object.fromEntries(rows.map(r => [r.email, r.status]))).toEqual({'ok@x.com': 'sent', 'bad@x.com': 'queued'});
   });
@@ -178,11 +195,24 @@ describe.skipIf(!DATABASE_URL)('admin invites (integration, real Postgres)', () 
     expect((await admin.post(inv(e.id, '/resend'))).status).toBe(409);
   });
 
+  it('refuses invites and resends for a draft (M-14): its links would have no page', async () => {
+    const draft = await createEvent(admin, {}, false);
+    const res = await admin.post(inv(draft.id), {emails: 'a@x.com'});
+    expect(res.status).toBe(409);
+    expect(res.json.error).toBe('event_not_published');
+    expect((await admin.post(inv(draft.id, '/resend'))).status).toBe(409);
+    expect(await db.invite.count({where: {eventId: draft.id}})).toBe(0);
+    expect(mail.sent).toEqual([]);
+    // Without event management it is still 403 before anything else.
+    expect((await member.post(inv(draft.id), {emails: 'a@x.com'})).status).toBe(403);
+  });
+
   it('caps invite emails at 2,000 per rolling 24h with 409 daily_invite_limit', async () => {
     const e = await ev();
     const recent = new Date(Date.now() - HOUR);
-    await db.invite.createMany({
-      data: Array.from({length: 1999}, (_, i) => ({eventId: e.id, email: `old${i}@x.com`, token: `tok${i}`, status: 'sent' as const, sentAt: recent})),
+    // The cap counts invite emails queued in the outbox in the last 24 hours, across every event.
+    await db.guestEmailOutbox.createMany({
+      data: Array.from({length: 1999}, (_, i) => ({idempotencyKey: `invite-old-${i}`, kind: 'invite', status: 'sent', createdAt: recent})),
     });
     const over = await admin.post(inv(e.id), {emails: 'a@x.com, b@x.com'});
     expect(over.status).toBe(409);
@@ -190,7 +220,7 @@ describe.skipIf(!DATABASE_URL)('admin invites (integration, real Postgres)', () 
     expect(mail.sent).toEqual([]);
     expect((await admin.post(inv(e.id), {emails: 'a@x.com'})).status).toBe(201);
     // A day later the window has moved on.
-    await db.invite.updateMany({data: {sentAt: new Date(Date.now() - 25 * HOUR)}});
+    await db.guestEmailOutbox.updateMany({data: {createdAt: new Date(Date.now() - 25 * HOUR)}});
     expect((await admin.post(inv(e.id), {emails: 'b@x.com, c@x.com'})).status).toBe(201);
   });
 
@@ -254,19 +284,26 @@ describe.skipIf(!DATABASE_URL)('admin invites (integration, real Postgres)', () 
       expect(audits[0]!.meta).toEqual({resent: 2});
     });
 
-    it('resends one invite ignoring the cooldown; 409 responded, 404 unknown, 502 on mail failure', async () => {
+    it('resends one invite once its cooldown is over, 409 inside it; 409 responded, 404 unknown; a refused email is a failed outbox row', async () => {
       const {e, id} = await seeded();
+      // Inside the 48 h cooldown a single resend is refused too (it used to skip the cooldown).
+      expect((await admin.post(inv(e.id, `/${await id('d@x.com')}/resend`))).json).toMatchObject({error: 'resend_cooldown'});
+      await db.invite.updateMany({data: {sentAt: ago(72)}});
       mail.sent.length = 0;
       const ok = await admin.post(inv(e.id, `/${await id('d@x.com')}/resend`));
       expect(ok.status).toBe(200);
       expect(mail.sent.map(m => m.to)).toEqual(['d@x.com']);
+      // A second click right after is inside the new cooldown.
+      expect((await admin.post(inv(e.id, `/${await id('d@x.com')}/resend`))).status).toBe(409);
       expect((await admin.post(inv(e.id, `/${await id('a@x.com')}/resend`))).status).toBe(409);
       expect((await admin.post(inv(e.id, `/${await id('c@x.com')}/resend`))).status).toBe(409);
       expect((await admin.post(inv(e.id, '/00000000-0000-4000-8000-000000000000/resend'))).status).toBe(404);
       expect((await admin.post(inv(e.id, '/junk/resend'))).status).toBe(404);
       mail.fail.add('e@x.com');
-      expect((await admin.post(inv(e.id, `/${await id('e@x.com')}/resend`))).status).toBe(502);
-      expect(await db.auditEvent.count({where: {action: 'invite_resent'}})).toBe(1);
+      // The request only queues: it answers 200, and the refusal is recorded on the outbox row.
+      expect((await admin.post(inv(e.id, `/${await id('e@x.com')}/resend`))).status).toBe(200);
+      expect(await db.guestEmailOutbox.count({where: {kind: 'invite', inviteId: await id('e@x.com'), status: 'failed'}})).toBe(1);
+      expect(await db.auditEvent.count({where: {action: 'invite_resent'}})).toBe(2);
     });
 
     it('caps a bulk resend at 200 and reports the remainder', async () => {

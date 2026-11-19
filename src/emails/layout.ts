@@ -112,6 +112,42 @@ export interface LayoutInput {
   /** Pre-rendered HTML blocks, in order. */
   blocks: string[]
   manageUrl?: string | null
+  /** Footer "Unsubscribe" link (audit M-4/M-25); derived from a token-bearing `manageUrl` when absent. */
+  unsubscribeUrl?: string | null
+  /** Footer "Your data" link (download, erase); derived from a token-bearing `manageUrl` when absent. */
+  privacyUrl?: string | null
+}
+
+/** A guest's manage link with the raw token in it: `<origin>/r/<token>/` (rsvp confirmation, waitlist claim). */
+const MANAGE_LINK = /^(https?:\/\/[^/?#\s]+)\/r\/([A-Za-z0-9_-]{32,128})\/?$/
+
+/**
+ * The guest's privacy links for an email footer (audit M-4). Explicit links win; otherwise, when the
+ * manage link carries the raw manage token, the unsubscribe and data pages use the same token
+ * (`/privacy/unsubscribe/<token>`, `/privacy/guest/<token>`, src/server/privacy.ts). A manage link
+ * that is only the event page gives nothing to derive.
+ */
+export function guestPrivacyLinks(input: {
+  manageUrl?: string | null
+  unsubscribeUrl?: string | null
+  privacyUrl?: string | null
+}): { unsubscribeUrl: string | null; privacyUrl: string | null } {
+  const m = input.manageUrl ? MANAGE_LINK.exec(input.manageUrl) : null
+  const derived = (path: string) => (m ? `${m[1]}/privacy/${path}/${m[2]}` : null)
+  return {
+    unsubscribeUrl: input.unsubscribeUrl || derived("unsubscribe"),
+    privacyUrl: input.privacyUrl || derived("guest"),
+  }
+}
+
+/**
+ * `List-Unsubscribe` for a guest email (RFC 2369): mail clients show their own "Unsubscribe" next
+ * to the sender. Only the https page (it asks for one click); no `List-Unsubscribe-Post`, because
+ * the one-click POST of RFC 8058 would have to skip the site's CSRF guard.
+ */
+export function listUnsubscribeHeaders(unsubscribeUrl: string | null | undefined): Record<string, string> | undefined {
+  if (!unsubscribeUrl || !/^https?:\/\//i.test(unsubscribeUrl)) return undefined
+  return { "List-Unsubscribe": `<${unsubscribeUrl.replace(/[<>\s]/g, "")}>` }
 }
 
 export function renderLayout(input: LayoutInput): string {
@@ -121,9 +157,11 @@ export function renderLayout(input: LayoutInput): string {
   const masthead = logoSrc
     ? `<img src="${esc(logoSrc)}" alt="${esc(brand.senderName)}" height="32" style="display:block;height:32px;width:auto;max-width:200px;max-height:32px;border:0;outline:none;">`
     : `<span style="font-family:${FONT};font-size:12px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${MARQUEE.ink};">${esc(brand.senderName)}</span>`
-  const manage = input.manageUrl
-    ? ` ${link("Manage your RSVP", input.manageUrl)}.`
-    : ""
+  const privacy = guestPrivacyLinks(input)
+  const manage =
+    (input.manageUrl ? ` ${link("Manage your RSVP", input.manageUrl)}.` : "") +
+    (privacy.privacyUrl ? ` ${link("Your data", privacy.privacyUrl)}.` : "") +
+    (privacy.unsubscribeUrl ? ` ${link("Unsubscribe from host updates", privacy.unsubscribeUrl)}.` : "")
 
   return `<!doctype html>
 <html lang="en">
@@ -166,6 +204,8 @@ export interface TextInput {
   links?: Array<[string, string]>
   senderName: string
   manageUrl?: string | null
+  unsubscribeUrl?: string | null
+  privacyUrl?: string | null
 }
 
 /** Plain-text twin of the layout: same order, no markup. */
@@ -181,6 +221,9 @@ export function renderText(input: TextInput): string {
     lines.push("")
   }
   if (input.manageUrl) lines.push(`Manage your RSVP: ${input.manageUrl}`)
+  const privacy = guestPrivacyLinks(input)
+  if (privacy.privacyUrl) lines.push(`Your data: ${privacy.privacyUrl}`)
+  if (privacy.unsubscribeUrl) lines.push(`Unsubscribe from host updates: ${privacy.unsubscribeUrl}`)
   lines.push(`Sent by ${input.senderName} with ${copy.appName}. Reply to this email to reach the host.`)
   return lines.join("\n")
 }

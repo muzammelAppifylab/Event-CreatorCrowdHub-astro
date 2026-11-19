@@ -63,7 +63,7 @@ describe("planPromotions — free events (US-4)", () => {
   })
 
   it("treats negative availability as zero", () => {
-    expect(planPromotions({ entries: [entry("a", 1)], seatsAvailable: -2, kind: "free", now })).toEqual({ promotions: [], seatsLeft: 0 })
+    expect(planPromotions({ entries: [entry("a", 1)], seatsAvailable: -2, kind: "free", now })).toEqual({ promotions: [], seatsLeft: 0, failed: [] })
   })
 
   it("promotes everyone when capacity is unlimited", () => {
@@ -141,5 +141,79 @@ describe("renumberWaitlist", () => {
   it("gives a newcomer the back of the line", () => {
     expect(nextWaitlistPosition([])).toBe(1)
     expect(nextWaitlistPosition([entry("a", 1), entry("b", 7), entry("c", null)])).toBe(8)
+  })
+})
+
+describe("planPromotions: ticket quantity (audit M-2)", () => {
+  const vip = (id: string, pos: number, seats = 1, extra: Partial<WaitlistEntry> = {}) => entry(id, pos, seats, { ticketTypeId: "vip", ...extra })
+
+  it("never hands out more seats of a limited ticket than it has left", () => {
+    const plan = planPromotions({
+      entries: [vip("a", 1), vip("b", 2), vip("c", 3)],
+      seatsAvailable: 10,
+      kind: "free",
+      now,
+      ticketsLeft: new Map([["vip", 1]]),
+    })
+    expect(plan.promotions.map((p) => p.rsvpId)).toEqual(["a"])
+  })
+
+  it("skips a sold-out ticket and keeps scanning for guests on other types", () => {
+    const plan = planPromotions({
+      entries: [vip("a", 1), entry("b", 2, 1, { ticketTypeId: "general" }), entry("c", 3)],
+      seatsAvailable: 2,
+      kind: "free",
+      now,
+      ticketsLeft: new Map([["vip", 0]]),
+    })
+    expect(plan.promotions.map((p) => p.rsvpId)).toEqual(["b", "c"])
+  })
+
+  it("an outstanding claim holds its ticket's quantity too", () => {
+    const plan = planPromotions({
+      entries: [vip("a", 1, 1, { claimExpiresAt: at(30) }), vip("b", 2)],
+      seatsAvailable: 5,
+      kind: "paid",
+      now,
+      ticketsLeft: new Map([["vip", 1]]),
+    })
+    expect(plan.promotions).toEqual([])
+  })
+
+  it("expireClaims passes the ticket limit on to the next offers", () => {
+    const result = expireClaims([vip("a", 1, 1, { claimExpiresAt: at(-1) }), vip("b", 2), vip("c", 3)], now, 5, 60, new Map([["vip", 1]]))
+    expect(result.lapsed).toEqual(["a"])
+    expect(result.offers.map((o) => o.rsvpId)).toEqual(["b"])
+  })
+})
+
+describe("planPromotions: host picks (only)", () => {
+  it("reports picks that are missing, too big or sold out, and promotes the rest", () => {
+    const plan = planPromotions({
+      entries: [entry("a", 1, 3), entry("b", 2, 1, { ticketTypeId: "vip" }), entry("c", 3), entry("d", 4)],
+      seatsAvailable: 2,
+      kind: "free",
+      now,
+      ticketsLeft: new Map([["vip", 0]]),
+      only: new Set(["a", "b", "d", "zz"]),
+    })
+    expect(plan.promotions.map((p) => p.rsvpId)).toEqual(["d"])
+    expect(plan.failed).toEqual([
+      { rsvpId: "zz", reason: "not_waitlisted" },
+      { rsvpId: "a", reason: "event_full" },
+      { rsvpId: "b", reason: "ticket_sold_out" },
+    ])
+  })
+
+  it("re-offers a lapsed claim but refuses a live one on a paid event", () => {
+    const plan = planPromotions({
+      entries: [entry("a", 1, 1, { claimExpiresAt: at(-5) }), entry("b", 2, 1, { claimExpiresAt: at(30) })],
+      seatsAvailable: 3,
+      kind: "paid",
+      now,
+      only: new Set(["a", "b"]),
+    })
+    expect(plan.promotions.map((p) => p.rsvpId)).toEqual(["a"])
+    expect(plan.failed).toEqual([{ rsvpId: "b", reason: "claim_pending" }])
   })
 })

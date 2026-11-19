@@ -4,8 +4,20 @@
  * (with merge tags) lead; the template adds the event facts and the action
  * that fits the moment.
  */
-import { eventFacts, joinUrlFor, mergeContextFor } from "./context"
-import { badge, button, details, FONT, MARQUEE, outlineButton, renderCreatorCopy, renderLayout, renderText } from "./layout"
+import { eventFacts, joinUrlFor, mergeContextFor, viewEventUrl } from "./context"
+import {
+  badge,
+  button,
+  details,
+  FONT,
+  guestPrivacyLinks,
+  listUnsubscribeHeaders,
+  MARQUEE,
+  outlineButton,
+  renderCreatorCopy,
+  renderLayout,
+  renderText,
+} from "./layout"
 import type { CreatorCopy, EmailContent, EmailData } from "./types"
 
 export type CreatorEmailKind = "reminder" | "live_now" | "thank_you" | "broadcast"
@@ -21,9 +33,11 @@ function optionsFor(kind: CreatorEmailKind, data: EmailData): Options {
   const { event, guest } = data
   const join = joinUrlFor(data)
   const manage: [string, string] = ["Manage RSVP", guest.manageUrl]
+  const page = viewEventUrl(event)
+  const view: [string, string] | null = page ? ["View event", page] : null
   switch (kind) {
     case "reminder":
-      return { label: "Reminder", facts: true, primary: join ? ["Join the event", join] : ["View event", event.pageUrl], secondary: [manage] }
+      return { label: "Reminder", facts: true, primary: join ? ["Join the event", join] : view, secondary: [manage] }
     case "live_now":
       return {
         label: "Live now",
@@ -34,7 +48,7 @@ function optionsFor(kind: CreatorEmailKind, data: EmailData): Options {
     case "thank_you":
       return { facts: false, primary: event.thankYouLink ? ["See what's next", event.thankYouLink] : null, secondary: [] }
     case "broadcast":
-      return { facts: true, primary: ["View event", event.pageUrl], secondary: [manage] }
+      return { facts: true, primary: view, secondary: [manage] }
   }
 }
 
@@ -54,6 +68,7 @@ export function creatorEmail(kind: CreatorEmailKind, data: EmailData, copy: Crea
   if (opts.primary) blocks.push(button(opts.primary[0], opts.primary[1], data.brand))
   if (opts.secondary.length) blocks.push(`<div style="margin:8px 0 16px;">${opts.secondary.map(([l, u]) => outlineButton(l, u)).join("")}</div>`)
 
+  const privacy = guestPrivacyLinks(data.guest)
   const html = renderLayout({
     brand: data.brand,
     subject,
@@ -62,6 +77,7 @@ export function creatorEmail(kind: CreatorEmailKind, data: EmailData, copy: Crea
     heading: data.event.title,
     blocks,
     manageUrl: data.guest.manageUrl,
+    ...privacy,
   })
   const text = renderText({
     heading: data.event.title,
@@ -70,8 +86,10 @@ export function creatorEmail(kind: CreatorEmailKind, data: EmailData, copy: Crea
     links: [...(opts.primary ? [opts.primary] : []), ...opts.secondary],
     senderName: data.brand.senderName,
     manageUrl: data.guest.manageUrl,
+    ...privacy,
   })
-  return { subject, html, text, unknownTags: rendered.unknownTags }
+  const headers = listUnsubscribeHeaders(privacy.unsubscribeUrl)
+  return { subject, html, text, ...(headers ? { headers } : {}), unknownTags: rendered.unknownTags }
 }
 
 export const reminderEmail = (data: EmailData, copy: CreatorCopy) => creatorEmail("reminder", data, copy)

@@ -1,16 +1,59 @@
-import {useQueryClient} from '@tanstack/react-query';
 import {type FormEvent, useState} from 'react';
 
 import {fromLocalInput, toLocalInput} from '../../lib/event-schemas';
-import {formatMoney} from '../../lib/format';
 import {ApiError} from '../api';
-import {cancelPreviewQuery, useEventLifecycle, useEventsNav} from '../events-queries';
+import {useEventLifecycle, useEventsNav} from '../events-queries';
 import {Button, DateTimeField, Field, Icon, Modal, Notice, SegmentedControl, useConfirm, useToast} from '../ui';
 
-export type HubActionEvent = {id: string; title: string; status: 'draft' | 'published' | 'cancelled'; endAt: string; startAt: string; timezone: string};
+type GuestCounts = {confirmed: number; waitlisted: number; pending: number};
+export type HubActionEvent = {
+  id: string;
+  title: string;
+  status: 'draft' | 'published' | 'cancelled';
+  endAt: string;
+  startAt: string;
+  timezone: string;
+  counts?: GuestCounts;
+  /** The server's own rule (`hasHeld` on the event payload): held or awaiting-payment guests, or a paid order. */
+  hasHeld?: boolean;
+};
 
-/** Cancel only makes sense for a live event that hasn't ended. */
-export const canCancel = (e: Pick<HubActionEvent, 'status' | 'endAt'>) => e.status === 'published' && Date.parse(e.endAt) > Date.now();
+/**
+ * Does anyone still hold or wait for a place, or has anyone paid? Then the server refuses unpublish and
+ * delete (409 `event_has_guests`). Decided by the payload's `hasHeld`, the same rule the server applies
+ * (it also counts awaiting-payment guests and paid orders, which `counts` leaves out); the counts are
+ * only a fallback for a payload without it. The 409 stays the safety net.
+ */
+export const hasGuests = (e: Pick<HubActionEvent, 'counts' | 'hasHeld'>) =>
+  e.hasHeld ?? (!!e.counts && e.counts.confirmed + e.counts.waitlisted + e.counts.pending > 0);
+
+/**
+ * Cancel is the only way out for an event people expect: the server refuses to unpublish or delete one
+ * with guests or paid tickets (409 `event_has_guests`). So it is offered for every published event, ended
+ * or not, and for a draft that still has guests (a leftover from before that rule).
+ */
+/**
+ * Runs `run` unless a run on the same `flight` flag is still going; a call made meanwhile does nothing and
+ * resolves `undefined` (a double click on a button whose work has not finished). The flag is a ref, so it
+ * holds between two clicks that land before React re-renders the button as pending.
+ */
+export async function guarded<T>(flight: {current: boolean}, run: () => Promise<T>): Promise<T | undefined> {
+  if (flight.current) return undefined;
+  flight.current = true;
+  try {
+    return await run();
+  } finally {
+    flight.current = false;
+  }
+}
+
+export const canCancel =(e: Pick<HubActionEvent, 'status' | 'counts' | 'hasHeld'>) => e.status === 'published' || (e.status === 'draft' && hasGuests(e));
+
+/** Unpublish is offered only when the server will accept it: a published event nobody holds a place in. */
+export const canUnpublish = (e: Pick<HubActionEvent, 'status' | 'counts' | 'hasHeld'>) => e.status === 'published' && !hasGuests(e);
+
+/** Delete is offered only for a draft the server will delete. */
+export const canDelete = (e: Pick<HubActionEvent, 'status' | 'counts' | 'hasHeld'>) => e.status === 'draft' && !hasGuests(e);
 
 const FIELD_LABELS: Record<string, string> = {
   title: 'Title', description: 'Description', startAt: 'Start', endAt: 'End', timezone: 'Time zone', format: 'Format',
@@ -170,10 +213,9 @@ function DuplicateDialog({event, onClose}: {event: HubActionEvent; onClose: () =
   );
 }
 
-/** The lifecycle buttons of the hub header: Publish / Unpublish, Duplicate, Cancel event, Delete. */
+/** The lifecycle buttons of the hub header: Publish / Unpublish, Duplicate, Delete (Cancel lives in the Events list's row menu). */
 export function HubActions({event, onPublishProblem}: {event: HubActionEvent; onPublishProblem: (error: ApiError | null) => void}) {
-  const {publish, unpublish, cancel, remove} = useEventLifecycle();
-  const queryClient = useQueryClient();
+  const {publish, unpublish, remove} = useEventLifecycle();
   const confirm = useConfirm();
   const toast = useToast();
   const go = useEventsNav();
@@ -184,32 +226,6 @@ export function HubActions({event, onPublishProblem}: {event: HubActionEvent; on
     publish.mutate(event.id, {
       onSuccess: () => toast.success('Event published.'),
       onError: err => (err instanceof ApiError && err.status === 409 ? onPublishProblem(err) : toast.danger(err.message)),
-    });
-  };
-
-  const doCancel = async () => {
-    let body: string;
-    try {
-      const p = await queryClient.fetchQuery(cancelPreviewQuery(event.id));
-      const refund = p.currency ? formatMoney(p.refundTotalCents, p.currency) : null;
-      body =
-        `${p.guestsToEmail} ${p.guestsToEmail === 1 ? 'guest' : 'guests'} will be emailed. ` +
-        (p.ordersToRefund
-          ? `${p.ordersToRefund} paid ${p.ordersToRefund === 1 ? 'order' : 'orders'} will be refunded${refund ? ` (${refund} in total)` : ''}. `
-          : 'No payments to refund. ') +
-        'This can’t be undone.';
-    } catch {
-      body = 'We could not count who this affects. Guests will be emailed and paid tickets refunded. This can’t be undone.';
-    }
-    await confirm({
-      title: `Cancel “${event.title}”?`,
-      body,
-      confirmLabel: 'Cancel event',
-      pendingLabel: 'Cancelling…',
-      action: async () => {
-        await cancel.mutateAsync(event.id);
-        toast.success('Event cancelled.');
-      },
     });
   };
 
@@ -233,26 +249,23 @@ export function HubActions({event, onPublishProblem}: {event: HubActionEvent; on
       </Button>
       {event.status === 'draft' && (
         <>
-          <Button variant="ghost" icon="trash" onClick={doDelete}>
-            Delete
-          </Button>
+          {canDelete(event) && (
+            <Button variant="ghost" icon="trash" onClick={doDelete}>
+              Delete
+            </Button>
+          )}
           <Button pending={publish.isPending} pendingLabel="Publishing…" onClick={doPublish}>
             Publish
           </Button>
         </>
       )}
-      {event.status === 'published' && (
+      {canUnpublish(event) && (
         <Button
           variant="secondary"
           pending={unpublish.isPending}
           pendingLabel="Unpublishing…"
           onClick={() => unpublish.mutate(event.id, {onSuccess: () => toast.success('Event is a draft again.'), onError: err => toast.danger(err.message)})}>
           Unpublish
-        </Button>
-      )}
-      {canCancel(event) && (
-        <Button variant="danger" onClick={() => void doCancel()}>
-          Cancel event
         </Button>
       )}
       {duplicating && <DuplicateDialog event={event} onClose={() => setDuplicating(false)} />}

@@ -8,9 +8,12 @@ import type {EmailBrand, EmailContent} from '../../emails/types';
 import {audit} from '../../platform/auth';
 import {config} from '../../platform/config';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
-import type {PrismaClient} from '../../generated/prisma/client';
-import {eventMailSelect, inviteLink, loadBrand, type MailEvent, publicBase, sendMail} from '../guest-mail';
+import {Prisma, type PrismaClient} from '../../generated/prisma/client';
+import {eventMailSelect, inviteLink, type MailEvent, publicBase} from '../guest-mail';
+import {enqueueGuestEmails, kickGuestEmails} from '../jobs/outbox';
+import type {Db} from '../jobs/shared';
 import {PERMISSIONS} from '../permissions';
+import {isUuid, notFound} from '../validate';
 
 /**
  * Guest invites, for event organisers (`site:event:manage`). Mounted by the
@@ -21,13 +24,13 @@ import {PERMISSIONS} from '../permissions';
  *   POST   /events/:eventId/invites                 {emails}: paste box, "Name <email>" allowed
  *   GET    /events/:eventId/invites/resend-preview  how many non-responders a resend reaches
  *   POST   /events/:eventId/invites/resend          nudge every non-responder (48 h cooldown)
- *   POST   /events/:eventId/invites/:inviteId/resend  nudge one invite (ignores the cooldown)
+ *   POST   /events/:eventId/invites/:inviteId/resend  nudge one invite (same 48 h cooldown)
  *   DELETE /events/:eventId/invites/:inviteId       delete (revokes its link)
  *   GET    /events/:eventId/share-kit               the public event link for the share kit
  *
  * Invite tokens are HMAC-signed with `config.jwtSecret` (`signToken('invite', ...)`);
  * the public `/i/<token>` route must also require the row, so deleting an invite revokes it.
- * Emails go through `sendMail` (src/server/guest-mail.ts).
+ * Emails are QUEUED in the guest email outbox (src/server/jobs/outbox.ts), never sent by the request.
  */
 
 export const INVITES_PAGE_SIZE = 100;
@@ -38,8 +41,8 @@ export const DAILY_INVITE_LIMIT = 2000;
 /** A nudge goes out at most once per this window. */
 export const RESEND_COOLDOWN_HOURS = 48;
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
+/** The shared id check (audit L-37), re-exported: `admin-guests.ts` and the tests import it from here. */
+export {isUuid};
 
 const EMAIL = /^[^\s@<>",;]+@[^\s@<>",;.]+(?:\.[^\s@<>",;.]+)+$/;
 /** A plain address, trimmed and lowercased, or null. */
@@ -184,41 +187,72 @@ function toInvite(row: InviteRow, base: string, slug: string) {
   };
 }
 
-const notFound = (what: string) => problem('not_found', `${what} not found.`);
 
 async function eventFor(db: PrismaClient, id: string) {
   if (!isUuid(id)) return null;
   return db.event.findFirst({where: {id, deletedAt: null}, select: eventMailSelect}) as Promise<MailEvent | null>;
 }
 
-/** Sends invites one at a time; returns the ids the mailer accepted. */
-async function sendInvites(
-  db: PrismaClient,
-  base: string,
-  event: MailEvent,
-  invites: {id: string; name: string | null; email: string; token: string}[]
-): Promise<string[]> {
+/**
+ * Queues invite emails as guest email outbox rows, in one insert (audit M-21: a request never
+ * sends hundreds of emails itself). The outbox renders and sends each one, marks the invite `sent`
+ * (keeping the first send time) and retries failures. `round` makes each send its own email: the
+ * first send, or one resend. Pass the transaction client to queue atomically. Returns the queued ids.
+ */
+async function queueInvites(db: Db, invites: {id: string}[], now: Date, round: string): Promise<string[]> {
   if (!invites.length) return [];
-  const brand = await loadBrand(db, base);
-  const accepted: string[] = [];
-  for (const invite of invites) {
-    const content = inviteEmail(event, brand, invite, inviteLink(base, invite.token, event.slug));
-    const result = await sendMail({
-      to: invite.email,
-      subject: content.subject,
-      html: content.html,
-      text: content.text,
-      replyTo: brand.replyToEmail ?? undefined,
-    });
-    if (result.ok) accepted.push(invite.id);
-    else console.warn(`[invites] send failed for invite ${invite.id}`);
-  }
-  return accepted;
+  await enqueueGuestEmails(
+    db,
+    invites.map(invite => ({key: `invite-${invite.id}-${round}`, kind: 'invite' as const, inviteId: invite.id})),
+    now
+  );
+  return invites.map(invite => invite.id);
 }
 
-async function sentInLastDay(db: PrismaClient, now: Date): Promise<number> {
+/**
+ * Invite emails queued in the last 24 hours, across every event (index on kind + created_at).
+ * M-15: every first send, bulk resend and single resend is its own outbox row, and a deleted then
+ * re-created invite gets a new id (a new row): none of them gets around the daily limit.
+ */
+async function sentInLastDay(db: Db, now: Date): Promise<number> {
   const since = new Date(now.getTime() - 24 * 3_600_000);
-  return db.invite.count({where: {OR: [{sentAt: {gte: since}}, {lastResentAt: {gte: since}}]}});
+  return db.guestEmailOutbox.count({where: {kind: 'invite', createdAt: {gte: since}}});
+}
+
+/** The one advisory lock every invite send takes (a fixed key: the limit is site-wide). */
+export const INVITE_LIMIT_LOCK = 'invite-daily-limit';
+
+export class DailyInviteLimitError extends Error {
+  constructor() {
+    super('Daily invite limit reached.');
+    this.name = 'DailyInviteLimitError';
+  }
+}
+
+const dailyLimitProblem = () => problem('daily_invite_limit', 'Daily invite limit reached. Try again tomorrow.');
+
+/**
+ * Makes room for `count` more invite emails under the daily limit, atomically (audit M-15). Call it
+ * FIRST inside the transaction that queues them: it takes a transaction-scoped advisory lock, so two
+ * sends at the same moment count one after the other and can't both pass. The count is its own
+ * statement, after the lock: under READ COMMITTED it then sees every send that committed before the
+ * lock was granted. The lock ends with the transaction (keep it short: database work only).
+ * Throws `DailyInviteLimitError` (roll back, answer 409) when it doesn't fit.
+ */
+export async function reserveDailyInvites(tx: Db, count: number, now: Date): Promise<void> {
+  if (count <= 0) return;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${INVITE_LIMIT_LOCK}, 0))`;
+  if ((await sentInLastDay(tx, now)) + count > DAILY_INVITE_LIMIT) throw new DailyInviteLimitError();
+}
+
+/** Runs `work`, answering null instead of throwing when the daily limit refused it (the transaction rolled back). */
+async function withinDailyLimit<T>(work: () => Promise<T>): Promise<T | null> {
+  try {
+    return await work();
+  } catch (err) {
+    if (err instanceof DailyInviteLimitError) return null;
+    throw err;
+  }
 }
 
 const listQuery = validator('query', value => ({
@@ -237,7 +271,7 @@ const createBody = validator('json', (value, c) => {
 export const adminInviteRoutes = new Hono()
   .get('/events/:eventId/invites', listQuery, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const event = await eventFor(c.var.db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    if (!event) return notFound(c, 'Event');
     const before = c.req.valid('query').before.toLowerCase();
     const rows = await c.var.db.invite.findMany({
       where: {eventId: event.id, ...(before ? {email: {gt: before}} : {})},
@@ -250,12 +284,16 @@ export const adminInviteRoutes = new Hono()
     return c.json({items, nextBefore: rows.length > INVITES_PAGE_SIZE ? items.at(-1)!.email : null});
   })
 
-  .post('/events/:eventId/invites', createBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
+  .post('/events/:eventId/invites', withViewer, requireAuth, requirePermission(MANAGE), createBody, withDb, async c => {
     const {db} = c.var;
     const event = await eventFor(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    if (!event) return notFound(c, 'Event');
     if (event.status === 'cancelled') {
       return c.json(problem('event_cancelled', "This event is cancelled, so it can't take new invites."), 409);
+    }
+    // M-14: a draft has no public page yet, so an invite link would be dead. Publish first.
+    if (event.status !== 'published') {
+      return c.json(problem('event_not_published', 'Publish this event before sending invites: until then the invite link has no page to open.'), 409);
     }
     const secret = config.jwtSecret;
     if (!secret) return c.json(problem('auth_not_configured', 'This site cannot sign invite links yet.'), 503);
@@ -265,114 +303,179 @@ export const adminInviteRoutes = new Hono()
       const message = `Invite up to ${MAX_INVITES_PER_REQUEST} people at a time.`;
       return c.json({...problem('invalid_input', message), fields: {emails: message}}, 422);
     }
-    // An address already invited to this event is never re-sent.
-    const existing = new Set(
-      (
-        await db.invite.findMany({
-          where: {eventId: event.id, email: {in: parsed.valid.map(r => r.email)}},
-          select: {email: true},
-        })
-      ).map(r => r.email)
-    );
+    // An address already invited to this event is never re-sent (the pasted list is capped above).
+    const now = new Date();
+    const already = parsed.valid.length
+      ? await db.invite.findMany({where: {eventId: event.id, email: {in: parsed.valid.map(r => r.email)}}, select: {email: true}})
+      : [];
+    const existing = new Set(already.map(r => r.email));
     const fresh = parsed.valid.filter(r => !existing.has(r.email));
     const skippedDuplicate = [...parsed.repeated, ...parsed.valid.filter(r => existing.has(r.email)).map(r => r.email)];
 
-    const now = new Date();
-    if (fresh.length && (await sentInLastDay(db, now)) + fresh.length > DAILY_INVITE_LIMIT) {
-      return c.json(problem('daily_invite_limit', 'Daily invite limit reached. Try again tomorrow.'), 409);
-    }
-
-    const created: {id: string; email: string; name: string | null; token: string}[] = [];
-    for (const recipient of fresh) {
+    // One insert for the whole paste; a row a concurrent paste inserted first (unique per event and email) is skipped.
+    const rows = fresh.map(recipient => {
       const id = crypto.randomUUID();
-      const token = signToken('invite', {eventId: event.id, inviteId: id}, secret);
-      try {
-        await db.invite.create({
-          data: {id, eventId: event.id, email: recipient.email, name: recipient.name, token},
-          select: {id: true},
-        });
-        created.push({id, email: recipient.email, name: recipient.name, token});
-      } catch {
-        // A concurrent paste inserted it first (unique per event and email).
-        skippedDuplicate.push(recipient.email);
-      }
-    }
+      return {id, eventId: event.id, email: recipient.email, name: recipient.name, token: signToken('invite', {eventId: event.id, inviteId: id}, secret)};
+    });
+    // The limit check, the invites and their outbox rows in ONE short transaction (M-15: the check and
+    // the insert are atomic; every created invite has its email queued).
+    const inserted = rows.length
+      ? await withinDailyLimit(() =>
+          db.$transaction(async tx => {
+            await reserveDailyInvites(tx, rows.length, now);
+            const ids = new Set((await tx.invite.createManyAndReturn({data: rows, skipDuplicates: true, select: {id: true}})).map(r => r.id));
+            await queueInvites(tx, [...ids].map(id => ({id})), now, 'first');
+            return ids;
+          })
+        )
+      : new Set<string>();
+    if (!inserted) return c.json(dailyLimitProblem(), 409);
+    const created = rows.filter(r => inserted.has(r.id)).map(({id, email, name, token}) => ({id, email, name, token}));
+    for (const r of rows) if (!inserted.has(r.id)) skippedDuplicate.push(r.email);
 
-    const accepted = await sendInvites(db, publicBase(c.req.url), event, created);
-    if (accepted.length) {
-      await db.invite.updateMany({where: {id: {in: accepted}}, data: {status: 'sent', sentAt: now}});
-    }
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'invites_sent', target: ['event', event.id], meta: {queued: created.length, sent: accepted.length}});
-    return c.json({queued: created.length, sent: accepted.length, skippedInvalid: parsed.invalid, skippedDuplicate}, 201);
+    // `sent` = handed to the outbox, which sends within seconds (and retries); the list shows each invite's status.
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'invites_sent', target: ['event', event.id], meta: {queued: created.length}});
+    if (created.length) await kickGuestEmails();
+    return c.json({queued: created.length, sent: created.length, skippedInvalid: parsed.invalid, skippedDuplicate}, 201);
   })
 
   .get('/events/:eventId/invites/resend-preview', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const event = await eventFor(c.var.db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
-    const targets = await resendable(c.var.db, event.id, new Date());
-    return c.json({count: targets.length});
+    if (!event) return notFound(c, 'Event');
+    // Counted in the database by `resendableSql`, the same rule the resend picks its targets and total by
+    // (leaving out invites whose email is still waiting in the outbox). One query.
+    const [row] = await c.var.db.$queryRaw<{count: number}[]>`
+      SELECT count(*)::int AS count ${resendableSql(event.id, new Date())}`;
+    return c.json({count: row?.count ?? 0});
   })
 
   .post('/events/:eventId/invites/resend', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
     const event = await eventFor(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    if (!event) return notFound(c, 'Event');
     if (event.status === 'cancelled') {
       return c.json(problem('event_cancelled', "This event is cancelled, so invites can't be resent."), 409);
     }
+    // M-14: a draft has no public page yet, so an invite link would be dead. Publish first.
+    if (event.status !== 'published') {
+      return c.json(problem('event_not_published', 'Publish this event before sending invites: until then the invite link has no page to open.'), 409);
+    }
     const now = new Date();
-    const all = await resendable(db, event.id, now);
-    const targets = all.slice(0, MAX_INVITES_PER_REQUEST);
-    if (targets.length && (await sentInLastDay(db, now)) + targets.length > DAILY_INVITE_LIMIT) {
-      return c.json(problem('daily_invite_limit', 'Daily invite limit reached. Try again tomorrow.'), 409);
-    }
-    const accepted = await sendInvites(db, publicBase(c.req.url), event, targets);
-    if (accepted.length) {
-      await db.invite.updateMany({where: {id: {in: accepted}}, data: {status: 'sent', lastResentAt: now}});
-    }
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'invites_resent', target: ['event', event.id], meta: {resent: accepted.length}});
-    return c.json({resent: accepted.length, remaining: all.length - targets.length});
+    // Targets and total by the preview's rule (`resendableSql`), so invites still waiting in the outbox
+    // never fill the page: otherwise 200 of them sorting first would be picked, and skipped, on every click.
+    const from = resendableSql(event.id, now);
+    const [targets, [counted]] = await Promise.all([
+      db.$queryRaw<{id: string; email: string; name: string | null; token: string}[]>`
+        SELECT i.id::text AS id, i.email, i.name, i.token ${from}
+        ORDER BY i.email ASC
+        LIMIT ${MAX_INVITES_PER_REQUEST}`,
+      db.$queryRaw<{count: number}[]>`SELECT count(*)::int AS count ${from}`,
+    ]);
+    const total = counted?.count ?? 0;
+    // Limit check, cooldown and queue in one short transaction (M-15): two sends at once can't both pass
+    // the limit. The cooldown is started only where it is still due (the same rule as the read, so a
+    // second click that read the same targets updates nothing), and only the invites whose update took
+    // are queued: never two emails for one nudge.
+    const queued = targets.length
+      ? await withinDailyLimit(() =>
+          db.$transaction(async tx => {
+            await reserveDailyInvites(tx, targets.length, now);
+            // An invite whose email is still waiting in the outbox (a first send not delivered yet has
+            // no `sentAt`, so it reads as "never contacted") is not nudged: that would be a second email.
+            const waiting = await tx.guestEmailOutbox.findMany({
+              where: {kind: 'invite', status: 'pending', inviteId: {in: targets.map(t => t.id)}},
+              select: {inviteId: true},
+            });
+            const skip = new Set(waiting.map(w => w.inviteId));
+            const due = targets.filter(t => !skip.has(t.id));
+            if (!due.length) return [];
+            const started = await tx.invite.updateManyAndReturn({
+              where: {...resendableWhere(event.id, now), id: {in: due.map(t => t.id)}},
+              data: {lastResentAt: now},
+              select: {id: true},
+            });
+            return queueInvites(tx, started, now, String(now.getTime()));
+          })
+        )
+      : [];
+    if (!queued) return c.json(dailyLimitProblem(), 409);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'invites_resent', target: ['event', event.id], meta: {resent: queued.length}});
+    if (queued.length) await kickGuestEmails();
+    return c.json({resent: queued.length, remaining: Math.max(0, total - targets.length)});
   })
 
   .post('/events/:eventId/invites/:inviteId/resend', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
     const event = await eventFor(db, c.req.param('eventId'));
     const inviteId = c.req.param('inviteId');
-    if (!event || !isUuid(inviteId)) return c.json(notFound('Invite'), 404);
+    if (!event || !isUuid(inviteId)) return notFound(c, 'Invite');
     if (event.status === 'cancelled') {
       return c.json(problem('event_cancelled', "This event is cancelled, so invites can't be resent."), 409);
     }
+    // M-14: a draft has no public page yet, so an invite link would be dead. Publish first.
+    if (event.status !== 'published') {
+      return c.json(problem('event_not_published', 'Publish this event before sending invites: until then the invite link has no page to open.'), 409);
+    }
+    const now = new Date();
     const invite = await db.invite.findFirst({
       where: {id: inviteId, eventId: event.id},
       select: {id: true, email: true, name: true, token: true, status: true, sentAt: true, rsvps: {select: {id: true}, take: 1}},
     });
-    if (!invite) return c.json(notFound('Invite'), 404);
+    if (!invite) return notFound(c, 'Invite');
     if (invite.rsvps.length || invite.status === 'responded') {
       return c.json(problem('already_responded', 'This guest has already responded.'), 409);
     }
-    const [accepted] = await sendInvites(db, publicBase(c.req.url), event, [invite]);
-    if (!accepted) return c.json(problem('send_failed', 'The email could not be sent. Try again.'), 502);
-    const now = new Date();
-    await db.invite.update({
-      where: {id: invite.id},
-      data: {status: 'sent', sentAt: invite.sentAt ?? now, lastResentAt: now},
-      select: {id: true},
-    });
+    if (invite.status === 'bounced') {
+      return c.json(problem('invite_bounced', "This address bounced, so the invite can't be resent. Check the address and invite it again."), 409);
+    }
+    // Queued (the outbox sends it and marks it sent, keeping the first send time) with the cooldown started.
+    // M-15: a single resend is an invite email too, so it counts against the daily limit, checked atomically.
+    // The same rules as the bulk resend: never while its email is still waiting in the outbox, and only
+    // when the cooldown is due (decided by the update itself, so a double click queues one email).
+    const done = await withinDailyLimit(() =>
+      db.$transaction(async tx => {
+        await reserveDailyInvites(tx, 1, now);
+        const waiting = await tx.guestEmailOutbox.findFirst({
+          where: {kind: 'invite', status: 'pending', inviteId: invite.id},
+          select: {id: true},
+        });
+        if (waiting) return 'pending' as const;
+        const started = await tx.invite.updateManyAndReturn({
+          where: {...resendableWhere(event.id, now), id: invite.id},
+          data: {lastResentAt: now},
+          select: {id: true},
+        });
+        if (!started.length) return 'cooldown' as const;
+        await queueInvites(tx, started, now, String(now.getTime()));
+        return 'queued' as const;
+      })
+    );
+    if (!done) return c.json(dailyLimitProblem(), 409);
+    if (done === 'pending') {
+      return c.json(problem('invite_pending', 'This invite is still being sent. Wait for it to go out before resending.'), 409);
+    }
+    if (done === 'cooldown') {
+      return c.json(
+        problem('resend_cooldown', `This invite was sent or resent in the last ${RESEND_COOLDOWN_HOURS} hours. Try again later.`),
+        409
+      );
+    }
     await audit(db, {actorUserId: c.var.viewer.id, action: 'invite_resent', target: ['invite', invite.id]});
+    await kickGuestEmails();
     return c.json({ok: true});
   })
 
   .delete('/events/:eventId/invites/:inviteId', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const inviteId = c.req.param('inviteId');
     const eventId = c.req.param('eventId');
-    if (!isUuid(inviteId) || !isUuid(eventId)) return c.json(notFound('Invite'), 404);
+    if (!isUuid(inviteId) || !isUuid(eventId)) return notFound(c, 'Invite');
     const {count} = await c.var.db.invite.deleteMany({where: {id: inviteId, eventId}});
-    return count ? c.json({ok: true}) : c.json(notFound('Invite'), 404);
+    return count ? c.json({ok: true}) : notFound(c, 'Invite');
   })
 
   .get('/events/:eventId/share-kit', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const event = await eventFor(c.var.db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    if (!event) return notFound(c, 'Event');
     const base = publicBase(c.req.url);
     return c.json({
       title: event.title,
@@ -383,13 +486,33 @@ export const adminInviteRoutes = new Hono()
     });
   });
 
-/** Invites to nudge: no RSVP, not bounced, past the cooldown. */
-async function resendable(db: PrismaClient, eventId: string, now: Date) {
-  const rows = await db.invite.findMany({
-    where: {eventId, status: {in: ['queued', 'sent']}, rsvps: {none: {}}},
-    select: {id: true, email: true, name: true, token: true, status: true, sentAt: true, lastResentAt: true},
-    orderBy: {email: 'asc'},
-    take: 5000,
-  });
-  return rows.filter(row => isResendable({...row, hasRsvp: false}, now));
+/**
+ * Invites to nudge, as a `where` (the same rule as `isResendable`, decided by the database, never by
+ * loading the invites and filtering them in JS): no RSVP, not responded or bounced, and last
+ * contacted (`lastResentAt`, else `sentAt`) at least the cooldown ago, or never.
+ */
+function resendableWhere(eventId: string, now: Date): Prisma.InviteWhereInput {
+  const cutoff = new Date(now.getTime() - RESEND_COOLDOWN_HOURS * 3_600_000);
+  return {
+    eventId,
+    status: {in: ['queued', 'sent']},
+    rsvps: {none: {}},
+    OR: [{lastResentAt: {lte: cutoff}}, {lastResentAt: null, OR: [{sentAt: null}, {sentAt: {lte: cutoff}}]}],
+  };
+}
+
+/**
+ * `resendableWhere` as SQL (`FROM invites i WHERE …`), plus no pending 'invite' outbox row: the one rule
+ * the resend preview counts and the bulk resend picks its targets and total by, so they can't drift.
+ */
+function resendableSql(eventId: string, now: Date): Prisma.Sql {
+  const cutoff = new Date(now.getTime() - RESEND_COOLDOWN_HOURS * 3_600_000);
+  return Prisma.sql`FROM invites i
+    WHERE i.event_id = ${eventId}::uuid
+      AND i.status::text IN ('queued', 'sent')
+      AND NOT EXISTS (SELECT 1 FROM rsvps r WHERE r.invite_id = i.id)
+      AND (i.last_resent_at <= ${cutoff} OR (i.last_resent_at IS NULL AND (i.sent_at IS NULL OR i.sent_at <= ${cutoff})))
+      AND NOT EXISTS (
+        SELECT 1 FROM guest_email_outbox o WHERE o.invite_id = i.id AND o.kind = 'invite' AND o.status = 'pending'
+      )`;
 }

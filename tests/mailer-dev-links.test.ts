@@ -31,14 +31,16 @@ describe('dev email links', () => {
     expect(out).toContain('[dev email] https://x.test/r/tok123');
   });
 
-  it('logs only subject and recipient domain outside development', async () => {
+  it('logs neither the subject, the address nor the links outside development (L-13)', async () => {
     vi.stubEnv('DEV', false);
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     await sendEventEmail(email);
     const out = info.mock.calls.map(c => String(c[0])).join('\n');
     expect(out).not.toContain('tok123');
     expect(out).not.toContain('[dev email]');
-    expect(out).toContain('*@example.test');
+    expect(out).not.toContain('example.test');
+    expect(out).not.toContain('Confirmed');
+    expect(out).toContain('no mail provider configured');
   });
 
   it('never prints links in production even if DEV were set', async () => {

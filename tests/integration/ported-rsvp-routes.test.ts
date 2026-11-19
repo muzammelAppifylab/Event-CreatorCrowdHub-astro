@@ -4,8 +4,8 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {hashToken, newToken} from '../../src/domain/secureToken';
 import {setPaidCheckoutHook} from '../../src/server/routes/rsvp';
-import {createEvent, eventsApp, resetEvents, rsvpBody, setRoles} from './support/events-fixtures';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, tokenFrom} from './support/harness';
+import {createEvent, eventsApp, resetEvents, rsvpBody, userWith} from './support/events-fixtures';
+import {Browser, configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 
 /** Ported from CreatorCrowdHub `routes/public.test.ts` (public RSVP, manage, invite landing, ICS, manage-link). */
 const R = '/site-api/rsvp/events';
@@ -13,20 +13,6 @@ const M = '/site-api/rsvp/manage';
 let n = 10;
 const guest = () => new Browser(eventsApp, `198.51.100.${n++}`);
 const DAY = 86_400_000;
-
-/** Register and sign in whether or not email verification is required, then hold exactly `roles`. */
-async function userWith(email: string, roles: string[], ip: string) {
-  const b = new Browser(eventsApp, ip);
-  const reg = await b.post('/site-api/auth/register', {email, name: email.split('@')[0], password: 'a long test passphrase'});
-  if (reg.status === 202) {
-    const v = await b.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', email)});
-    if (v.status !== 200) throw new Error(`verify ${v.status}`);
-    const l = await b.post('/site-api/auth/login', {email, password: 'a long test passphrase'});
-    if (l.status !== 200) throw new Error(`login ${l.status}`);
-  } else if (reg.status !== 201) throw new Error(`register ${reg.status}`);
-  await setRoles(email, ...roles);
-  return b;
-}
 
 async function tokenFor(email: string) {
   const token = newToken();
@@ -47,7 +33,6 @@ describe.skipIf(!DATABASE_URL)('ported RSVP routes (integration, real Postgres)'
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
-    await userWith('first@example.test', ['owner'], '203.0.113.1');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.2');
   });
 

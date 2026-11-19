@@ -1,8 +1,9 @@
 import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
-import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
+import {requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {PERMISSIONS} from '../permissions';
+import {isUuid, notFound} from '../validate';
 
 /**
  * Event analytics for people who manage events (ported from CreatorCrowdHub, US-32).
@@ -18,7 +19,6 @@ import {PERMISSIONS} from '../permissions';
 const DAY_MS = 86_400_000;
 export const VIEWS_WINDOW_DAYS = 14;
 export const MAX_SOURCES = 8;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ------------------------------------------------------------ pure metrics --
 
@@ -126,7 +126,7 @@ export const conversion = (rsvps: number, views: number) => ratio(rsvps, views, 
 
 const eventParam = validator('param', (value, c) => {
   const id = typeof value.eventId === 'string' ? value.eventId : '';
-  if (!UUID.test(id)) return c.json(problem('not_found', 'Event not found.'), 404);
+  if (!isUuid(id)) return notFound(c, 'Event');
   return {eventId: id.toLowerCase()};
 });
 
@@ -144,7 +144,7 @@ export const adminAnalyticsRoutes = new Hono().get(
       where: {id: eventId, deletedAt: null},
       select: {id: true, format: true, createdAt: true, endAt: true},
     });
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
+    if (!event) return notFound(c, 'Event');
 
     const now = new Date();
     const range = viewsDayRange(event, now);

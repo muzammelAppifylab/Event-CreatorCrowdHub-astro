@@ -5,6 +5,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 import {authRoutes} from '../../src/platform/auth';
 import {csrf, previewCookies, sameOrigin} from '../../src/platform/guards';
 import {syncPermissions} from '../../src/platform/permission-sync';
+import {STARTER_REMINDER_RULES} from '../../src/domain/reminders';
 import {authSettings} from '../../src/server/auth-settings';
 import {CATALOGUE} from '../../src/server/permissions';
 import {adminEventRoutes} from '../../src/server/routes/admin-events';
@@ -25,7 +26,7 @@ const app = new Hono()
   .use(csrf)
   .use(bodyLimit({maxSize: 64 * 1024}))
   .use(syncPermissions(CATALOGUE))
-  .route('/auth', authRoutes({...authSettings, requireEmailVerification: true}))
+  .route('/auth', authRoutes(authSettings))
   .route('/admin-events', adminEventRoutes)
   .route('/event-settings', eventSettingsRoutes);
 
@@ -50,9 +51,8 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
-    await userWith('first@example.test', ['owner'], '203.0.113.31');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.32');
-    staff = await userWith('staff@example.test', ['checkin_staff'], '203.0.113.33');
+    staff = await userWith('staff@example.test', ['checkin-staff'], '203.0.113.33');
     guest = new Browser(app, '203.0.113.39');
   });
 
@@ -330,7 +330,10 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
       const res = await admin.post(`${A}/${source.id}/duplicate`, {startAt: '2027-12-01T18:00:00Z', endAt: '2027-12-01T20:00:00Z'});
       const id = (res.json.event as Json).id;
       expect((await db.ticketType.findMany({where: {eventId: id}})).map(t => [t.name, t.priceCents])).toEqual([['VIP', 4900]]);
-      expect(await db.reminderRule.count({where: {eventId: id}})).toBe(1);
+      // A new event starts with the starter email rules; the copy carries those plus the one added here.
+      const sourceRules = await db.reminderRule.count({where: {eventId: source.id}});
+      expect(sourceRules).toBe(STARTER_REMINDER_RULES.length + 1);
+      expect(await db.reminderRule.count({where: {eventId: id}})).toBe(sourceRules);
       const polls = await db.poll.findMany({where: {eventId: id}, include: {pollOptions: {orderBy: {sortOrder: 'asc'}}}});
       expect(polls.map(p => [p.question, p.status, p.pollOptions.map(o => o.label)])).toEqual([['Best slot?', 'draft', ['Morning', 'Evening']]]);
     });
@@ -416,6 +419,52 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
       expect((await admin.get(`${A}/${e.id}`)).status).toBe(404);
       expect((await admin.get(`${A}?tab=drafts`)).json.events).toEqual([]);
       expect((await db.event.findUniqueOrThrow({where: {id: e.id}})).deletedAt).not.toBeNull();
+    });
+  });
+
+  // ------------------------------------------- H-1: guests force Cancel --
+  describe('unpublish / delete an event people expect (H-1)', () => {
+    it('409s unpublish while a guest holds a place, and keeps the event published', async () => {
+      const e = await create();
+      await admin.post(`${A}/${e.id}/publish`);
+      await addRsvp(e.id, {status: 'waitlisted'});
+      const res = await admin.post(`${A}/${e.id}/unpublish`);
+      expect(res.status).toBe(409);
+      expect(res.json.error).toBe('event_has_guests');
+      expect(res.json.message).toMatch(/Cancel the event/);
+      expect((await db.event.findUniqueOrThrow({where: {id: e.id}})).status).toBe('published');
+      // A user without event management is still refused, and an unknown event is still 404.
+      expect((await staff.post(`${A}/${e.id}/unpublish`)).status).toBe(403);
+      expect((await admin.post(`${A}/00000000-0000-7000-8000-000000000000/unpublish`)).status).toBe(404);
+    });
+
+    it('409s unpublish when only a paid order is left (its guest cancelled)', async () => {
+      const e = await create();
+      await admin.post(`${A}/${e.id}/publish`);
+      const r = await addRsvp(e.id, {status: 'cancelled'});
+      await db.ticketOrder.create({data: {rsvpId: r.id, checkoutId: 'cs_h1', amountCents: 2500, currency: 'USD', status: 'paid'}});
+      expect((await admin.post(`${A}/${e.id}/unpublish`)).status).toBe(409);
+    });
+
+    it('still unpublishes when every guest declined or cancelled and nothing was paid', async () => {
+      const e = await create();
+      await admin.post(`${A}/${e.id}/publish`);
+      await addRsvp(e.id, {status: 'declined', response: 'not_going'});
+      await addRsvp(e.id, {status: 'cancelled'});
+      expect((await admin.post(`${A}/${e.id}/unpublish`)).status).toBe(200);
+      expect((await db.event.findUniqueOrThrow({where: {id: e.id}})).status).toBe('draft');
+    });
+
+    it('409s deleting a draft that still carries guests; staff 403; nothing deleted', async () => {
+      const e = await create();
+      await addRsvp(e.id, {status: 'pending'});
+      const res = await admin.delete(`${A}/${e.id}`);
+      expect(res.status).toBe(409);
+      expect(res.json.error).toBe('event_has_guests');
+      expect((await staff.delete(`${A}/${e.id}`)).status).toBe(403);
+      expect((await db.event.findUniqueOrThrow({where: {id: e.id}})).deletedAt).toBeNull();
+      // Cancel is the way out: it is allowed, and the guest stays reachable.
+      expect((await admin.post(`${A}/${e.id}/cancel`)).status).toBe(200);
     });
   });
 
@@ -546,14 +595,14 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
   // -------------------------------------------------------------- settings --
   describe('event settings (ported workspace settings)', () => {
     it('serves the public brand without a row or auth, then the saved one', async () => {
-      expect((await guest.get(`${S}/brand`)).json).toEqual({brandColor: null, fontPreset: 'inter'});
+      expect((await guest.get(`${S}/brand`)).json).toEqual({brandColor: null, fontPreset: 'inter', logoUrl: null});
       await patch(admin, S, {brandColor: '#4F46E5', fontPreset: 'serif'});
-      expect((await guest.get(`${S}/brand`)).json).toEqual({brandColor: '#4f46e5', fontPreset: 'serif'});
+      expect((await guest.get(`${S}/brand`)).json).toEqual({brandColor: '#4f46e5', fontPreset: 'serif', logoUrl: null});
     });
 
     it('returns defaults when nothing was saved', async () => {
       const out = (await admin.get(S)).json.settings as Json;
-      expect(out).toMatchObject({fontPreset: 'inter', defaultTimezone: 'UTC', updatedAt: null, defaultReminderRules: []});
+      expect(out).toMatchObject({fontPreset: 'inter', defaultTimezone: 'UTC', updatedAt: null, defaultReminderRules: STARTER_REMINDER_RULES.map(r => ({...r}))});
     });
 
     it('updates and normalises settings; unknown keys are not editable', async () => {
@@ -572,7 +621,7 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
     });
 
     it('422s invalid values with field messages', async () => {
-      const res = await patch(admin, S, {brandColor: 'red', fontPreset: 'comic', defaultTimezone: 'Mars/Olympus_Mons', replyToEmail: 'not-an-email', senderName: ''});
+      const res = await patch(admin, S, {brandColor: 'red', fontPreset: 'comic', defaultTimezone: 'Mars/Olympus_Mons', replyToEmail: 'not-an-email', senderName: 'x'.repeat(81)});
       expect(res.status).toBe(422);
       expect(Object.keys(res.json.fields as Json).sort()).toEqual(['brandColor', 'defaultTimezone', 'fontPreset', 'replyToEmail', 'senderName']);
     });
@@ -596,7 +645,8 @@ describe.skipIf(!DATABASE_URL)('ported events admin / tickets / settings (real P
       await db.eventSettings.create({data: {id: 1, defaultReminderRules: [{kind: 'reminder', offsetMinutes: 99999, subject: 'x', body: 'y'}]} as never});
       const res = await admin.get(S);
       expect(res.status).toBe(200);
-      expect((res.json.settings as Json).defaultReminderRules).toEqual([]);
+      // The invalid rule is dropped; with none left the starter rules are offered.
+      expect((res.json.settings as Json).defaultReminderRules).toEqual(STARTER_REMINDER_RULES.map(r => ({...r})));
     });
   });
 });

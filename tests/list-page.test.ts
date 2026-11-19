@@ -4,28 +4,22 @@ import {describe, expect, it} from 'vitest';
 
 import {listUrl} from '../src/lib/list-page';
 
+// The template checks its /jobs/ page here; this app removed the job board, so only the
+// helper itself is checked (with the app's own events list route).
 describe('a list page', () => {
   it('asks for the plain route with no filters, so the preload is used', () => {
-    expect(listUrl('/site-api/jobs', new URLSearchParams())).toBe('/site-api/jobs');
-    expect(listUrl('/site-api/jobs', new URLSearchParams('search=&type='))).toBe('/site-api/jobs');
+    expect(listUrl('/site-api/events', new URLSearchParams())).toBe('/site-api/events');
+    expect(listUrl('/site-api/events', new URLSearchParams('q=&format='))).toBe('/site-api/events');
   });
 
   it('keeps filters, and the next page wins over a cursor in the URL', () => {
-    const params = new URLSearchParams('type=contract&before=40&remote=1');
-    expect(listUrl('/site-api/jobs', params)).toBe('/site-api/jobs?type=contract&remote=1&before=40');
-    expect(listUrl('/site-api/jobs', params, 'before', 12)).toBe('/site-api/jobs?type=contract&remote=1&before=12');
+    const params = new URLSearchParams('format=online&before=40&when=week');
+    expect(listUrl('/site-api/events', params)).toBe('/site-api/events?format=online&when=week&before=40');
+    expect(listUrl('/site-api/events', params, 'before', 12)).toBe('/site-api/events?format=online&when=week&before=12');
   });
 
   it('never builds a row from HTML', () => {
     const helper = readFileSync(new URL('../src/lib/list-page.ts', import.meta.url), 'utf8');
-    const page = readFileSync(new URL('../src/pages/jobs/index.astro', import.meta.url), 'utf8');
-    for (const source of [helper, page]) expect(source).not.toMatch(/innerHTML|set:html|insertAdjacentHTML/);
-  });
-
-  it('the job board shell is static and carries what search engines read', () => {
-    const page = readFileSync(new URL('../src/pages/jobs/index.astro', import.meta.url), 'utf8');
-    expect(page).toContain('export const prerender = true');
-    expect(page).toContain('<h1>Open roles</h1>');
-    expect(page).toContain('description=');
+    expect(helper).not.toMatch(/innerHTML|set:html|insertAdjacentHTML/);
   });
 });

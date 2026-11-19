@@ -1,4 +1,4 @@
-export type Role = "owner" | "admin" | "checkin_staff"
+export type Role = "owner" | "admin" | "checkin-staff"
 
 /** All user-facing strings live here so creators can re-word without hunting. */
 export const copy = {
@@ -19,7 +19,7 @@ export const copy = {
   roles: {
     owner: "Owner",
     admin: "Admin",
-    checkin_staff: "Check-in staff",
+    "checkin-staff": "Check-in staff",
   } satisfies Record<Role, string>,
   auth: {
     title: "Sign in to CreatorCrowdHub",

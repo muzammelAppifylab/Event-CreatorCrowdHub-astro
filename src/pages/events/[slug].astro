@@ -1,9 +1,16 @@
 ---
 /**
  * One event, rendered on the server from `GET /site-api/events/:slug`. Unknown or unpublished
- * answers a real 404; a database outage a 503. The RSVP form (free tickets; paid tickets hook into `src/server/routes/rsvp.ts`) comes from
+ * answers a real 404 (a cancelled event renders read-only with its banner, noindex); a database outage a 503. The RSVP form (free tickets; paid tickets hook into `src/server/routes/rsvp.ts`) comes from
  * `GET /site-api/rsvp/events/:slug`; if that route is not mounted yet the page simply has no form.
  * The look is the original app's guest event page (`src/components/EventView.astro`).
+ *
+ * The SAME for every visitor (audit M-29): it reads no cookie and no viewer (`publicPageContext`), so a
+ * public, published event is `Cache-Control: public, max-age=60` and the CDN can serve it. Nothing on
+ * the page is about the visitor (a guest page has no site header; `isStatic` lets `<Base>` fill the
+ * session in, in the browser). The one thing that moves by itself, seats left on a limited event, is
+ * re-read in the browser below. Unlisted and cancelled events, any `?invite=` link, a 404 and a 503
+ * stay `private, no-store` (and noindex): the link is the secret, or the answer may change soon.
  */
 import ErrorScreen from '../../components/ErrorScreen.astro';
 import EventView from '../../components/EventView.astro';
@@ -16,57 +23,129 @@ import type {EventDetail} from '../../lib/types';
 import {backend, read} from '../../server/backend';
 import {rsvpRead} from '../../components/rsvp/server';
 import type {RsvpEventView} from '../../lib/rsvp-types';
-import {pageContext} from '../../server/page';
+import {publicPageContext} from '../../server/page';
 
 const slug = Astro.params.slug ?? '';
-const [{site, viewer}, answer] = await Promise.all([
-  pageContext(Astro.request, Astro.response),
-  backend(Astro.request)
-    .events[':slug'].$get({param: {slug}})
-    .catch(() => null),
+// An invite link carries a token: never a shared cache, never an index.
+const invited = Astro.url.searchParams.has('invite');
+// One round: the event, the RSVP form and the host's brand are read together (Base would otherwise read the
+// brand after the page). The RSVP read is wasted only on a 404 or an outage. None of them reads the visitor.
+const api = backend(Astro.request);
+const [{site, viewer}, answer, rsvpAnswer, brand] = await Promise.all([
+  publicPageContext(Astro.request, Astro.response),
+  api.events[':slug'].$get({param: {slug}}).catch(() => null),
+  rsvpRead<{event: RsvpEventView}>(Astro.request, `/events/${encodeURIComponent(slug)}`),
+  read<{brandColor: string | null; fontPreset: string; logoUrl?: string | null}>(api['event-settings'].brand.$get()),
 ]);
 const found = answer?.ok ? await read<{event: EventDetail}>(Promise.resolve(answer)) : null;
 const event = found?.event ?? null;
-const missing = !event && answer?.status === 404;
+// Any other 4xx (a slug the API refuses, e.g. one holding a NUL: 422) is the link's fault, so "not found",
+// never an outage. 429 (rate limited) is a "try again" and stays a 503.
+const status = answer?.status ?? 0;
+const missing = !event && status >= 400 && status < 500 && status !== 429;
 if (!event) {
   Astro.response.status = missing ? 404 : 503;
   if (!missing) Astro.response.headers.set('Retry-After', '60');
 }
-const rsvp = event ? (await rsvpRead<{event: RsvpEventView}>(Astro.request, `/events/${encodeURIComponent(slug)}`)).data?.event ?? null : null;
+// Only a public, published event, reached by its plain address, may be kept by a shared cache.
+const noindex = !event || event.visibility !== 'public' || event.status === 'cancelled' || invited;
+// A failed RSVP read (an outage, not "no form") must not be kept for a minute for everyone; nor a page drawn
+// with default branding because the host's brand or the site's name/logo could not be read (both null only on failure).
+const cacheable = !!event && !noindex && rsvpAnswer.status === 200 && brand !== null && site !== null;
+if (!cacheable) Astro.response.headers.set('Cache-Control', 'private, no-store');
+if (event && noindex) Astro.response.headers.set('X-Robots-Tag', 'noindex');
+const rsvp = event ? (rsvpAnswer.data?.event ?? null) : null;
+// A cached page can be up to a minute old: a limited event that still takes RSVPs re-reads its seats in the browser.
+// (Only when the page drew the form open: a full event without a waitlist is never re-opened from the browser.)
+const liveSeats =
+  cacheable && !!rsvp && rsvp.status !== 'cancelled' && !rsvp.closed && rsvp.seatsLeft !== null && (rsvp.seatsLeft > 0 || rsvp.waitlistEnabled);
 const failed = routeCopy.loadFailed;
 const gone = copy.errors.eventNotFound;
 ---
 
 {
   event ? (
-    <Base site={site} viewer={viewer} guest noindex={event.visibility !== 'public'} title={event.title} description={descriptionExcerpt(event.description) || event.title} jsonLd={eventJsonLd(event, site ?? undefined)}>
-      <main id="main" tabindex="-1" class="g-main" data-event-slug={event.slug}>
+    <Base site={site} viewer={viewer} brand={brand} isStatic guest noindex={noindex} title={event.title} description={descriptionExcerpt(event.description) || event.title} jsonLd={event.status === 'cancelled' ? undefined : eventJsonLd(event, site ?? undefined)}>
+      <main id="main" tabindex="-1" class="g-main" data-event-slug={event.slug} data-live-seats={liveSeats ? '' : undefined}>
         <EventView event={event} rsvp={rsvp} site={site} />
       </main>
     </Base>
   ) : missing ? (
-    <Base site={site} viewer={viewer} title="Event not found" noindex guest>
+    <Base site={site} viewer={viewer} brand={brand} isStatic title="Event not found" noindex guest>
       <ErrorScreen poster={gone.poster} description={gone.body} action={{href: '/events/', label: gone.action}} />
     </Base>
   ) : (
-    <Base site={site} viewer={viewer} title="Not available right now" noindex guest>
+    <Base site={site} viewer={viewer} brand={brand} isStatic title="Not available right now" noindex guest>
       <ErrorScreen poster={failed.poster} description={failed.body} action={{href: `/events/${encodeURIComponent(slug)}/`, label: failed.action, prefetch: false, reload: true}} />
     </Base>
   )
 }
 
 <script>
+  import {availabilityOf, canRsvp, ctaLabel, ctaNote} from '../../lib/guest-format';
+  import type {RsvpEventView} from '../../lib/rsvp-types';
   import {siteFetch} from '../../platform/browser';
 
-  // One anonymous page view per visit (the server dedupes per visitor and day; always 204).
+  /**
+   * The page may come from the CDN (up to a minute old): a limited event re-reads its seats here and
+   * redraws the RSVP buttons, their note and the form's waitlist mode with `textContent`. It only ever
+   * closes or relabels the form, never opens one the server drew closed; the server decides every RSVP.
+   */
+  async function refreshSeats(main: HTMLElement, slug: string) {
+    let view: RsvpEventView | null = null;
+    try {
+      const res = await siteFetch(`/site-api/rsvp/events/${encodeURIComponent(slug)}`, {headers: {accept: 'application/json'}});
+      view = res.ok ? ((await res.json()) as {event: RsvpEventView}).event : null;
+    } catch {
+      return; // Offline or blocked: the page as drawn stands.
+    }
+    if (!view || !main.isConnected) return;
+    const endAt = main.querySelector<HTMLElement>('[data-event-view]')?.dataset.end ?? view.endAt;
+    const availability = availabilityOf(view, endAt);
+    const label = ctaLabel(availability, {approvalRequired: view.approvalRequired, hasTickets: view.ticketTypes.length > 0, capacityLimited: view.seatsLeft !== null});
+    const note = ctaNote(availability, view.approvalRequired);
+    const open = canRsvp(availability);
+    const sheet = document.querySelector<HTMLDialogElement>('[data-rsvp-sheet]');
+    // No form on the page (drawn closed): nothing to relabel; a reload shows a reopened event.
+    if (open && !sheet) return;
+    for (const button of main.querySelectorAll<HTMLButtonElement>('[data-rsvp-open]')) {
+      if (button.textContent?.trim() !== label) button.textContent = label;
+      if (!open) button.disabled = true;
+    }
+    for (const id of ['rsvp-cta-note-card', 'rsvp-cta-note-bar']) {
+      const el = document.getElementById(id);
+      if (el && el.textContent !== note) el.textContent = note;
+    }
+    if (!open) {
+      if (sheet?.open && !sheet.querySelector('[aria-busy="true"]')) sheet.close();
+      return;
+    }
+    const form = sheet?.querySelector<HTMLFormElement>('form[data-rsvp-form][data-mode="create"]');
+    const submit = form?.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (!form || !submit || submit.getAttribute('aria-busy') === 'true') return;
+    const waitlist = availability.kind === 'waitlist';
+    form.dataset.waitlist = waitlist ? '1' : '';
+    // The same choice as RsvpForm.astro's `submitLabel` (create mode).
+    submit.textContent = waitlist
+      ? 'Join waitlist'
+      : view.approvalRequired
+        ? 'Request to join'
+        : form.dataset.anyPaid
+          ? 'Continue to payment'
+          : 'Save my seat';
+  }
+
   document.addEventListener('astro:page-load', () => {
-    const slug = document.querySelector<HTMLElement>('[data-event-slug]')?.dataset.eventSlug;
-    if (!slug) return;
+    const main = document.querySelector<HTMLElement>('[data-event-slug]');
+    const slug = main?.dataset.eventSlug;
+    if (!main || !slug) return;
+    // One anonymous page view per visit (the server dedupes per visitor and day; always 204).
     const utmSource = new URLSearchParams(location.search).get('utm_source');
     void siteFetch(`/site-api/pageviews/${encodeURIComponent(slug)}`, {
       method: 'POST',
       headers: {'content-type': 'application/json'},
       body: JSON.stringify({utmSource}),
     }).catch(() => {});
+    if (main.hasAttribute('data-live-seats')) void refreshSeats(main, slug);
   });
 </script>

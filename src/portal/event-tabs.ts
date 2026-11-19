@@ -3,43 +3,32 @@ import type {ComponentType} from 'react';
 import type {IconName} from './ui';
 
 /**
- * Event hub tab registry. Tabs are resolved by FILE NAME through import.meta.glob, so a tab whose
- * screen has not been written yet is simply absent (the hub shows "Coming soon") instead of a build error.
- * A module may export the component as default or under a conventional named export.
+ * Event hub tab registry. Each tab names its screen with an explicit, typed dynamic import, so a
+ * renamed file or export is a build error (never a silently empty tab), and each screen is still
+ * its own chunk, loaded when its tab is first opened. `overview` is drawn by the hub itself.
  */
 export const HUB_TABS = [
   {id: 'overview', label: 'Overview', icon: 'dashboard' as IconName},
-  {id: 'guests', label: 'Guests', icon: 'users' as IconName, file: 'guests-invites'},
-  {id: 'messages', label: 'Messages', icon: 'inbox' as IconName, file: 'messages'},
-  {id: 'polls', label: 'Polls', icon: 'activity' as IconName, file: 'polls'},
-  {id: 'checkin', label: 'Check-in', icon: 'check-circle' as IconName, file: 'checkin-tab'},
-  {id: 'analytics', label: 'Analytics', icon: 'trending-up' as IconName, file: 'event-analytics'},
+  {id: 'guests', label: 'Guests', icon: 'users' as IconName},
+  {id: 'messages', label: 'Messages', icon: 'inbox' as IconName},
+  {id: 'polls', label: 'Polls', icon: 'activity' as IconName},
+  {id: 'checkin', label: 'Check-in', icon: 'check-circle' as IconName},
+  {id: 'analytics', label: 'Analytics', icon: 'trending-up' as IconName},
 ] as const;
 export type HubTabId = (typeof HUB_TABS)[number]['id'];
 export type TabProps = {eventId: string};
 
-const modules = import.meta.glob<Record<string, unknown>>('./screens/*.tsx');
+type TabModule = {default: ComponentType<TabProps>};
 
-const pascal = (s: string) => s.replace(/(^|-)(\w)/g, (_, __, ch: string) => ch.toUpperCase());
+const LOADERS: Partial<Record<HubTabId, () => Promise<TabModule>>> = {
+  guests: () => import('./screens/guests-invites').then(m => ({default: m.default})),
+  messages: () => import('./screens/messages').then(m => ({default: m.MessagesTab})),
+  polls: () => import('./screens/polls').then(m => ({default: m.Polls})),
+  checkin: () => import('./screens/checkin-tab').then(m => ({default: m.default})),
+  analytics: () => import('./screens/event-analytics').then(m => ({default: m.EventAnalytics})),
+};
 
-/** Pick the component out of a module: `default`, else the first of the likely named exports, else any function export. */
-export function pickComponent(mod: Record<string, unknown>, file: string): ComponentType<TabProps> | null {
-  const names = [pascal(file), `Event${pascal(file)}`, `${pascal(file)}Tab`, `Event${pascal(file)}Tab`];
-  const hit = mod.default ?? names.map(n => mod[n]).find(Boolean);
-  if (typeof hit === 'function' || (typeof hit === 'object' && hit)) return hit as ComponentType<TabProps>;
-  const any = Object.values(mod).find(v => typeof v === 'function');
-  return (any as ComponentType<TabProps> | undefined) ?? null;
-}
-
-/** A loader for a tab, or null when its screen file does not exist yet. */
-export function tabLoader(id: HubTabId): (() => Promise<{default: ComponentType<TabProps>}>) | null {
-  const tab = HUB_TABS.find(t => t.id === id);
-  if (!tab || !('file' in tab)) return null;
-  const load = modules[`./screens/${tab.file}.tsx`];
-  if (!load) return null;
-  return async () => {
-    const component = pickComponent(await load(), tab.file);
-    if (!component) throw new Error(`No component exported by screens/${tab.file}.tsx`);
-    return {default: component};
-  };
+/** A loader for a tab's screen, or null for a tab the hub draws itself (`overview`). */
+export function tabLoader(id: HubTabId): (() => Promise<TabModule>) | null {
+  return LOADERS[id] ?? null;
 }

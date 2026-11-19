@@ -6,9 +6,16 @@ const queued: Array<{kind: string; rsvpId: string; stamp?: string}> = [];
 vi.mock('../src/server/jobs/guest-emails', () => ({
   GUEST_EMAIL_LIST: 'rsvp-emails',
   queueGuestEmail: async (kind: string, rsvpId: string, stamp?: string) => void queued.push({kind, rsvpId, stamp}),
+  queueGuestEmails: async (items: Array<{kind: string; rsvpId: string; stamp?: string}>) => void queued.push(...items.map(({kind, rsvpId, stamp}) => ({kind, rsvpId, stamp}))),
   sendGuestEmail: vi.fn(),
 }));
-const privacy = vi.hoisted(() => ({expiredGuestIds: vi.fn(), eraseRsvp: vi.fn()}));
+const privacy = vi.hoisted(() => ({
+  expiredGuestIds: vi.fn(),
+  eraseRsvp: vi.fn(),
+  restoredErasedIds: vi.fn(async () => [] as string[]),
+  deleteExpiredInvites: vi.fn(async () => 0),
+  prunePrivacyAttempts: vi.fn(async () => 0),
+}));
 vi.mock('../src/server/privacy', async orig => ({...(await orig<object>()), ...privacy}));
 
 import {appConfig} from '../src/config/app.config';
@@ -182,7 +189,7 @@ describe('runScheduler', () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
-  it('an already-passed deadline stops claim handling but still sweeps holds', async () => {
+  it('an already-passed deadline stops claim handling and the hold sweep (next tick releases them)', async () => {
     const db = new FakeDb();
     const event = db.addEvent();
     db.addRsvp(event.id, {status: 'waitlisted', claimExpiresAt: at(-1)});
@@ -190,7 +197,7 @@ describe('runScheduler', () => {
     db.addOrder(held.id, {createdAt: at(-holdMin - 1)});
     const summary = await runScheduler(asDb(db), NOW, {send: async () => true, deadlineMs: -1});
     expect(summary.waitlist.lapsed).toBe(0);
-    expect(summary.holds.expired).toBe(1);
+    expect(summary.holds.expired).toBe(0);
   });
 });
 
@@ -253,7 +260,7 @@ describe('runRetention', () => {
   it('erases a batch and stops when a batch is short', async () => {
     privacy.expiredGuestIds.mockResolvedValueOnce(['a', 'b']);
     privacy.eraseRsvp.mockResolvedValue('erased');
-    expect(await runRetention({} as never, NOW)).toEqual({erased: 2, skipped: 0});
+    expect(await runRetention({} as never, NOW)).toMatchObject({erased: 2, skipped: 0});
     expect(privacy.expiredGuestIds).toHaveBeenCalledTimes(1);
   });
 
@@ -261,7 +268,7 @@ describe('runRetention', () => {
     const ids = Array.from({length: RETENTION_BATCH_SIZE}, (_, i) => `g${i}`);
     privacy.expiredGuestIds.mockResolvedValue(ids);
     privacy.eraseRsvp.mockResolvedValue('checkout_in_progress');
-    expect(await runRetention({} as never, NOW)).toEqual({erased: 0, skipped: RETENTION_BATCH_SIZE});
+    expect(await runRetention({} as never, NOW)).toMatchObject({erased: 0, skipped: RETENTION_BATCH_SIZE});
     expect(privacy.expiredGuestIds).toHaveBeenCalledTimes(1);
   });
 
@@ -277,7 +284,7 @@ describe('runRetention', () => {
   it('not_found rows count as neither erased nor skipped; a second run with nothing due is a no-op', async () => {
     privacy.expiredGuestIds.mockResolvedValueOnce(['x']).mockResolvedValue([]);
     privacy.eraseRsvp.mockResolvedValue('not_found');
-    expect(await runRetention({} as never, NOW)).toEqual({erased: 0, skipped: 0});
-    expect(await runRetention({} as never, NOW)).toEqual({erased: 0, skipped: 0});
+    expect(await runRetention({} as never, NOW)).toMatchObject({erased: 0, skipped: 0});
+    expect(await runRetention({} as never, NOW)).toMatchObject({erased: 0, skipped: 0});
   });
 });

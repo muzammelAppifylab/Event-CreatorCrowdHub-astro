@@ -50,14 +50,25 @@ function fakeDb(initial: Partial<Row> = {}, eventOver: Partial<Row> = {}) {
     ticketOrder: {findMany: async () => [{amountCents: 500, currency: 'USD', seats: 1, status: 'paid', createdAt: now}]},
     pollVote: {findMany: async () => [], updateMany: async () => calls.push('votes.anon')},
     messageDelivery: {findMany: async () => [], updateMany: async () => calls.push('deliveries.clean')},
-    invite: {deleteMany: async () => calls.push('invite.delete')},
+    invite: {deleteMany: async () => calls.push('invite.delete'), findMany: async () => []},
+    order: {findMany: async () => []},
+    $executeRaw: async (strings: TemplateStringsArray, ...vals: unknown[]) => {
+      const sql = strings.join('?');
+      if (sql.includes('UPDATE orders')) calls.push('orders.scrub');
+      if (sql.includes('INSERT INTO guest_erasures')) calls.push('erasure.log');
+      if (sql.includes('unsubscribed_at = COALESCE')) Object.assign(rsvp, {marketingConsent: false, consentConfirmedAt: null, unsubscribedAt: rsvp.unsubscribedAt ?? vals[0]});
+      if (sql.includes('SET unsubscribed_at = NULL')) rsvp.unsubscribedAt = null;
+      return 1;
+    },
+    $queryRaw: async (strings: TemplateStringsArray) =>
+      strings.join('?').includes('bool_or(unsubscribed_at') ? [{unsubscribed: Boolean(rsvp.unsubscribedAt)}] : [],
     $transaction: async (fn: (tx: unknown) => unknown) => fn(db),
   };
   return {db: db as unknown as PrismaClient, rsvp, token, calls};
 }
 
 describe('manage token lookup', () => {
-  it('finds by hash and rejects junk, rotated and draft', async () => {
+  it('finds by hash, rejects junk and rotated, and still works once the event went back to draft (M-23)', async () => {
     const f = fakeDb();
     expect((await findByManageToken(f.db, f.token))?.id).toBe(RSVP_ID);
     expect(await findByManageToken(f.db, 'short')).toBeNull();
@@ -65,7 +76,7 @@ describe('manage token lookup', () => {
     // The raw token is never what is stored.
     expect(f.rsvp.manageToken).not.toBe(f.token);
     const draft = fakeDb({}, {status: 'draft'});
-    expect(await findByManageToken(draft.db, draft.token)).toBeNull();
+    expect((await findByManageToken(draft.db, draft.token))?.id).toBe(RSVP_ID);
   });
 });
 
@@ -100,11 +111,12 @@ describe('double opt-in consent', () => {
 describe('unsubscribe', () => {
   it('withdraws consent and is idempotent', async () => {
     const f = fakeDb({consentConfirmedAt: now});
-    expect(await unsubscribe(f.db, f.token)).toBe('ok');
+    expect(await unsubscribe(f.db, f.token, SECRET)).toBe('ok');
     expect(f.rsvp.marketingConsent).toBe(false);
+    expect(f.rsvp.unsubscribedAt).toBeInstanceOf(Date);
     expect(f.rsvp.consentConfirmedAt).toBeNull();
-    expect(await unsubscribe(f.db, f.token)).toBe('ok');
-    expect(await unsubscribe(f.db, newToken())).toBe('invalid');
+    expect(await unsubscribe(f.db, f.token, SECRET)).toBe('ok');
+    expect(await unsubscribe(f.db, newToken(), SECRET)).toBe('invalid');
   });
 });
 
@@ -120,9 +132,10 @@ describe('export and erase', () => {
     expect(text).not.toContain('manageToken');
   });
 
-  it('stops exporting 180 days after the event, but erase still works', async () => {
+  it('exports for as long as the data is kept (L-42), then stops; erase still works', async () => {
     const f = fakeDb();
-    const late = new Date(f.rsvp.event.endAt.getTime() + 181 * 86400_000);
+    expect(await guestExport(f.db, f.token, new Date(f.rsvp.event.endAt.getTime() + 181 * 86400_000))).not.toBeNull();
+    const late = new Date(f.rsvp.event.endAt.getTime() + 731 * 86400_000);
     expect(exportAllowed(f.rsvp.event.endAt, late)).toBe(false);
     expect(await guestExport(f.db, f.token, late)).toBeNull();
     expect(await eraseByManageToken(f.db, f.token)).toBe('erased');
@@ -132,7 +145,7 @@ describe('export and erase', () => {
     const f = fakeDb();
     expect(await eraseByManageToken(f.db, f.token)).toBe('erased');
     expect(f.rsvp).toMatchObject({name: 'Removed guest', email: `removed+${RSVP_ID}@invalid`, status: 'cancelled', marketingConsent: false, utmSource: null});
-    expect(f.calls).toEqual(expect.arrayContaining(['answers.delete', 'votes.anon', 'invite.delete']));
+    expect(f.calls).toEqual(expect.arrayContaining(['answers.delete', 'votes.anon', 'invite.delete', 'orders.scrub', 'erasure.log']));
     expect(await findByManageToken(f.db, f.token)).toBeNull();
     expect(await eraseByManageToken(f.db, f.token)).toBe('not_found');
 
@@ -165,8 +178,13 @@ describe('retention job', () => {
   it('does nothing when nobody is expired, and stays bounded', async () => {
     const {runRetention, RETENTION_BATCH_SIZE, RETENTION_MAX_BATCHES} = await import('../src/server/jobs/retention');
     const take: number[] = [];
-    const db = {rsvp: {findMany: async (args: Row) => (take.push(args.take), [])}} as unknown as PrismaClient;
-    expect(await runRetention(db, now)).toEqual({erased: 0, skipped: 0});
+    const db = {
+      rsvp: {findMany: async (args: Row) => (take.push(args.take), [])},
+      invite: {findMany: async () => [], deleteMany: async () => ({count: 0})},
+      $queryRaw: async () => [],
+      $executeRaw: async () => 0,
+    } as unknown as PrismaClient;
+    expect(await runRetention(db, now)).toEqual({erased: 0, skipped: 0, reapplied: 0, invitesDeleted: 0});
     expect(take).toEqual([RETENTION_BATCH_SIZE]);
     expect(RETENTION_BATCH_SIZE * RETENTION_MAX_BATCHES).toBeLessThanOrEqual(1000);
   });

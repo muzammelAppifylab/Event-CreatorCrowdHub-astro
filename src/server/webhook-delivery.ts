@@ -84,12 +84,29 @@ export function newSecret(): string {
   return `whsec_${hex(crypto.getRandomValues(new Uint8Array(32)).buffer)}`;
 }
 
-const PRIVATE_SUFFIXES = ['.localhost', '.local', '.internal', '.intranet', '.lan', '.home', '.corp', '.private', '.test', '.example', '.invalid', '.arpa'];
+const PRIVATE_SUFFIXES = [
+  '.localhost', '.localdomain', '.local', '.internal', '.intranet', '.lan', '.home', '.corp', '.private',
+  '.test', '.example', '.invalid', '.arpa', '.onion', '.alt', '.svc', '.consul',
+];
+/** Names that are loopback by convention (/etc/hosts aliases). */
+const LOOPBACK_NAMES = new Set(['localhost', 'localhost.localdomain', 'ip6-localhost', 'ip6-loopback', 'broadcasthost']);
+/**
+ * Public "wildcard DNS" services whose names resolve to whatever IP is written in them
+ * (127.0.0.1.nip.io, 10-0-0-1.sslip.io) or always to loopback (lvh.me, localtest.me).
+ */
+const IP_ECHO_DOMAINS = ['nip.io', 'sslip.io', 'xip.io', 'nip.direct', 'traefik.me', 'lvh.me', 'localtest.me', 'vcap.me', 'lacolhost.com', 'localhost.direct'];
+/** A dotted quad as a run of labels anywhere in a name (127.0.0.1.attacker.example). */
+const EMBEDDED_IPV4 = /(^|\.)(\d{1,3}\.){3}\d{1,3}(\.|$)/;
 
 /**
- * Why a receiver URL is not allowed, or `null` when it is fine. https only, no credentials, no IP
- * addresses (any notation), no single-label or private-looking names. The platform blocks egress to
- * its internal network too; this keeps bad URLs from being saved at all.
+ * Why a receiver URL is not allowed, or `null` when it is fine. https only, standard port, no
+ * credentials, no IP addresses in any notation (`new URL` turns decimal, hex, octal and short IPv4
+ * into a dotted quad; IPv6, IPv4-mapped IPv6 and zone ids keep their brackets), no loopback aliases,
+ * no single-label, private-suffix or IP-echo names (nip.io and friends), no dotted quad inside a name.
+ *
+ * What text checks cannot see: a public name whose DNS points at a private address. A Worker has no
+ * DNS lookup to check that before connecting; the platform's egress block refuses connections to its
+ * internal network (`403 Egress blocked`), and delivery never follows a redirect (`attemptDelivery`).
  */
 export function webhookUrlProblem(raw: unknown): string | null {
   if (typeof raw !== 'string' || !raw.trim()) return 'Enter the receiver URL.';
@@ -103,13 +120,17 @@ export function webhookUrlProblem(raw: unknown): string | null {
   if (url.protocol !== 'https:') return 'The URL must start with https://';
   if (url.username || url.password) return 'The URL must not contain a username or password.';
   if (url.port && url.port !== '443') return 'Use the standard HTTPS port.';
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  if (host.startsWith('[') || host.includes(':')) return 'Use a domain name, not an IP address.';
-  // `new URL` normalises 0x7f.1, 2130706433 and 127.1 to dotted quads; an all-numeric host is an IP.
-  if (/^[0-9.]+$/.test(host) || /^0x[0-9a-f]+$/i.test(host)) return 'Use a domain name, not an IP address.';
+  const host = url.hostname.toLowerCase().replace(/\.+$/, '');
+  if (host.startsWith('[') || host.includes(':') || host.includes('%')) return 'Use a domain name, not an IP address.';
+  // `new URL` normalises 0x7f.1, 2130706433, 0177.0.0.1 and 127.1 to dotted quads; an all-numeric
+  // (or hex-looking) host is an IP whatever its notation.
+  if (/^[0-9.]+$/.test(host) || /^(0x[0-9a-f]*\.?)+$/i.test(host)) return 'Use a domain name, not an IP address.';
+  if (EMBEDDED_IPV4.test(host)) return 'Use a domain name, not an IP address.';
   if (!host.includes('.')) return 'Use a public domain name.';
-  if (host === 'localhost' || PRIVATE_SUFFIXES.some(s => host.endsWith(s))) return 'Use a public domain name.';
-  if (!/^[a-z0-9.-]+$/.test(host) && !host.includes('xn--')) return 'Use a public domain name.';
+  if (LOOPBACK_NAMES.has(host) || host.startsWith('localhost.') || PRIVATE_SUFFIXES.some(s => host.endsWith(s))) return 'Use a public domain name.';
+  if (IP_ECHO_DOMAINS.some(d => host === d || host.endsWith(`.${d}`))) return 'Use a public domain name.';
+  // `new URL` turns Unicode names into punycode (xn--), so anything else is not a plain DNS name.
+  if (!/^[a-z0-9.-]+$/.test(host) || host.includes('..') || host.split('.').some(l => l.startsWith('-') || l.endsWith('-'))) return 'Use a public domain name.';
   return null;
 }
 
@@ -162,6 +183,11 @@ export async function attemptDelivery(
       },
     });
     await res.body?.cancel().catch(() => {});
+    // `redirect: 'manual'`: a 3xx (or an opaque redirect) ends it. Following it would send the signed
+    // payload to an address that never passed `webhookUrlProblem`.
+    if (res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400)) {
+      return {ok: false, status: res.status || null, error: 'The receiver redirected; webhooks do not follow redirects. Save the final URL instead.', retryable: false, durationMs: elapsed()};
+    }
     const ok = res.status >= 200 && res.status < 300;
     return {
       ok,
@@ -257,7 +283,7 @@ export async function deliverWebhookJob(data: DeliveryJobData | BatchJobData, _j
   if (!Array.isArray(batch) && (!legacy || typeof legacy.endpointId !== 'string' || typeof legacy.body !== 'string')) throw new DontRetry('The webhook job is malformed.');
   const db = (deps.db === undefined ? getDb() : deps.db) as HandlerDb | null;
   if (!db) throw new Error('The Site Database is off.');
-  if (Array.isArray(batch)) return deliverBatch(batch, db, deps);
+  if (Array.isArray(batch)) return deliverBatch(batch, db, {...deps, db});
   const endpoint = await db.webhookEndpoint.findUnique({where: {id: legacy!.endpointId}, select: {url: true, secret: true, active: true}});
   if (!endpoint || !endpoint.active) return; // deleted or paused since it was queued: nothing to do
   const result = await attemptDelivery(endpoint, legacy!.event, legacy!.deliveryId, legacy!.body, deps);

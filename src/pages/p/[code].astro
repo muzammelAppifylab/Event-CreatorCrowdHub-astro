@@ -51,7 +51,7 @@ const shownCode = clean.length === 6 ? `${clean.slice(0, 3)}-${clean.slice(3)}` 
       <main id="main" tabindex="-1" class="g-main">
         <div class="g-poll">
           <header class="g-poll-head">
-            <p>{title ?? 'Live poll'}</p>
+            <h1 class="g-poll-title">{title ?? 'Live poll'}</h1>
             <div class="g-poll-tags">
               <span class="g-poll-code type-code" aria-label={`Code ${clean.split('').join(' ')}`}>{shownCode}</span>
             </div>

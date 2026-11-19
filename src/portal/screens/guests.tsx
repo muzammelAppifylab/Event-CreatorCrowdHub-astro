@@ -360,8 +360,8 @@ export function GuestsTab({eventId}: {eventId: string}) {
             )
           }
         />
+        <LoadMore query={guests} count={rows?.length} noun={['guest', 'guests']} />
       </Card>
-      <LoadMore query={guests} />
 
       <GuestDrawer eventId={eventId} rsvpId={open} onClose={() => setOpen(null)} onAction={(action, id) => {
           setOpen(null);

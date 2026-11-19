@@ -1,16 +1,28 @@
 import {Hono, type Context} from 'hono';
 import {getCookie, setCookie} from 'hono/cookie';
 
-import {aggregateResults, applyVote, canVote, type PollResults, type PollType, type VoteError} from '../../domain/polls';
+import {
+  applyVote,
+  canVote,
+  largestRemainderPercents,
+  type PollResults,
+  type PollType,
+  RATING_MAX,
+  RATING_MIN,
+  TEXT_ANSWERS_SHOWN,
+  type VoteError,
+} from '../../domain/polls';
 import {CODE_ALPHABET, POLL_JOIN_CODE_LENGTH} from '../../domain/codes';
 import {hashToken} from '../../domain/secureToken';
 import {POLL_GUEST_PREFIX, verifyPollGuestToken} from '../../domain/tokens';
-import type {PrismaClient} from '../../generated/prisma/client';
-import {attempt, keysFor, type Ctx} from '../../platform/auth/kit';
-import {subjectHash} from '../../platform/auth/keys';
-import {RATE_LIMITS, type AttemptKind, type KindPolicy} from '../../platform/auth/rate-limit';
+import {Prisma, type PrismaClient} from '../../generated/prisma/client';
+import {background, clientIp, rateLimitIp, tooMany} from '../../platform/auth/kit';
+import {hmacKey, subjectHash} from '../../platform/auth/keys';
+import {tableMissing} from '../../platform/background';
 import {config} from '../../platform/config';
 import {problem, withAuthCore, withDb} from '../../platform/guards';
+import {isUuid} from '../../lib/text';
+import {notFound} from '../validate';
 
 /**
  * Guest polls, public side (ported from CreatorCrowdHub `polls-public.ts`). No sign-in:
@@ -21,41 +33,34 @@ import {problem, withAuthCore, withDb} from '../../platform/guards';
  *   POST /site-api/polls-public/:code/votes     cast or change my vote
  *   GET  /site-api/polls-public/:code/results   the current poll's results (if the host shows them)
  *
- * Abuse limits: the template's database-backed rate limiter (`rate-limit.ts`), kind `vote`,
- * per client IP, plus one answer per device per poll (unique pollId + voterToken).
+ * Abuse limits live in the site's OWN table `poll_attempts` (the managed limiter's kinds are fixed,
+ * `security.md`), checked with bounded counts (LIMIT N+1, indexed) and NEVER under a lock: a room on
+ * one venue Wi-Fi votes in the same second, and a per-IP lock refused most of it (audit M-3). Without
+ * a lock a burst can pass a ceiling by at most its own size, which is fine for these generous limits.
+ * One answer per device per poll is the unique (poll_id, voter_token) index's job, never a limit's.
+ *   per IP, every vote               600 per 10 minutes (the whole room's volume)
+ *   per IP, NEW devices              200 per 10 minutes: a vote without a valid signed voter cookie is a
+ *                                    fresh ballot (a new phone, or one that dropped or forged its
+ *                                    cookie to vote again, audit L-9)
+ *   per device (signed cookie)       30 a minute
+ *   per IP, join-code lookup MISSES  30 per 10 minutes (code enumeration); hits cost nothing
+ * IP and device are stored only as keyed hashes (`subjectHash`). Rows older than a day are swept.
  */
 
 export const VOTER_COOKIE = 'site_voter';
 export const VOTER_COOKIE_PATH = '/site-api/polls-public';
 const VOTER_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
-const MAX_VOTES_READ = 20_000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/**
- * `vote` is not in the template's `AttemptKind` list: its policy is registered once, here, so
- * this slice needs no edit to `rate-limit.ts` (move it into `RATE_LIMITS` there when convenient).
- * Per IP, every vote counts: 600 per 10 minutes (a room on one venue Wi-Fi), then 10s, 20s, 40s...
- */
-const VOTE_KIND = 'vote' as AttemptKind;
-(RATE_LIMITS as Record<string, KindPolicy>)['vote'] ??= {
-  ip: {windowSeconds: 10 * 60, free: 600, baseDelaySeconds: 10, maxDelaySeconds: 10 * 60, counts: 'all'},
-};
-
-/** PRD: 30 votes a minute per DEVICE (the cookie token), on top of the per-IP ceiling above. */
-const DEVICE_KIND = 'vote_device' as AttemptKind;
-(RATE_LIMITS as Record<string, KindPolicy>)['vote_device'] ??= {
-  subject: {windowSeconds: 60, free: 30, baseDelaySeconds: 10, maxDelaySeconds: 5 * 60, counts: 'all'},
-};
-
-const LOOKUP_KIND = 'poll_lookup' as AttemptKind;
-(RATE_LIMITS as Record<string, KindPolicy>)['poll_lookup'] ??= {
-  // Counts only MISSES (unknown, draft or malformed codes): 30 per 10 min per IP, then 10s, 20s... Live pages that hit pay nothing.
-  ip: {windowSeconds: 10 * 60, free: 30, baseDelaySeconds: 10, maxDelaySeconds: 10 * 60, counts: 'all'},
-};
+export const POLL_LIMITS = {
+  ipVotes: {windowSeconds: 10 * 60, max: 600, retryAfter: 30},
+  newDevices: {windowSeconds: 10 * 60, max: 200, retryAfter: 30},
+  deviceVotes: {windowSeconds: 60, max: 30, retryAfter: 10},
+  lookupMisses: {windowSeconds: 10 * 60, max: 30, retryAfter: 60},
+} as const;
 
 /* ── helpers shared with the admin routes ───────────────────────────────── */
 
-export const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
+export {isUuid};
 
 const UNSAFE_IN_SCRIPT = new RegExp('[<>&' + String.fromCharCode(0x2028, 0x2029) + ']', 'g');
 /**
@@ -160,7 +165,125 @@ export async function currentPollOf(db: PrismaClient, eventId: string): Promise<
   return last as PollRow | null;
 }
 
-/* ── results, cached per isolate for a moment (best effort only) ────────── */
+/* ── results: counted by the database, cached per isolate for a moment ── */
+
+/** Which polls one aggregate covers. Fixed SQL fragments only: never built from input. */
+export type PollScope = {pollIds: string[]} | {eventId: string} | {joinCode: string};
+
+/** One aggregate row: `o` an option's voters, `v` a choice poll's voters, `r` a rating's count, `tn` a text poll's answers, `t` one recent text. */
+export type AggRow = {kind: 'o' | 'v' | 'r' | 'tn' | 't'; poll_id: string; key: string | null; n: number | bigint; text: string | null; at: Date | string | null};
+
+/** Postgres regex for what JS `String.prototype.trim()` strips at both ends (btrim strips only spaces). */
+const WS = String.raw`[\s   -     　﻿]`;
+const JS_TRIM = `^${WS}+|${WS}+$`;
+
+function scopeSql(scope: PollScope): Prisma.Sql {
+  if ('pollIds' in scope) return Prisma.sql`v.poll_id = ANY(${scope.pollIds}::uuid[])`;
+  if ('eventId' in scope) return Prisma.sql`v.poll_id IN (SELECT p.id FROM polls p WHERE p.event_id = ${scope.eventId}::uuid)`;
+  return Prisma.sql`v.poll_id IN (SELECT p.id FROM polls p JOIN events e ON e.id = p.event_id WHERE e.poll_join_code = ${scope.joinCode} AND e.deleted_at IS NULL)`;
+}
+
+/**
+ * Every count the results show, for every poll in `scope`, in ONE statement: the database groups
+ * the votes (through the unique (poll_id, voter_token) index) and sends back a few rows per poll,
+ * never the votes themselves. Same rules as `aggregateResults` (domain/polls.ts): unknown options
+ * and empty answers don't count, a choice voter counts once, the 20 newest text answers.
+ */
+export async function aggregateRows(db: PrismaClient, scope: PollScope): Promise<AggRow[]> {
+  if ('pollIds' in scope && scope.pollIds.length === 0) return [];
+  return db.$queryRaw<AggRow[]>`
+    WITH v AS (
+      SELECT v.id, v.poll_id, v.voter_token, v.option_ids, v.rating_value, regexp_replace(v.text_value, ${JS_TRIM}, '', 'g') AS text_value, v.updated_at, p.type::text AS type
+      FROM poll_votes v JOIN polls p ON p.id = v.poll_id
+      WHERE ${scopeSql(scope)}
+    ), known AS (
+      SELECT v.poll_id, v.voter_token, v.type, o.id AS option_id, e.ord
+      FROM v
+      CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(v.option_ids) = 'array' THEN v.option_ids ELSE '[]'::jsonb END) WITH ORDINALITY AS e(opt, ord)
+      JOIN poll_options o ON o.poll_id = v.poll_id AND o.id::text = e.opt
+      WHERE v.type IN ('single_choice', 'multi_choice')
+    ), picked AS (
+      SELECT DISTINCT poll_id, voter_token, option_id FROM known WHERE type = 'multi_choice'
+      UNION ALL
+      (SELECT DISTINCT ON (poll_id, voter_token) poll_id, voter_token, option_id FROM known WHERE type = 'single_choice'
+        ORDER BY poll_id, voter_token, ord)
+    )
+    SELECT 'o' AS kind, poll_id::text AS poll_id, option_id::text AS key, COUNT(*)::int AS n, NULL::text AS text, NULL::timestamptz AS at
+      FROM picked GROUP BY poll_id, option_id
+    UNION ALL
+    SELECT 'v', poll_id::text, NULL, COUNT(DISTINCT voter_token)::int, NULL, NULL FROM picked GROUP BY poll_id
+    UNION ALL
+    SELECT 'r', poll_id::text, rating_value::text, COUNT(*)::int, NULL, NULL
+      FROM v WHERE type = 'rating' AND rating_value BETWEEN ${RATING_MIN}::int AND ${RATING_MAX}::int GROUP BY poll_id, rating_value
+    UNION ALL
+    SELECT 'tn', poll_id::text, NULL, COUNT(*)::int, NULL, NULL FROM v WHERE type = 'short_text' AND text_value <> '' GROUP BY poll_id
+    UNION ALL
+    SELECT 't', poll_id::text, NULL, 0, text_value, updated_at FROM (
+      SELECT poll_id, text_value, updated_at, row_number() OVER (PARTITION BY poll_id ORDER BY updated_at DESC, id DESC) AS rn
+      FROM v WHERE type = 'short_text' AND text_value <> ''
+    ) newest WHERE rn <= ${TEXT_ANSWERS_SHOWN}::int`;
+}
+
+type ResultsPoll = Pick<PollRow, 'id' | 'type'> & {options: {id: string; label: string; sortOrder?: number}[]};
+
+/** Results for each poll from the aggregate rows (options in their order, percents adding up to 100). */
+export function resultsFromRows(polls: ResultsPoll[], rows: AggRow[]): Map<string, ResultsDto> {
+  const byPoll = new Map<string, AggRow[]>();
+  for (const row of rows) {
+    const list = byPoll.get(row.poll_id);
+    if (list) list.push(row);
+    else byPoll.set(row.poll_id, [row]);
+  }
+  const out = new Map<string, ResultsDto>();
+  for (const poll of polls) {
+    const mine = byPoll.get(poll.id) ?? [];
+    const n = (kind: AggRow['kind'], key: string | null = null) =>
+      Number(mine.find(r => r.kind === kind && (key === null || r.key === key))?.n ?? 0);
+    const isChoice = poll.type === 'single_choice' || poll.type === 'multi_choice';
+    const options = [...poll.options].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    const counts = isChoice ? options.map(o => n('o', o.id)) : [];
+    const percents = largestRemainderPercents(counts);
+    let rating: ResultsDto['rating'] = null;
+    let totalVoters: number;
+    if (isChoice) totalVoters = n('v');
+    else if (poll.type === 'rating') {
+      const distribution: {value: number; count: number}[] = [];
+      let sum = 0;
+      let count = 0;
+      for (let value = RATING_MIN; value <= RATING_MAX; value++) {
+        const c = n('r', String(value));
+        distribution.push({value, count: c});
+        sum += value * c;
+        count += c;
+      }
+      rating = {average: count ? Math.round((sum / count) * 10) / 10 : null, count, distribution};
+      totalVoters = count;
+    } else totalVoters = n('tn');
+    const textAnswers =
+      poll.type === 'short_text'
+        ? mine
+            .filter(r => r.kind === 't' && r.text && r.at)
+            .map(r => ({text: r.text!, at: new Date(r.at!)}))
+            .sort((a, b) => b.at.getTime() - a.at.getTime())
+            .slice(0, TEXT_ANSWERS_SHOWN)
+            .map(t => ({text: t.text, at: t.at.toISOString()}))
+        : [];
+    out.set(poll.id, {
+      pollId: poll.id,
+      type: poll.type,
+      totalVoters,
+      options: isChoice ? options.map((o, i) => ({id: o.id, label: o.label, count: counts[i]!, percent: percents[i]!})) : [],
+      rating,
+      textAnswers,
+    });
+  }
+  return out;
+}
+
+/** Results of the given polls (their options already read) with ONE aggregate query over `scope`. */
+export async function resultsOfPolls(db: PrismaClient, polls: ResultsPoll[], scope: PollScope = {pollIds: polls.map(p => p.id)}) {
+  return resultsFromRows(polls, polls.length ? await aggregateRows(db, scope) : []);
+}
 
 const RESULTS_TTL_MS = 1000;
 const CACHE_MAX = 200;
@@ -172,27 +295,20 @@ export const invalidateResults = (pollId: string) => void cache.delete(pollId);
 /**
  * Aggregated results. Concurrent callers on one isolate share one query and an answer lives
  * ~1s: a room of 300 phones polling every 3s costs a handful of queries, not hundreds. Another
- * isolate may serve a second-old answer, which is fine for live counts.
+ * isolate may serve a second-old answer, which is fine for live counts. Pass `options` when the
+ * caller already read them (the vote route): then it is the aggregate alone.
  */
-export function resultsFor(db: PrismaClient, poll: Pick<PollRow, 'id' | 'type' | 'status'>, now = Date.now()): Promise<ResultsDto> {
+export function resultsFor(
+  db: PrismaClient,
+  poll: Pick<PollRow, 'id' | 'type' | 'status'>,
+  now = Date.now(),
+  options?: {id: string; label: string; sortOrder?: number}[]
+): Promise<ResultsDto> {
   const hit = cache.get(poll.id);
   if (hit && now - hit.at < RESULTS_TTL_MS) return hit.value;
   const value = (async () => {
-    const [options, votes] = await Promise.all([
-      optionsOf(db, [poll.id]),
-      db.pollVote.findMany({
-        where: {pollId: poll.id},
-        select: {voterToken: true, optionIds: true, ratingValue: true, textValue: true, createdAt: true, updatedAt: true},
-        take: MAX_VOTES_READ,
-      }),
-    ]);
-    return toResultsDto(
-      aggregateResults(
-        {id: poll.id, type: poll.type, status: poll.status, sortOrder: 0},
-        options,
-        votes.map(v => ({...v, optionIds: Array.isArray(v.optionIds) ? (v.optionIds as string[]) : []}))
-      )
-    );
+    const [opts, rows] = await Promise.all([options ?? optionsOf(db, [poll.id]), aggregateRows(db, {pollIds: [poll.id]})]);
+    return resultsFromRows([{id: poll.id, type: poll.type, options: opts}], rows).get(poll.id)!;
   })();
   cache.set(poll.id, {at: now, value});
   if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string);
@@ -214,19 +330,41 @@ const FIELD_OF: Record<Exclude<VoteError, "You've already answered">, string> = 
   'Answer is too long': 'textValue',
 };
 
+const isUniqueViolation = (err: unknown): boolean => (err as {code?: unknown} | null)?.code === 'P2002';
+
 const invalid = (c: Context, message: string, field: string) =>
   c.json({...problem('invalid_vote', message), fields: {[field]: message}}, 422);
 
-function readVoterToken(c: Context): string | null {
-  const token = getCookie(c, VOTER_COOKIE);
-  return token && isUuid(token) ? token : null;
+/**
+ * The voter cookie is `<uuid>.<tag>`: the tag is a keyed HMAC of the uuid (the `subject-hash` key,
+ * its own `poll-voter:` domain), so only a token THIS server minted counts as a known device. A
+ * made-up uuid is treated like no cookie at all, and goes through the new-device limit (audit L-9).
+ */
+const VOTER_TAG_HEX = 32;
+async function voterTag(secret: string, token: string): Promise<string> {
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret, 'subject-hash'), new TextEncoder().encode(`poll-voter:${token}`)));
+  return [...mac.slice(0, VOTER_TAG_HEX / 2)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function ensureVoterToken(c: Context): string {
-  const existing = readVoterToken(c);
-  if (existing) return existing;
+/** The keyed hash a device's limits are counted by (never the token itself). */
+const deviceHashOf = (secret: string, token: string) => subjectHash(secret, 'email', `poll-voter:${token}`);
+
+/** The device's voter token, only when its cookie carries a valid tag; else null. */
+export async function readVoterToken(c: Context, secret: string | null | undefined): Promise<string | null> {
+  const raw = getCookie(c, VOTER_COOKIE);
+  if (!raw || !secret || raw.length > 36 + 1 + VOTER_TAG_HEX) return null;
+  const [token, tag] = raw.split('.');
+  if (!isUuid(token) || !tag || tag.length !== VOTER_TAG_HEX) return null;
+  const expected = await voterTag(secret, token);
+  let diff = 0;
+  for (let i = 0; i < VOTER_TAG_HEX; i++) diff |= expected.charCodeAt(i) ^ tag.charCodeAt(i);
+  return diff === 0 ? token : null;
+}
+
+/** A new voter token for this device, with its signed cookie. */
+export async function mintVoterToken(c: Context, secret: string): Promise<string> {
   const token = crypto.randomUUID();
-  setCookie(c, VOTER_COOKIE, token, {
+  setCookie(c, VOTER_COOKIE, `${token}.${await voterTag(secret, token)}`, {
     httpOnly: true,
     sameSite: 'Lax',
     secure: new URL(c.req.url).protocol === 'https:',
@@ -252,14 +390,81 @@ export async function eventByCode(db: PrismaClient, raw: string) {
   });
 }
 
-/** Per-IP throttle for code lookups that MISS (stops code enumeration without a write per poll). Returns the 429 or null. */
+/* ── abuse limits on poll_attempts (see the top of this file) ────────────── */
+
+const since = (seconds: number, now: number) => new Date(now - seconds * 1000);
+const ipHashOf = (c: Context, secret: string) => subjectHash(secret, 'ip', rateLimitIp(clientIp(c)));
+
+/** A site between this release and its migration has no `poll_attempts` yet: no limit, rather than no voting. */
+async function orNoTable<T>(work: Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (tableMissing(error)) return fallback;
+    throw error;
+  }
+}
+
+/** Now and then (1 in 50 writes), after the answer: drops up to 500 rows older than a day. */
+function maybeSweep(c: Context, db: PrismaClient, now: number) {
+  if (Math.random() >= 0.02) return;
+  background(c, db.$executeRaw`DELETE FROM poll_attempts WHERE id IN (SELECT id FROM poll_attempts WHERE created_at < ${since(86_400, now)} LIMIT 500)`);
+}
+
+export type VoteCounts = {ip: number; fresh: number; device: number};
+
+/** The three vote counts in ONE statement, each bounded at its limit + 1 (indexes (kind, ip_hash, created_at) and (device_hash, created_at)). */
+export async function voteCounts(db: PrismaClient, ipHash: string, deviceHash: string | null, now = Date.now()): Promise<VoteCounts> {
+  const L = POLL_LIMITS;
+  const [row] = await orNoTable(
+    db.$queryRaw<VoteCounts[]>`
+      SELECT
+        (SELECT COUNT(*)::int FROM (SELECT 1 FROM poll_attempts WHERE kind = 'vote' AND ip_hash = ${ipHash}
+           AND created_at > ${since(L.ipVotes.windowSeconds, now)} LIMIT ${L.ipVotes.max + 1}::int) a) AS ip,
+        (SELECT COUNT(*)::int FROM (SELECT 1 FROM poll_attempts WHERE kind = 'vote' AND ip_hash = ${ipHash} AND new_device
+           AND created_at > ${since(L.newDevices.windowSeconds, now)} LIMIT ${L.newDevices.max + 1}::int) f) AS fresh,
+        (SELECT COUNT(*)::int FROM (SELECT 1 FROM poll_attempts WHERE device_hash = ${deviceHash}::char(64)
+           AND created_at > ${since(L.deviceVotes.windowSeconds, now)} LIMIT ${L.deviceVotes.max + 1}::int) d) AS device`,
+    [] as VoteCounts[]
+  );
+  return {ip: Number(row?.ip ?? 0), fresh: Number(row?.fresh ?? 0), device: Number(row?.device ?? 0)};
+}
+
+/** Which limit a vote is over (the 429 to answer), or null. Pure. */
+export function voteRefusal(counts: VoteCounts, knownDevice: boolean): {retryAfter: number; message: string} | null {
+  const L = POLL_LIMITS;
+  const busy = 'Lots of answers are arriving from this network. Try again in a moment.';
+  if (!knownDevice && counts.fresh >= L.newDevices.max) return {retryAfter: L.newDevices.retryAfter, message: busy};
+  if (counts.ip >= L.ipVotes.max) return {retryAfter: L.ipVotes.retryAfter, message: busy};
+  if (knownDevice && counts.device >= L.deviceVotes.max) {
+    return {retryAfter: L.deviceVotes.retryAfter, message: 'You are answering very fast. Wait a few seconds, then try again.'};
+  }
+  return null;
+}
+
+const recordAttempt = (db: PrismaClient, row: {kind: 'vote' | 'lookup'; ipHash: string; deviceHash?: string | null; newDevice?: boolean}) =>
+  orNoTable(
+    db.$executeRaw`INSERT INTO poll_attempts (kind, ip_hash, device_hash, new_device) VALUES (${row.kind}, ${row.ipHash}, ${row.deviceHash ?? null}::char(64), ${row.newDevice ?? false})`,
+    0
+  );
+
+/** Per-IP throttle for code lookups that MISS (stops code enumeration without a write per hit). Returns the 429 or null. */
 async function lookupLimited(c: Context): Promise<Response | null> {
   const secret = config.jwtSecret;
-  if (!secret) return null; // no limiter key without the secret; the vote route 503s anyway
-  const ctx = c as unknown as Ctx;
-  ctx.set('secret', secret);
-  const {stop} = await attempt(ctx, LOOKUP_KIND, await keysFor(ctx, null));
-  return stop;
+  if (!secret) return null; // no hash key without the secret; the vote route 503s anyway
+  const db = c.var.db as PrismaClient;
+  const now = Date.now();
+  const ipHash = await ipHashOf(c, secret);
+  const L = POLL_LIMITS.lookupMisses;
+  const [row] = await orNoTable(
+    db.$queryRaw<{n: number}[]>`SELECT COUNT(*)::int AS n FROM (SELECT 1 FROM poll_attempts WHERE kind = 'lookup' AND ip_hash = ${ipHash}
+      AND created_at > ${since(L.windowSeconds, now)} LIMIT ${L.max + 1}::int) m`,
+    [] as {n: number}[]
+  );
+  if (Number(row?.n ?? 0) >= L.max) return tooMany(c, L.retryAfter, 'Too many codes tried. Check the code and try again in a minute.');
+  await recordAttempt(db, {kind: 'lookup', ipHash});
+  maybeSweep(c, db, now);
+  return null;
 }
 
 /** RSVP statuses that may attach their identity to a vote (a seat holder, not a cancelled or waitlisted guest). */
@@ -303,12 +508,11 @@ export const pollPublicRoutes = new Hono()
     const db = c.var.db;
     const event = await eventByCode(db, c.req.param('code'));
     if (!event) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
-    const poll = await currentPollOf(db, event.id);
-    const token = readVoterToken(c);
+    const [poll, token] = await Promise.all([currentPollOf(db, event.id), readVoterToken(c, config.jwtSecret)]);
     const [options, mine] = poll
       ? await Promise.all([
           optionsOf(db, [poll.id]),
-          token ? db.pollVote.findUnique({where: {pollId_voterToken: {pollId: poll.id, voterToken: token}}}) : null,
+          token ? db.pollVote.findUnique({where: {pollId_voterToken: {pollId: poll.id, voterToken: token}}, select: {optionIds: true, ratingValue: true, textValue: true}}) : null,
         ])
       : [[], null];
     return c.json({
@@ -343,21 +547,23 @@ export const pollPublicRoutes = new Hono()
   })
 
   .post('/:code/votes', withAuthCore, async c => {
-    const ctx = c as unknown as Ctx;
     const db = c.var.db;
     // Cheapest check first: the rate limit writes a row, so it comes after the code check.
     const event = await eventByCode(db, c.req.param('code'));
     if (!event) return (await lookupLimited(c)) ?? c.json(NOT_FOUND, 404);
-    const ipKeys = await keysFor(ctx, null);
-    const limited = await attempt(ctx, VOTE_KIND, ipKeys);
-    if (limited.stop) return limited.stop;
-    // One device, one cookie token (hashed like an email for the limiter): 30 votes a minute.
-    const token = ensureVoterToken(c);
-    const secret = ctx.var.secret;
-    if (secret) {
-      const device = await attempt(ctx, DEVICE_KIND, {...ipKeys, emailHash: await subjectHash(secret, 'email', token)});
-      if (device.stop) return device.stop;
-    }
+    // Limits (top of this file): one bounded count statement, no lock. A vote without a valid signed
+    // voter cookie is a NEW ballot and counts against its IP's new devices (L-9).
+    const secret = c.var.secret;
+    const now = Date.now();
+    const known = await readVoterToken(c, secret);
+    const [ipHash, knownHash] = await Promise.all([ipHashOf(c, secret), known ? deviceHashOf(secret, known) : null]);
+    const refused = voteRefusal(await voteCounts(db, ipHash, knownHash, now), Boolean(known));
+    if (refused) return tooMany(c, refused.retryAfter, refused.message);
+    const token = known ?? (await mintVoterToken(c, secret));
+    const deviceHash = knownHash ?? (await deviceHashOf(secret, token));
+    // Counted now, whatever the vote turns out to be (a bad answer is still an attempt); runs beside the reads below.
+    const recorded = recordAttempt(db, {kind: 'vote', ipHash, deviceHash, newDevice: !known});
+    maybeSweep(c, db, now);
 
     const raw = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
     if (!raw || typeof raw !== 'object') return c.json(problem('invalid_vote', 'Send your answer as JSON.'), 400);
@@ -370,18 +576,23 @@ export const pollPublicRoutes = new Hono()
       textValue: typeof raw.textValue === 'string' ? raw.textValue.slice(0, 1000) : null,
     };
 
-    const poll = (await db.poll.findFirst({where: {id: raw.pollId, eventId: event.id}, select: pollSelect})) as PollRow | null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
+    // The poll with its options (one query, a join) and this device's vote, side by side.
+    const [found, existing] = await Promise.all([
+      db.poll.findFirst({
+        where: {id: raw.pollId, eventId: event.id},
+        select: {...pollSelect, pollOptions: {select: {id: true, label: true, sortOrder: true}, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}]}},
+      }) as Promise<(PollRow & {pollOptions: {id: string; label: string; sortOrder: number}[]}) | null>,
+      db.pollVote.findUnique({where: {pollId_voterToken: {pollId: raw.pollId, voterToken: token}}, select: {optionIds: true, ratingValue: true, textValue: true}}),
+      recorded,
+    ]);
+    if (!found) return notFound(c, 'Poll');
+    const {pollOptions: options, ...poll} = found;
     const allowed = canVote(poll);
     if (!allowed.ok) return c.json(problem('poll_not_open', allowed.reason), 409);
     if (typeof raw.type === 'string' && raw.type !== poll.type) {
       return c.json(problem('poll_changed', 'This question has changed. Refresh to see the new one.'), 409);
     }
 
-    const [options, existing] = await Promise.all([
-      optionsOf(db, [poll.id]),
-      db.pollVote.findUnique({where: {pollId_voterToken: {pollId: poll.id, voterToken: token}}}),
-    ]);
     const decided = applyVote(existing ? myVoteOf(existing) : null, input, poll.type, {validOptionIds: options.map(o => o.id)});
     if (!decided.ok) {
       if (decided.error === "You've already answered") return c.json(problem('already_answered', decided.error), 409);
@@ -393,17 +604,47 @@ export const pollPublicRoutes = new Hono()
     // Identity only when the poll is NOT anonymous and the guest link was valid; otherwise the vote stays anonymous.
     const rsvpId = poll.anonymous ? null : await guestRsvpId(db, event.id, raw.g);
     const identity = rsvpId ? {rsvpId} : {};
-    // Choice and rating overwrite; a short answer is one per device (the domain refused a second).
-    await db.pollVote.upsert({
-      where: {pollId_voterToken: {pollId: poll.id, voterToken: token}},
-      create: {pollId: poll.id, voterToken: token, ...data, ...identity},
-      update: poll.type === 'short_text' ? identity : {...data, ...identity},
-    });
+    // One answer per device per poll is the unique (poll_id, voter_token) index's job, not this read:
+    // two taps at once both see "no vote yet", and the index refuses the second insert (P2002).
+    const key = {pollId_voterToken: {pollId: poll.id, voterToken: token}};
+    if (poll.type === 'short_text') {
+      // A short answer is one per device: insert only, and a lost race is "already answered", never a silent overwrite.
+      let stored: boolean;
+      if (existing) {
+        // A row without an answer yet: fill it only while it is still empty (conditional, one statement).
+        stored = (await db.pollVote.updateMany({where: {pollId: poll.id, voterToken: token, textValue: null}, data: {...data, ...identity}})).count === 1;
+      } else {
+        stored = await db.pollVote
+          .create({data: {pollId: poll.id, voterToken: token, ...data, ...identity}, select: {id: true}})
+          .then(
+            () => true,
+            err => {
+              if (isUniqueViolation(err)) return false;
+              throw err;
+            }
+          );
+      }
+      if (!stored) return c.json(problem('already_answered', "You've already answered"), 409);
+    } else {
+      // Choice and rating overwrite (last answer wins). A racing first insert makes the upsert's
+      // create fail on the index: the row exists now, so the retry updates it.
+      const write = () =>
+        db.pollVote.upsert({
+          where: key,
+          create: {pollId: poll.id, voterToken: token, ...data, ...identity},
+          update: {...data, ...identity},
+          select: {id: true},
+        });
+      await write().catch(err => {
+        if (isUniqueViolation(err)) return write();
+        throw err;
+      });
+    }
     invalidateResults(poll.id);
     return c.json({
       pollId: poll.id,
       myVote: myVoteOf(v),
-      results: poll.showResultsToVoters ? await resultsFor(db, poll) : null,
+      results: poll.showResultsToVoters ? await resultsFor(db, poll, Date.now(), options) : null,
     });
   })
 

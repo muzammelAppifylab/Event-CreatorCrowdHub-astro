@@ -1,6 +1,7 @@
 ---
 /**
- * `/privacy/unsubscribe/<token>`: the unsubscribe link (the RSVP's manage token). Rendered on
+ * `/privacy/unsubscribe/<token>`: the unsubscribe link in every guest email (the RSVP's manage token,
+ * or a signed unsubscribe token from a reminder or broadcast). Rendered on
  * request, never indexed, never cached. Opening the page changes nothing; the button POSTs to
  * `/site-api/privacy/unsubscribe/:token`.
  */
@@ -37,12 +38,12 @@ if (invalid) Astro.response.status = res && res.status !== 404 ? 503 : 404;
         ) : info.state === 'off' ? (
           <>
             <h1>You are unsubscribed</h1>
-            <p class="muted">You will not get marketing updates about {info.event.title}. Emails about your RSVP itself still arrive.</p>
+            <p class="muted">You will not get marketing updates or announcements from the host of {info.event.title}. Emails about your RSVP itself (confirmation, reminders) still arrive.</p>
           </>
         ) : (
           <>
             <h1>Unsubscribe from updates</h1>
-            <p class="muted">Stop marketing updates from the host of {info.event.title}. Emails about your RSVP itself still arrive.</p>
+            <p class="muted">Stop marketing updates and announcements from the host of {info.event.title}, for every event you RSVP'd to with this address. Emails about your RSVP itself (confirmation, reminders) still arrive.</p>
             <form id="unsubscribe-form" class="g-form" novalidate data-token={token}>
               <p class="notice" data-form-status hidden />
               <button class="g-btn g-btn-lg" type="submit">Unsubscribe</button>

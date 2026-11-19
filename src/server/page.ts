@@ -42,3 +42,21 @@ export async function staticContext(request: Request) {
   const brand = await read<{site: Site | null}>(api.site.$get());
   return {api, site: brand?.site ?? null, viewer: GUEST};
 }
+
+/** How long a browser may keep a public on-demand page (`publicPageContext`): short, so an edit shows within a minute. */
+export const PUBLIC_PAGE_MAX_AGE = 60;
+
+/**
+ * For an ON-DEMAND page that is the same for every visitor (a public event page, audit M-29): the
+ * brand only, no visitor read, and a short PUBLIC cache. The page renders signed out and passes
+ * `isStatic` to `<Base>`, which fills the visitor in, in the browser, exactly like a prerendered page;
+ * anything about this visitor (their RSVP, host tools) must load in the browser too. Never use it on
+ * a page that reads cookies, `pageContext`, `withViewer` or anything per visitor: it would be shared.
+ *
+ *   const {api, site, viewer} = await publicPageContext(Astro.request, Astro.response);
+ */
+export async function publicPageContext(request: Request, response: {headers: Headers}, maxAge = PUBLIC_PAGE_MAX_AGE) {
+  const context = await staticContext(request);
+  response.headers.set('Cache-Control', `public, max-age=${Math.max(0, Math.floor(maxAge))}`);
+  return context;
+}

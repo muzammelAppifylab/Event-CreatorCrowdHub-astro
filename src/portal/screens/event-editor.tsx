@@ -371,6 +371,10 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
     if (Object.keys(fields).length === 0) save.mutate({body, publish});
   });
   const submit = submitWith(false);
+  // Both ends are picked, not typed, so the order is checked live (the server's rule: eventRuleErrors).
+  const startMs = Date.parse(v.startAt);
+  const endMs = Date.parse(v.endAt);
+  const endError = form.error('endAt') ?? (endMs <= startMs ? 'End must be after the start.' : undefined);
 
   const setQuestion = (index: number, patch: Partial<QuestionDraft>) =>
     setQuestions(current => current.map((q, i) => (i === index ? {...q, ...patch} : q)));
@@ -440,7 +444,7 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                   {event.publicPath}
                 </a>
               ) : (
-                'New events stay as drafts until you publish. Publishing saves your changes first.'
+                'Fill in each section, then publish. Publishing saves your changes first.'
               )
             }
             actions={
@@ -560,8 +564,8 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
                     <Field id="f-startAt" label="Starts" error={form.error('startAt')}>
                       <DateTimeField {...form.field('startAt')} />
                     </Field>
-                    <Field id="f-endAt" label="Ends" error={form.error('endAt')}>
-                      <DateTimeField {...form.field('endAt')} />
+                    <Field id="f-endAt" label="Ends" error={endError}>
+                      <DateTimeField {...form.field('endAt')} aria-invalid={endError ? true : undefined} aria-describedby={endError ? 'f-endAt-error' : undefined} />
                     </Field>
                   </div>
                   <Field id="f-timezone" label="Timezone" error={form.error('timezone')}>
@@ -735,7 +739,6 @@ function EditorForm({id, initial, drafts, event}: {id: string; initial: FormValu
         <div className="editor-status">
           <div className="editor-status-row">
             <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
-            {dirty && <Badge tone="warning">Unsaved changes</Badge>}
           </div>
           <p className="muted">
             {cancelled

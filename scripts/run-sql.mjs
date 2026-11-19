@@ -1,4 +1,4 @@
-// Runs a .sql file against DATABASE_URL: `node --env-file=.env scripts/run-sql.mjs prisma/seed-events.sql`
+// Runs a .sql file against DATABASE_URL: `node --env-file=.env scripts/run-sql.mjs prisma/seed.sql`
 import {readFileSync} from 'node:fs';
 import pg from 'pg';
 

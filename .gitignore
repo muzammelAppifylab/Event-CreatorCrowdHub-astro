@@ -11,7 +11,10 @@ src/generated
 
 # Live platform docs fetched by `npm run platform -- docs`.
 .platform/
-.env
+
+# Local only: editor and agent settings, logs and dev sign-in notes.
+.claude/
+.vscode/
 dev.log
 DEV-LOGIN.local.txt
 .e2e-credentials.txt

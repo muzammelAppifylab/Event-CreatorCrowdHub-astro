@@ -408,8 +408,12 @@
 
 .app-page {
   display: grid;
+  /* minmax(0, 1fr), not auto: a wide table must scroll inside its card, not push the page (and its
+     header action) past the clipped edge of .app-main at laptop and tablet widths. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
   align-content: start;
+  min-width: 0;
 }
 
 .page-header {
@@ -1361,9 +1365,60 @@
   }
 }
 
+/* The paging footer inside a list's card (LoadMore): what is loaded, then the button. */
 .load-more {
   display: flex;
-  justify-content: center;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklab, var(--surface-muted) 50%, transparent);
+  font-size: 0.85rem;
+}
+
+.load-more:last-child {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.load-more-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--ink);
+}
+
+.load-more-status:focus {
+  outline: none;
+}
+
+.load-more-status:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.load-more-status > svg {
+  color: var(--success);
+  flex: none;
+}
+
+.load-more-error {
+  flex: 1 1 14rem;
+  margin: 0;
+  color: var(--danger);
+}
+
+@media (max-width: 560px) {
+  .load-more {
+    padding: 0.75rem 1rem;
+  }
+
+  .load-more .button {
+    flex: 1 1 100%;
+  }
 }
 
 /* ------------------------------------------------------------ forms -- */
@@ -1683,7 +1738,9 @@
 
 .tabs {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.25rem;
+  min-width: 0;
 }
 
 .tab-list {
@@ -2578,13 +2635,13 @@
 
 .app-body .button.button-danger,
 .app-body .button.danger {
-  background: var(--destructive);
+  background: var(--destructive-fill);
   color: var(--destructive-foreground);
 }
 
 .app-body .button.button-danger:hover,
 .app-body .button.danger:hover {
-  background: color-mix(in oklab, var(--destructive) 85%, transparent);
+  background: color-mix(in oklab, var(--destructive-fill) 85%, var(--ink-1000));
 }
 
 .app-body .button.button-xs {
@@ -3355,6 +3412,22 @@
 @media (min-width: 721px) {
   .data-table td {
     white-space: nowrap;
+  }
+
+  /* The first column is the row's name: it wraps (a long title, a long slug) instead of
+     pushing the other columns past the card's edge. */
+  .data-table td:first-child {
+    min-width: 12rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Tablet and small laptop (and a desktop with the sidebar open): the secondary columns a
+   table marks `hideOnMobile` go too, so the table fits its card without scrolling sideways. */
+@media (min-width: 721px) and (max-width: 1180px) {
+  .data-table .cell-hide-mobile {
+    display: none;
   }
 }
 
@@ -4964,6 +5037,7 @@ html {
 .hub-stack,
 .screen-event-hub .tab-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-content: start;
 }
@@ -5165,7 +5239,40 @@ html {
 
 /* Editor head: back link above, title with its status, save actions at the top right. */
 .screen-event-editor .editor-crumb {
-  margin: 0 0 0.25rem -0.5rem;
+  margin: 0 0 0.5rem -0.5rem;
+}
+
+.screen-event-editor .editor-crumb .button {
+  color: var(--muted-foreground);
+  font-size: var(--fs-body-sm);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.screen-event-editor .editor-crumb .button:hover:not(:disabled) {
+  color: var(--foreground);
+}
+
+/* The title block takes the room the buttons leave, so the description doesn't wrap early. */
+.screen-event-editor .page-header {
+  align-items: center;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.screen-event-editor .page-header-text {
+  flex: 1 1 22rem;
+  min-width: 0;
+}
+
+.screen-event-editor .page-header h2 {
+  font-size: clamp(1.5rem, 1.2rem + 0.9vw, 1.875rem);
+  letter-spacing: -0.01em;
+}
+
+.screen-event-editor .page-header p {
+  margin-top: 0.375rem;
+  max-width: 60ch;
 }
 
 .screen-event-editor .editor-title-row {
@@ -5214,4 +5321,10 @@ html {
 
 .app-page.screen-event-editor .editor-nav {
   box-shadow: 0 -1.5rem 0 0 var(--background);
+}
+
+/* A QR code (src/portal/qr.tsx) stays dark-on-white in both themes, or phones can't read it. */
+.qr-code {
+  background: var(--paper);
+  border-radius: var(--r-sm, 8px);
 }

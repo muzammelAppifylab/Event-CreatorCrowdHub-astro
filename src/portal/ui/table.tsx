@@ -1,4 +1,4 @@
-import {type ReactNode, useEffect} from 'react';
+import {type ReactNode, useEffect, useRef} from 'react';
 import {createPortal} from 'react-dom';
 
 import {Button} from './button';
@@ -111,21 +111,116 @@ const cellClass = <Row,>(column: Column<Row>) =>
     .filter(Boolean)
     .join(' ') || undefined;
 
+/** What `LoadMore` reads from a `useInfiniteQuery` result (pass the whole result). */
+export type PagedQuery = {
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  isPending?: boolean;
+  isFetchNextPageError?: boolean;
+  error?: Error | null;
+  data?: {pages: unknown[]};
+  fetchNextPage: () => unknown;
+  refetch?: () => unknown;
+};
+
+/** Pages loaded by scrolling alone; after that, only the button (lists stay small: performance.md). */
+const AUTO_PAGES = 6;
+
 /**
- * "Load more" under a keyset-paged list (`useInfiniteQuery`). Shows nothing
- * on the last page. Never page numbers: the lists are keyset-paged.
+ * THE paging footer of a keyset-paged list (`useInfiniteQuery`). Put it INSIDE the list's
+ * `Card`, right after the `DataTable`. It says what is loaded ("Showing 50 events · more to
+ * load"), has a secondary "Load more" button (pending "Loading…", disabled while it runs),
+ * says "That's everything" on the last page, and shows a failed page in words with "Try again".
+ *
+ * `count`: rows loaded so far (never a `count()` query: there is no total). `noun`:
+ * `['event', 'events']`. `auto` (default on): the next page loads when the footer is scrolled
+ * into view, for the first few pages; the button stays for keyboards and screen readers.
+ * Never page numbers: the lists are keyset-paged.
  */
 export function LoadMore({
   query,
+  count,
+  noun = ['item', 'items'],
+  auto = true,
 }: {
-  query: {hasNextPage: boolean; isFetchingNextPage: boolean; fetchNextPage: () => unknown};
+  query: PagedQuery;
+  count: number | undefined;
+  noun?: [singular: string, plural: string];
+  auto?: boolean;
 }) {
-  if (!query.hasNextPage) return null;
+  const footer = useRef<HTMLDivElement>(null);
+  const status = useRef<HTMLParagraphElement>(null);
+  const hadFocus = useRef(false);
+  const {hasNextPage, isFetchingNextPage, fetchNextPage} = query;
+  const failed = Boolean(query.error) && !isFetchingNextPage && Boolean(count);
+  const pages = query.data?.pages.length ?? 0;
+  const autoOn = auto && hasNextPage && !failed && !isFetchingNextPage && pages < AUTO_PAGES;
+
+  // Scrolling the footer into view loads the next page. The observer's first report (the
+  // footer's state on mount or after a page lands) is skipped, so a short list never loads
+  // page after page on its own: only a scroll that brings the footer into view does.
+  useEffect(() => {
+    const node = footer.current;
+    if (!autoOn || !node || typeof IntersectionObserver === 'undefined') return;
+    let first = true;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (first) {
+          first = false;
+          return;
+        }
+        if (entries.some(entry => entry.isIntersecting)) void fetchNextPage();
+      },
+      {rootMargin: '0px 0px 160px 0px'}
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [autoOn, fetchNextPage]);
+
+  // Keep focus where the person was: the button is disabled while it loads (the browser drops
+  // focus), and gone after the last page (focus moves to the status line). Never to the top.
+  useEffect(() => {
+    if (isFetchingNextPage || !hadFocus.current) return;
+    hadFocus.current = false;
+    const target = hasNextPage || failed ? footer.current?.querySelector('button') : status.current;
+    target?.focus({preventScroll: true});
+  }, [isFetchingNextPage, hasNextPage, failed]);
+
+  if (query.isPending || (!count && !hasNextPage)) return null;
+  const shown = count ?? 0;
+  const label = `${shown} ${shown === 1 ? noun[0] : noun[1]}`;
+  const load = () => {
+    hadFocus.current = Boolean(footer.current?.contains(document.activeElement));
+    void (hasNextPage || query.isFetchNextPageError || !query.refetch ? fetchNextPage() : query.refetch());
+  };
+
   return (
-    <div className="load-more">
-      <Button variant="secondary" pending={query.isFetchingNextPage} pendingLabel="Loading…" onClick={() => void query.fetchNextPage()}>
-        Load more
-      </Button>
+    <div className="load-more" ref={footer}>
+      <p className="load-more-status" ref={status} tabIndex={-1} aria-live="polite">
+        {hasNextPage ? (
+          <span>
+            Showing <strong>{label}</strong>
+            <span className="muted"> · more to load</span>
+          </span>
+        ) : (
+          <>
+            <Icon name="check-circle" size={16} />
+            <span>
+              That's everything <span className="muted">· {label}</span>
+            </span>
+          </>
+        )}
+      </p>
+      {failed && (
+        <p className="load-more-error" role="alert">
+          Couldn't load more: {query.error!.message}
+        </p>
+      )}
+      {(hasNextPage || failed) && (
+        <Button variant="secondary" size="sm" icon={failed ? 'refresh' : undefined} pending={isFetchingNextPage} pendingLabel="Loading…" onClick={load}>
+          {failed ? 'Try again' : 'Load more'}
+        </Button>
+      )}
     </div>
   );
 }

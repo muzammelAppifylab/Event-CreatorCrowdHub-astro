@@ -3,7 +3,8 @@
  * `components/shared/InvitePoster.tsx`. Dependency-free and browser-safe: the artwork itself is
  * `src/components/Poster.astro` + `src/styles/public.css` (classes `.poster*`).
  */
-import {POSTER_DESIGNS, POSTER_HEX, POSTER_PALETTES, type CoverStyle, type PosterDesign, type PosterPalette} from './event-schemas';
+import type {CoverStyle} from './event-schemas';
+import {POSTER_DESIGNS, POSTER_HEX, POSTER_PALETTES, type PosterDesign, type PosterPalette} from './poster-constants';
 
 export type {CoverStyle, PosterDesign, PosterPalette};
 export {POSTER_DESIGNS as posterDesigns, POSTER_PALETTES as posterPalettes};
@@ -144,7 +145,7 @@ export interface PosterEventInfo {
   venueName?: string | null;
 }
 
-/** "Sat 14 Nov · 7:00 PM" in the event's zone; "" when the date or zone is unusable. */
+/** "Sat 14 Nov · 19:00" in the event's zone (the 24-hour clock the guest pages use); "" when the date or zone is unusable. */
 export function posterDate(startAt: string | null | undefined, timeZone: string | null | undefined): string {
   if (!startAt || Number.isNaN(Date.parse(startAt))) return '';
   try {
@@ -153,12 +154,12 @@ export function posterDate(startAt: string | null | undefined, timeZone: string 
       weekday: 'short',
       day: 'numeric',
       month: 'short',
-      hour: 'numeric',
+      hour: '2-digit',
       minute: '2-digit',
-      hour12: true,
+      hourCycle: 'h23',
     }).formatToParts(new Date(startAt));
     const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? '';
-    const time = `${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`.trim();
+    const time = `${get('hour')}:${get('minute')}`;
     return `${get('weekday')} ${get('day')} ${get('month')} · ${time}`;
   } catch {
     return '';

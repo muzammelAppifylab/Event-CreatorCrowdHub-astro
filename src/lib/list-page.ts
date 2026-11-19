@@ -19,7 +19,7 @@ import {siteFetch} from '../platform/browser';
  */
 export interface ListPageOptions<Body, Item> {
   root: HTMLElement;
-  /** The JSON route (`/site-api/jobs`). */
+  /** The JSON route (e.g. `/site-api/events`). */
   endpoint: string;
   items: (body: Body) => Item[];
   /** The cursor of the next page, or null on the last one. */

@@ -5,6 +5,7 @@ import {audit} from '../../platform/auth';
 import {PERMISSIONS} from '../permissions';
 import {attemptDelivery, envelope, isWebhookEvent, newSecret, webhookUrlProblem, WEBHOOK_EVENTS, type WebhookEventName} from '../webhook-delivery';
 import {eventsOf, MAX_ENDPOINTS} from '../webhooks';
+import {isUuid, notFound} from '../validate';
 
 /**
  * Outbound webhooks, admin side (ported from CreatorCrowdHub `team.ts`). Holders of `site:event:integrations` (owner only by default).
@@ -16,10 +17,9 @@ import {eventsOf, MAX_ENDPOINTS} from '../webhooks';
  *   DELETE /webhook-endpoints/:id
  *   POST   /webhook-endpoints/:id/test   one signed `webhook.test` POST, answered at once, no retries
  *
- * Schema note: `webhook_endpoints` has only url, secret, events, active (no name, no created_at).
+ * Schema note: these routes read and write url, secret, events and active only; the delivery worker owns lastStatus/lastDeliveryAt.
  */
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const select = {id: true, url: true, secret: true, events: true, active: true} as const;
 type Row = {id: string; url: string; secret: string; events: unknown; active: boolean};
@@ -82,31 +82,31 @@ export const adminWebhookRoutes = new Hono()
 
   .patch('/:id', async c => {
     const id = c.req.param('id');
-    if (!UUID.test(id)) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    if (!isUuid(id)) return notFound(c, 'Webhook');
     const parsed = parseEndpointInput(await body(c), true);
     if ('message' in parsed) return c.json(invalid(parsed.field, parsed.message), 422);
     if (Object.keys(parsed).length === 0) return c.json(invalid('url', 'Nothing to change.'), 422);
     const res = await c.var.db.webhookEndpoint.updateMany({where: {id}, data: parsed});
-    if (res.count === 0) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    if (res.count === 0) return notFound(c, 'Webhook');
     await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_updated', target: ['webhook', id], meta: {fields: Object.keys(parsed)}});
     const row = await c.var.db.webhookEndpoint.findUnique({where: {id}, select});
-    return row ? c.json({endpoint: toEndpoint(row)}) : c.json(problem('not_found', 'Webhook not found.'), 404);
+    return row ? c.json({endpoint: toEndpoint(row)}) : notFound(c, 'Webhook');
   })
 
   .delete('/:id', async c => {
     const id = c.req.param('id');
-    if (!UUID.test(id)) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    if (!isUuid(id)) return notFound(c, 'Webhook');
     const res = await c.var.db.webhookEndpoint.deleteMany({where: {id}});
-    if (res.count === 0) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    if (res.count === 0) return notFound(c, 'Webhook');
     await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_deleted', target: ['webhook', id]});
     return c.body(null, 204);
   })
 
   .post('/:id/test', async c => {
     const id = c.req.param('id');
-    if (!UUID.test(id)) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    if (!isUuid(id)) return notFound(c, 'Webhook');
     const endpoint = await c.var.db.webhookEndpoint.findUnique({where: {id}, select: {url: true, secret: true}});
-    if (!endpoint) return c.json(problem('not_found', 'Webhook not found.'), 404);
+    if (!endpoint) return notFound(c, 'Webhook');
     const {id: deliveryId, body: payload} = envelope('webhook.test', {message: 'Test event from Ezy Events. Your endpoint is connected.'});
     const r = await attemptDelivery(endpoint, 'webhook.test', deliveryId, payload);
     await audit(c.var.db, {actorUserId: c.var.viewer.id, action: 'webhook_tested', target: ['webhook', id], meta: {ok: r.ok}});

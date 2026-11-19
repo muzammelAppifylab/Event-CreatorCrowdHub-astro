@@ -6,6 +6,7 @@ const queued: Array<{kind: string; rsvpId: string; stamp?: string}> = [];
 vi.mock('../src/server/jobs/guest-emails', () => ({
   GUEST_EMAIL_LIST: 'rsvp-emails',
   queueGuestEmail: async (kind: string, rsvpId: string, stamp?: string) => void queued.push({kind, rsvpId, stamp}),
+  queueGuestEmails: async (items: Array<{kind: string; rsvpId: string; stamp?: string}>) => void queued.push(...items.map(({kind, rsvpId, stamp}) => ({kind, rsvpId, stamp}))),
   sendGuestEmail: vi.fn(),
 }));
 

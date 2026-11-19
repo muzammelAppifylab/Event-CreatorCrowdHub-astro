@@ -1,22 +1,24 @@
 import {Hono} from 'hono';
 
 import type {PollType} from '../../domain/polls';
-import type {PrismaClient} from '../../generated/prisma/client';
+import type {Prisma, PrismaClient} from '../../generated/prisma/client';
 import {audit} from '../../platform/auth/audit';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
-import {attachmentHeader, type CsvValue, toCsv} from '../csv';
+import {attachmentHeader, csvExport, type CsvValue, toCsv} from '../csv';
 import {PERMISSIONS} from '../permissions';
 import {nextSortOrder, validateOrder} from '../sort-order';
-import {emitWebhook, pollClosedPayload} from '../webhook-emit';
+import {isUuid, notFound} from '../validate';
+import {emitWebhook, emitWebhooks, pollClosedPayload} from '../webhook-emit';
 import {
   invalidateResults,
-  isUuid,
   normalizeJoinCode,
-  optionsOf,
   orderedUuid,
+  type PollScope,
   pollSelect,
   type PollRow,
-  resultsFor,
+  type ResultsDto,
+  aggregateRows,
+  resultsFromRows,
 } from './polls-public';
 
 /**
@@ -31,15 +33,24 @@ import {
  *   POST   /polls/:pollId/open            open it (closes the event's other open poll)
  *   POST   /polls/:pollId/close           close it
  *   GET    /polls/:pollId/results         its results
- *   GET    /polls/:pollId/results.csv     its votes as CSV (10,000 rows at most; audited)
+ *   GET    /polls/:pollId/results.csv     its votes as CSV (read page by page, 20,000 rows at most; audited)
  *   GET    /polls/event/:eventId/results.csv  all the event's polls as one CSV (same cap; audited)
  *
- * Order (polls and options) is carried by their ids (`orderedUuid`): the schema has no sort column.
+ * Order (polls and options) is the organiser-controlled `sortOrder` (ties broken by id, `orderedUuid`).
  * One open poll per event is enforced by the partial unique index `polls_one_open_per_event_uq`.
+ * A poll of a soft-deleted event is not found (404) on every route: the single-poll reads carry
+ * `event: {deletedAt: null}` in their own where (same statement, no extra round trip).
  */
 
+/**
+ * Vote rows per page of a CSV export (audit M-22): votes are read page by page with a keyset on
+ * (created_at, id) per poll (index poll_votes_poll_created_idx) and turned into text one page at a
+ * time (`csvExport`), all before the route answers, so the request's database client is never used
+ * by a response body after the handler returned.
+ */
+export const POLL_EXPORT_PAGE = 1000;
 /** Most vote rows one CSV export holds; `X-Export-Truncated: 1` says when it was cut. */
-export const POLL_EXPORT_MAX_ROWS = 10_000;
+export const POLL_EXPORT_MAX_ROWS = 20_000;
 
 export type ExportVote = {
   optionIds: unknown;
@@ -74,13 +85,86 @@ export function eventVotesCsv(
   votes: (ExportVote & {pollId: string})[]
 ): string {
   const rows: CsvValue[][] = [['Poll', 'Answer', 'Submitted at (UTC)', 'Guest email']];
+  // Grouped once (not a filter per poll): 100 polls x 10,000 votes stays linear.
+  const byPoll = new Map<string, (ExportVote & {pollId: string})[]>();
+  for (const v of votes) {
+    const list = byPoll.get(v.pollId);
+    if (list) list.push(v);
+    else byPoll.set(v.pollId, [v]);
+  }
   for (const poll of polls) {
-    for (const v of votes.filter(x => x.pollId === poll.id)) {
+    for (const v of byPoll.get(poll.id) ?? []) {
       rows.push([poll.question, voteAnswer(poll.type, labels, v), (v.updatedAt ?? v.createdAt).toISOString(), poll.anonymous ? '' : (v.email ?? '')]);
     }
   }
   return toCsv(rows);
 }
+
+type ExportPoll = {id: string; question: string; type: PollType; anonymous: boolean};
+type PageVote = ExportVote & {id: string};
+
+/**
+ * One poll's votes in pages of `POLL_EXPORT_PAGE`, oldest first, keyset (created_at, id): every page is
+ * one indexed query, however deep. The guest's email is read only for a NON-anonymous poll. At most
+ * `limit` votes in all.
+ */
+export async function* votePages(db: Db, poll: ExportPoll, pageSize = POLL_EXPORT_PAGE, limit = Infinity): AsyncGenerator<PageVote[]> {
+  // The keyset is Prisma's `cursor` (the last row's id, skipped): the database compares (created_at, id)
+  // itself. A JS Date keeps only milliseconds while created_at has microseconds, so a hand-written
+  // `createdAt > last.createdAt` re-sent rows at every page edge (and looped forever on a bulk insert).
+  let after: string | null = null;
+  let read = 0;
+  while (read < limit) {
+    const take = Math.min(pageSize, limit - read);
+    const rows = await db.pollVote.findMany({
+      where: {pollId: poll.id},
+      ...(after ? {cursor: {id: after}, skip: 1} : {}),
+      orderBy: [{createdAt: 'asc'}, {id: 'asc'}],
+      take,
+      select: {
+        id: true,
+        optionIds: true,
+        ratingValue: true,
+        textValue: true,
+        createdAt: true,
+        updatedAt: true,
+        ...(poll.anonymous ? {} : {rsvp: {select: {email: true}}}),
+      },
+    });
+    const page = rows.map(v => ({...v, email: (v as {rsvp?: {email: string} | null}).rsvp?.email ?? null}));
+    read += rows.length;
+    if (page.length) yield page;
+    if (rows.length < take) return;
+    const lastId: string = rows[rows.length - 1]!.id;
+    after = lastId;
+  }
+}
+
+/**
+ * CSV rows for every poll in builder order, page by page (`emailColumn`: the event sheet always has the
+ * column). Reads at most `POLL_EXPORT_MAX_ROWS + 1` votes in all: the extra one tells `csvExport` it was cut.
+ */
+async function* exportRows(db: Db, polls: ExportPoll[], labels: Map<string, string>, emailColumn: boolean): AsyncGenerator<CsvValue[][]> {
+  let left = POLL_EXPORT_MAX_ROWS + 1;
+  for (const poll of polls) {
+    if (left <= 0) return;
+    for await (const page of votePages(db, poll, POLL_EXPORT_PAGE, left)) {
+      left -= page.length;
+      yield page.map((v): CsvValue[] => {
+        const row: CsvValue[] = [poll.question, voteAnswer(poll.type, labels, v), (v.updatedAt ?? v.createdAt).toISOString()];
+        if (emailColumn) row.push(poll.anonymous ? '' : (v.email ?? ''));
+        return row;
+      });
+    }
+  }
+}
+
+const csvHeaders = (name: string, truncated: boolean) => ({
+  'Content-Type': 'text/csv; charset=utf-8',
+  'Content-Disposition': attachmentHeader(name),
+  'Cache-Control': 'private, no-store',
+  'X-Export-Truncated': truncated ? '1' : '0',
+});
 
 export const POLL_MIN_OPTIONS = 2;
 export const POLL_MAX_OPTIONS = 10;
@@ -135,90 +219,112 @@ const eventRef = (e: EventRef) => ({
 
 type Db = PrismaClient;
 
-async function adminPolls(db: Db, rows: PollRow[]) {
-  const options = await optionsOf(
-    db,
-    rows.map(p => p.id)
-  );
-  return Promise.all(
-    rows.map(async p => ({
-      id: p.id,
-      eventId: p.eventId,
-      question: p.question,
-      type: p.type,
-      status: p.status,
-      anonymous: p.anonymous,
-      showResultsToVoters: p.showResultsToVoters,
-      openedAt: p.openedAt?.toISOString() ?? null,
-      closedAt: p.closedAt?.toISOString() ?? null,
-      options: options.filter(o => o.pollId === p.id).map(o => ({id: o.id, label: o.label})),
-      sortOrder: p.sortOrder ?? 0,
-      results: p.status === 'draft' ? null : await resultsFor(db, p),
-    }))
-  );
+const POLL_LIST_LIMIT = 200;
+const pollOrder = [{sortOrder: 'asc' as const}, {id: 'asc' as const}];
+const optionsSelect = {select: {id: true, label: true, sortOrder: true}, orderBy: pollOrder};
+/** A poll with its options in ONE query: `relationJoins` makes it a join, never a query per poll. */
+const withOptions = {...pollSelect, pollOptions: optionsSelect} as const;
+
+type OptionRow = {id: string; label: string; sortOrder: number};
+type AdminPollRow = PollRow & {pollOptions?: OptionRow[]};
+
+const labelsOf = (polls: AdminPollRow[]) => new Map(polls.flatMap(p => (p.pollOptions ?? []).map(o => [o.id, o.label] as const)));
+
+/**
+ * Results are COUNTED BY THE DATABASE (`aggregateRows`: one GROUP BY statement for every poll in a
+ * scope, run beside the poll list), never rebuilt from every vote row (audit M-28).
+ */
+const resultsOf = (polls: AdminPollRow[], rows: Awaited<ReturnType<typeof aggregateRows>>) =>
+  resultsFromRows(polls.map(p => ({id: p.id, type: p.type, options: p.pollOptions ?? []})), rows);
+
+function adminPoll(p: AdminPollRow, results: Map<string, ResultsDto> = new Map()) {
+  return {
+    id: p.id,
+    eventId: p.eventId,
+    question: p.question,
+    type: p.type,
+    status: p.status,
+    anonymous: p.anonymous,
+    showResultsToVoters: p.showResultsToVoters,
+    openedAt: p.openedAt?.toISOString() ?? null,
+    closedAt: p.closedAt?.toISOString() ?? null,
+    options: (p.pollOptions ?? []).map(o => ({id: o.id, label: o.label})),
+    sortOrder: p.sortOrder ?? 0,
+    results: p.status === 'draft' ? null : (results.get(p.id) ?? null),
+  };
 }
 
-async function listFor(db: Db, event: EventRef) {
-  const rows = (await db.poll.findMany({where: {eventId: event.id}, select: pollSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}], take: 200})) as PollRow[];
-  return {event: eventRef(event), polls: await adminPolls(db, rows)};
+/** The polls and their options in one query (run beside the event lookup and the results aggregate). */
+const listPolls = (db: Db, where: Prisma.PollWhereInput) =>
+  db.poll.findMany({where, select: withOptions, orderBy: pollOrder, take: POLL_LIST_LIMIT}) as Promise<AdminPollRow[]>;
+
+/**
+ * The list with its results: the event, the polls and every count in ONE round trip (three queries
+ * side by side; the aggregate finds the polls through `scope` itself, so it doesn't wait for the list).
+ */
+async function pollList(db: Db, event: Promise<EventRef | null>, where: Prisma.PollWhereInput, scope: PollScope) {
+  const [found, rows, counts] = await Promise.all([event, listPolls(db, where), aggregateRows(db, scope)]);
+  if (!found) return null;
+  const results = resultsOf(rows, counts);
+  return {event: eventRef(found), polls: rows.map(p => adminPoll(p, results))};
 }
 
 export const adminPollRoutes = new Hono()
   .get('/event/:eventId', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const id = c.req.param('eventId');
-    const event = isUuid(id) ? await c.var.db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}) : null;
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
+    if (!isUuid(id)) return notFound(c, 'Event');
+    const list = await pollList(c.var.db, c.var.db.event.findFirst({where: {id, deletedAt: null}, select: eventSelect}), {eventId: id}, {eventId: id});
+    if (!list) return notFound(c, 'Event');
     c.header('Cache-Control', 'private, no-store');
-    return c.json(await listFor(c.var.db, event));
+    return c.json(list);
   })
 
   .get('/event/:eventId/results.csv', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('eventId');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}) : null;
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
-    const polls = (await db.poll.findMany({where: {eventId: event.id}, select: pollSelect, orderBy: [{sortOrder: 'asc'}, {id: 'asc'}], take: 200})) as PollRow[];
-    const [options, fetched] = await Promise.all([
-      optionsOf(db, polls.map(p => p.id)),
-      db.pollVote.findMany({
-        where: {pollId: {in: polls.map(p => p.id)}},
-        orderBy: {createdAt: 'asc'},
-        take: POLL_EXPORT_MAX_ROWS + 1,
-        select: {pollId: true, optionIds: true, ratingValue: true, textValue: true, createdAt: true, updatedAt: true, rsvp: {select: {email: true}}},
-      }),
+    if (!isUuid(id)) return notFound(c, 'Event');
+    // The event and its polls with their options: one trip. The votes follow page by page, before the answer.
+    const [event, polls] = await Promise.all([
+      db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}),
+      db.poll.findMany({where: {eventId: id}, select: withOptions, orderBy: pollOrder, take: POLL_LIST_LIMIT}) as Promise<AdminPollRow[]>,
     ]);
-    const truncated = fetched.length > POLL_EXPORT_MAX_ROWS;
-    const votes = (truncated ? fetched.slice(0, POLL_EXPORT_MAX_ROWS) : fetched).map(v => ({...v, email: v.rsvp?.email ?? null}));
-    const csv = eventVotesCsv(polls, new Map(options.map(o => [o.id, o.label])), votes);
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_results_exported', target: ['event', event.id], meta: {polls: polls.length, rows: votes.length, truncated}});
-    c.header('Cache-Control', 'private, no-store');
-    return c.body(csv, 200, {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': attachmentHeader(`poll-votes-${event.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`),
-      'Cache-Control': 'private, no-store',
-      'X-Export-Truncated': truncated ? '1' : '0',
-    });
+    if (!event) return notFound(c, 'Event');
+    const {csv, rows, truncated} = await csvExport(['Poll', 'Answer', 'Submitted at (UTC)', 'Guest email'], exportRows(db, polls, labelsOf(polls), true), POLL_EXPORT_MAX_ROWS);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_results_exported', target: ['event', event.id], meta: {polls: polls.length, rows, truncated}});
+    return c.body(csv, 200, csvHeaders(`poll-votes-${event.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`, truncated));
   })
 
   .get('/by-code/:code', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const code = normalizeJoinCode(c.req.param('code'));
-    const event = code ? await c.var.db.event.findFirst({where: {pollJoinCode: code, deletedAt: null}, select: eventSelect}) : null;
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
+    if (!code) return notFound(c, 'Event');
+    const list = await pollList(
+      c.var.db,
+      c.var.db.event.findFirst({where: {pollJoinCode: code, deletedAt: null}, select: eventSelect}),
+      {event: {pollJoinCode: code, deletedAt: null}},
+      {joinCode: code}
+    );
+    if (!list) return notFound(c, 'Event');
     c.header('Cache-Control', 'private, no-store');
-    return c.json(await listFor(c.var.db, event));
+    return c.json(list);
   })
 
   .post('/event/:eventId', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('eventId');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}) : null;
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
-    const input = parsePollInput(await c.req.json().catch(() => null));
+    if (!isUuid(id)) return notFound(c, 'Event');
+    const body = await c.req.json().catch(() => null);
+    // The event, the poll count and the last position: independent reads, one trip.
+    const [event, count, last] = await Promise.all([
+      db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}),
+      db.poll.count({where: {eventId: id}}),
+      db.poll.aggregate({where: {eventId: id}, _max: {sortOrder: true}}),
+    ]);
+    if (!event) return notFound(c, 'Event');
+    const input = parsePollInput(body);
     if ('error' in input) return c.json(invalid(input), 422);
-    if ((await db.poll.count({where: {eventId: event.id}})) >= 100) {
+    if (count >= 100) {
       return c.json(problem('too_many_polls', 'An event can have at most 100 polls.'), 409);
     }
-    const last = await db.poll.aggregate({where: {eventId: event.id}, _max: {sortOrder: true}});
     const created = await db.poll.create({
       data: {
         id: orderedUuid(Date.now() / 1000),
@@ -230,51 +336,69 @@ export const adminPollRoutes = new Hono()
         showResultsToVoters: input.showResultsToVoters,
         pollOptions: {create: input.options.map((label, i) => ({id: orderedUuid(i), label, sortOrder: i}))},
       },
-      select: pollSelect,
+      // The new options come back in the same statement: no second read.
+      select: withOptions,
     });
-    return c.json({poll: (await adminPolls(db, [created as PollRow]))[0]}, 201);
+    return c.json({poll: adminPoll(created as AdminPollRow)}, 201);
   })
 
   .patch('/event/:eventId/order', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('eventId');
-    const event = isUuid(id) ? await db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}) : null;
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
+    if (!isUuid(id)) return notFound(c, 'Event');
     const body = (await c.req.json().catch(() => null)) as {ids?: unknown} | null;
-    const existing = await db.poll.findMany({where: {eventId: event.id}, select: {id: true}, take: 200});
+    const [event, existing] = await Promise.all([
+      db.event.findFirst({where: {id, deletedAt: null}, select: {id: true}}),
+      db.poll.findMany({where: {eventId: id}, select: {id: true}, take: POLL_LIST_LIMIT}),
+    ]);
+    if (!event) return notFound(c, 'Event');
     if (!validateOrder(body?.ids, existing.map(p => p.id))) {
       return c.json(invalid({error: 'Send every poll of this event exactly once.', field: 'ids'}), 422);
     }
     const ids = body!.ids as string[];
-    await db.$transaction(ids.map((pollId, sortOrder) => db.poll.updateMany({where: {id: pollId, eventId: event.id}, data: {sortOrder}})));
+    // ONE statement for the whole order (a bound uuid[] works on the live database since template 0.10.21);
+    // the event id in the WHERE keeps it to this event's polls.
+    await db.$executeRaw`
+      UPDATE polls AS p SET sort_order = (o.ord - 1)::int
+      FROM unnest(${ids}::uuid[]) WITH ORDINALITY AS o(id, ord)
+      WHERE p.id = o.id AND p.event_id = ${id}::uuid`;
     return c.json({ok: true});
   })
 
   .patch('/:pollId', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('pollId');
-    const poll = isUuid(id) ? await db.poll.findUnique({where: {id}, select: {id: true, status: true}}) : null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
+    const poll = isUuid(id) ? await db.poll.findUnique({where: {id, event: {deletedAt: null}}, select: {id: true, status: true}}) : null;
+    if (!poll) return notFound(c, 'Poll');
     if (poll.status !== 'draft') return c.json(problem('not_draft', 'Only draft polls can be edited. This one has already been opened.'), 409);
     const input = parsePollInput(await c.req.json().catch(() => null));
     if ('error' in input) return c.json(invalid(input), 422);
-    const updated = await db.$transaction(async tx => {
-      await tx.pollOption.deleteMany({where: {pollId: poll.id}});
-      await tx.pollOption.createMany({data: input.options.map((label, i) => ({id: orderedUuid(i), pollId: poll.id, label, sortOrder: i}))});
-      return tx.poll.update({
-        where: {id: poll.id},
-        data: {question: input.question, type: input.type, anonymous: input.anonymous, showResultsToVoters: input.showResultsToVoters},
-        select: pollSelect,
-      });
-    });
+    let updated: AdminPollRow;
+    try {
+      updated = (await db.$transaction(async tx => {
+        await tx.pollOption.deleteMany({where: {pollId: poll.id}});
+        await tx.pollOption.createMany({data: input.options.map((label, i) => ({id: orderedUuid(i), pollId: poll.id, label, sortOrder: i}))});
+        // Still a draft (opened meanwhile: P2025 rolls it all back); the new options come back in this statement.
+        return tx.poll.update({
+          where: {id: poll.id, status: 'draft'},
+          data: {question: input.question, type: input.type, anonymous: input.anonymous, showResultsToVoters: input.showResultsToVoters},
+          select: withOptions,
+        });
+      })) as AdminPollRow;
+    } catch (error) {
+      if ((error as {code?: unknown} | null)?.code === 'P2025') {
+        return c.json(problem('not_draft', 'Only draft polls can be edited. This one has already been opened.'), 409);
+      }
+      throw error;
+    }
     invalidateResults(poll.id);
-    return c.json({poll: (await adminPolls(db, [updated as PollRow]))[0]});
+    return c.json({poll: adminPoll(updated)});
   })
 
   .delete('/:pollId', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const id = c.req.param('pollId');
-    const poll = isUuid(id) ? await c.var.db.poll.findUnique({where: {id}, select: {id: true, status: true}}) : null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
+    const poll = isUuid(id) ? await c.var.db.poll.findUnique({where: {id, event: {deletedAt: null}}, select: {id: true, status: true}}) : null;
+    if (!poll) return notFound(c, 'Poll');
     if (poll.status !== 'draft') return c.json(problem('not_draft', 'Only draft polls can be deleted. This one has already been opened.'), 409);
     await c.var.db.poll.deleteMany({where: {id: poll.id, status: 'draft'}});
     invalidateResults(poll.id);
@@ -285,8 +409,8 @@ export const adminPollRoutes = new Hono()
   .post('/:pollId/open', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('pollId');
-    const poll = isUuid(id) ? await db.poll.findUnique({where: {id}, select: {id: true, eventId: true, status: true}}) : null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
+    const poll = isUuid(id) ? await db.poll.findUnique({where: {id, event: {deletedAt: null}}, select: {id: true, eventId: true, status: true}}) : null;
+    if (!poll) return notFound(c, 'Poll');
     if (poll.status !== 'open') {
       const now = new Date();
       try {
@@ -296,10 +420,9 @@ export const adminPollRoutes = new Hono()
           await tx.poll.update({where: {id: poll.id}, data: {status: 'open', openedAt: now, closedAt: null}});
           return others;
         });
-        for (const other of closed) {
-          invalidateResults(other.id);
-          emitWebhook(c, db, 'poll.closed', pollClosedPayload({id: other.id, eventId: poll.eventId}));
-        }
+        for (const other of closed) invalidateResults(other.id);
+        // One call for all of them (one job), never one per poll.
+        emitWebhooks(c, db, closed.map(other => ({event: 'poll.closed' as const, payload: pollClosedPayload({id: other.id, eventId: poll.eventId})})));
       } catch (error) {
         // Two presenters opened polls at the same instant; the partial unique index kept one.
         if (isUnique(error)) return c.json(problem('conflict', 'Another poll was opened at the same moment. Try again.'), 409);
@@ -314,8 +437,8 @@ export const adminPollRoutes = new Hono()
   .post('/:pollId/close', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('pollId');
-    const poll = isUuid(id) ? await db.poll.findUnique({where: {id}, select: {id: true, eventId: true, status: true}}) : null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
+    const poll = isUuid(id) ? await db.poll.findUnique({where: {id, event: {deletedAt: null}}, select: {id: true, eventId: true, status: true}}) : null;
+    if (!poll) return notFound(c, 'Poll');
     if (poll.status === 'draft') return c.json(problem('not_opened', "This poll hasn't been opened yet."), 409);
     if (poll.status === 'open') {
       const closed = await db.poll.updateMany({where: {id: poll.id, status: 'open'}, data: {status: 'closed', closedAt: new Date()}});
@@ -330,35 +453,25 @@ export const adminPollRoutes = new Hono()
 
   .get('/:pollId/results', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const id = c.req.param('pollId');
-    const poll = isUuid(id) ? ((await c.var.db.poll.findUnique({where: {id}, select: pollSelect})) as PollRow | null) : null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
+    if (!isUuid(id)) return notFound(c, 'Poll');
+    // The poll with its options, and its counts: side by side, one round trip.
+    const [poll, counts] = await Promise.all([
+      c.var.db.poll.findUnique({where: {id, event: {deletedAt: null}}, select: withOptions}) as Promise<AdminPollRow | null>,
+      aggregateRows(c.var.db, {pollIds: [id]}),
+    ]);
+    if (!poll) return notFound(c, 'Poll');
     c.header('Cache-Control', 'private, no-store');
-    return c.json(await resultsFor(c.var.db, poll));
+    return c.json(resultsOf([poll], counts).get(poll.id));
   })
 
   .get('/:pollId/results.csv', withViewer, requireAuth, requirePermission(PERMISSIONS.EVENT_MANAGE), withDb, async c => {
     const db = c.var.db;
     const id = c.req.param('pollId');
-    const poll = isUuid(id) ? ((await db.poll.findUnique({where: {id}, select: pollSelect})) as PollRow | null) : null;
-    if (!poll) return c.json(problem('not_found', 'Poll not found.'), 404);
-    const [options, fetched] = await Promise.all([
-      optionsOf(db, [poll.id]),
-      // One extra row shows the cap was hit without counting. Bounded; unique index (poll_id, voter_token).
-      db.pollVote.findMany({
-        where: {pollId: poll.id},
-        orderBy: {createdAt: 'asc'},
-        take: POLL_EXPORT_MAX_ROWS + 1,
-        select: {optionIds: true, ratingValue: true, textValue: true, createdAt: true, updatedAt: true, rsvp: {select: {email: true}}},
-      }),
-    ]);
-    const truncated = fetched.length > POLL_EXPORT_MAX_ROWS;
-    const votes = (truncated ? fetched.slice(0, POLL_EXPORT_MAX_ROWS) : fetched).map(v => ({...v, email: v.rsvp?.email ?? null}));
-    const csv = pollVotesCsv(poll, new Map(options.map(o => [o.id, o.label])), votes);
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_results_exported', target: ['poll', poll.id], meta: {rows: votes.length, truncated}});
-    return c.body(csv, 200, {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': attachmentHeader(`poll-votes-${poll.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`),
-      'Cache-Control': 'private, no-store',
-      'X-Export-Truncated': truncated ? '1' : '0',
-    });
+    if (!isUuid(id)) return notFound(c, 'Poll');
+    const poll = (await db.poll.findUnique({where: {id, event: {deletedAt: null}}, select: withOptions})) as AdminPollRow | null;
+    if (!poll) return notFound(c, 'Poll');
+    const header: CsvValue[] = ['Poll', 'Answer', 'Submitted at (UTC)', ...(poll.anonymous ? [] : ['Guest email'])];
+    const {csv, rows, truncated} = await csvExport(header, exportRows(db, [poll], labelsOf([poll]), !poll.anonymous), POLL_EXPORT_MAX_ROWS);
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'poll_results_exported', target: ['poll', poll.id], meta: {rows, truncated}});
+    return c.body(csv, 200, csvHeaders(`poll-votes-${poll.id.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.csv`, truncated));
   });

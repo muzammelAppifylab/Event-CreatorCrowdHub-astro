@@ -8,6 +8,7 @@ import {
   Checkbox,
   type Column,
   DataTable,
+  LoadMore,
   DefinitionList,
   Drawer,
   EmptyState,
@@ -53,6 +54,13 @@ const SAMPLE: Sample[] = [
   {id: 3, name: 'Ava Chen', email: 'ava@example.com', plan: 'Pro', status: 'overdue'},
 ];
 const STATUS_TONES = {active: 'success', trial: 'info', overdue: 'warning'} as const;
+
+/** Static stand-ins for a `useInfiniteQuery` result, so the gallery shows each footer state. */
+const noop = () => undefined;
+const PAGED_MORE = {hasNextPage: true, isFetchingNextPage: false, fetchNextPage: noop};
+const PAGED_LOADING = {hasNextPage: true, isFetchingNextPage: true, fetchNextPage: noop};
+const PAGED_DONE = {hasNextPage: false, isFetchingNextPage: false, fetchNextPage: noop};
+const PAGED_FAILED = {hasNextPage: true, isFetchingNextPage: false, isFetchNextPageError: true, error: new Error('The connection dropped.'), fetchNextPage: noop};
 
 export function Components() {
   const toast = useToast();
@@ -322,6 +330,12 @@ function DataDemo() {
       </div>
       <Card title="DataTable" description="Loading, empty and error built in; rows become cards on a phone." flush>
         <DataTable caption="Customers" columns={columns} rows={SAMPLE} rowKey={row => row.id} busyKey={2} />
+        <LoadMore query={PAGED_MORE} count={SAMPLE.length} noun={['customer', 'customers']} auto={false} />
+      </Card>
+      <Card title="LoadMore" description="The paging footer inside every keyset-paged list: more to load, everything loaded, a failed page." flush>
+        <LoadMore query={PAGED_LOADING} count={50} noun={['customer', 'customers']} auto={false} />
+        <LoadMore query={PAGED_DONE} count={73} noun={['customer', 'customers']} auto={false} />
+        <LoadMore query={PAGED_FAILED} count={50} noun={['customer', 'customers']} auto={false} />
       </Card>
       <div className="grid-2">
         <Card title="BarChart">

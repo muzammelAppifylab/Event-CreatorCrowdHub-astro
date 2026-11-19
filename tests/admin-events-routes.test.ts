@@ -91,7 +91,7 @@ beforeEach(() => {
       ]),
     },
     rsvpQuestion: {findMany: vi.fn(async () => []), deleteMany: vi.fn(), updateMany: vi.fn(), create: vi.fn()},
-    rsvp: {groupBy: vi.fn(async () => []), count: vi.fn(async () => 0)},
+    rsvp: {groupBy: vi.fn(async () => []), count: vi.fn(async () => 0), findFirst: vi.fn(async () => null)},
     ticketType: {
       findMany: vi.fn(async () => []),
       findFirst: vi.fn(async () => ({id: TICKET, eventId: ID, name: 'GA', priceCents: 0, currency: 'USD', quantity: null, salesEndAt: null})),
@@ -103,7 +103,10 @@ beforeEach(() => {
       update: vi.fn(),
       deleteMany: vi.fn(),
     },
-    $transaction: vi.fn(async () => []),
+    // An interactive transaction runs its callback on the same fake; a batch resolves to [].
+    $transaction: vi.fn(async (arg: unknown) => (typeof arg === 'function' ? (arg as (tx: unknown) => unknown)(state.db) : [])),
+    // lockEvent ignores the rows; the H-1 probe reads {held, paid}.
+    $queryRaw: vi.fn(async () => [{held: false, paid: false}]),
   };
 });
 
@@ -184,6 +187,21 @@ describe('/:id', () => {
     expect(calls.event.at(-1)!.deletedAt).toBeInstanceOf(Date);
   });
 
+  it('refuses unpublish and delete while guests hold places or orders are paid (H-1)', async () => {
+    vi.mocked(audit).mockClear();
+    const probe = state.db.$queryRaw as ReturnType<typeof vi.fn>;
+    stored = row({status: 'published'});
+    probe.mockResolvedValue([{held: true, paid: false}]);
+    const unpublish = await json(`/admin-events/${ID}/unpublish`, 'POST');
+    expect(unpublish.status).toBe(409);
+    expect(await unpublish.json()).toMatchObject({error: 'event_has_guests'});
+    stored = row();
+    probe.mockResolvedValue([{held: false, paid: true}]);
+    expect((await json(`/admin-events/${ID}`, 'DELETE')).status).toBe(409);
+    expect(calls.event.some(c => 'deletedAt' in c || c.status === 'draft')).toBe(false);
+    expect(audit).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'event_deleted'}));
+  });
+
   it('will not publish an event that already ended, or reopen a cancelled one', async () => {
     stored = row({endAt: new Date('2020-01-01T00:00:00Z'), startAt: new Date('2019-12-31T00:00:00Z')});
     expect((await json(`/admin-events/${ID}/publish`, 'POST')).status).toBe(409);
@@ -247,9 +265,10 @@ describe('ticket types', () => {
   });
 
   it('refuses to delete a ticket guests already chose', async () => {
-    (state.db.rsvp as {count: ReturnType<typeof vi.fn>}).count.mockResolvedValue(3);
+    (state.db.rsvp as {findFirst: ReturnType<typeof vi.fn>}).findFirst.mockResolvedValue({id: 'r1'});
     const res = await json(`/admin-events/${ID}/ticket-types/${TICKET}`, 'DELETE');
     expect(res.status).toBe(409);
+    expect((state.db.ticketType as {deleteMany: ReturnType<typeof vi.fn>}).deleteMany).not.toHaveBeenCalled();
   });
 });
 

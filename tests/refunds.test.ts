@@ -5,10 +5,11 @@ import {FakeDb} from './ticket-fake-db';
 vi.mock('../src/server/jobs/guest-emails', () => ({
   GUEST_EMAIL_LIST: 'rsvp-emails',
   queueGuestEmail: vi.fn(),
+  queueGuestEmails: vi.fn(),
   sendGuestEmail: vi.fn(),
 }));
 
-import {countRefundDue, listRefundDue, markRefunded, REFUNDS_PAGE_SIZE} from '../src/server/routes/admin-refunds';
+import {countRefundDue, listRefundDue, markRefunded, REFUNDS_COUNT_CAP, REFUNDS_PAGE_SIZE} from '../src/server/routes/admin-refunds';
 
 /** The fake db has no OR/AND, array orderBy or nested event: teach just those to its order table. */
 function setup() {
@@ -51,7 +52,7 @@ describe('refunds to finish', () => {
     expect(page.items[0]).toMatchObject({guestName: 'Grace Hopper', eventTitle: 'Summer Jam', amountCents: 4200, currency: 'USD'});
     expect(JSON.stringify(page)).not.toContain('@');
     expect(page.nextBefore).toBeNull();
-    expect(await countRefundDue(asDb(db))).toBe(1);
+    expect(await countRefundDue(asDb(db))).toEqual({count: 1, more: false});
   });
 
   it('filters by event', async () => {
@@ -60,7 +61,16 @@ describe('refunds to finish', () => {
     add(db, event.id);
     add(db, other.id);
     expect((await listRefundDue(asDb(db), {eventId: other.id})).items.map(i => i.eventTitle)).toEqual(['Other']);
-    expect(await countRefundDue(asDb(db), event.id)).toBe(1);
+    expect(await countRefundDue(asDb(db), event.id)).toEqual({count: 1, more: false});
+  });
+
+  it('caps the count instead of counting every row', async () => {
+    const {db, event} = setup();
+    for (let i = 0; i < REFUNDS_COUNT_CAP; i++) add(db, event.id);
+    expect(await countRefundDue(asDb(db))).toEqual({count: REFUNDS_COUNT_CAP, more: false});
+    add(db, event.id);
+    add(db, event.id);
+    expect(await countRefundDue(asDb(db))).toEqual({count: REFUNDS_COUNT_CAP, more: true});
   });
 
   it('pages by keyset without gaps or repeats', async () => {
@@ -85,7 +95,7 @@ describe('refunds to finish', () => {
     expect(db.ticketOrder.rows[0].status).toBe('refunded');
     expect(db.rsvp.rows.find(r => r.id === rsvp.id)?.status).toBe('cancelled');
     expect(await markRefunded(asDb(db), order.id)).toBe('already');
-    expect(await countRefundDue(asDb(db))).toBe(0);
+    expect(await countRefundDue(asDb(db))).toEqual({count: 0, more: false});
   });
 
   it('refuses unknown ids and orders not waiting for a refund', async () => {

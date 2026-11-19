@@ -5,12 +5,14 @@
  * a Google Calendar link; the join link and ticket code only when confirmed.
  */
 import { buildIcs, icsUid } from "@/domain/ics"
-import { calendarLink, eventFacts, firstName, joinUrlFor, mergeContextFor, venueLine } from "./context"
+import { calendarLink, eventFacts, firstName, joinUrlFor, mergeContextFor, venueLine, viewEventUrl } from "./context"
 import {
   badge,
   button,
   details,
   esc,
+  guestPrivacyLinks,
+  listUnsubscribeHeaders,
   muted,
   outlineButton,
   paragraph,
@@ -76,6 +78,7 @@ function compose(data: EmailData, c: Composed): EmailContent {
   if (c.secondary.length) blocks.push(`<div style="margin:8px 0 16px;">${c.secondary.map(([l, u]) => outlineButton(l, u)).join("")}</div>`)
   if (c.note) blocks.push(muted(esc(c.note)))
 
+  const privacy = guestPrivacyLinks(data.guest)
   const html = renderLayout({
     brand: data.brand,
     subject: c.subject,
@@ -84,6 +87,7 @@ function compose(data: EmailData, c: Composed): EmailContent {
     heading: c.heading,
     blocks,
     manageUrl: data.guest.manageUrl,
+    ...privacy,
   })
   const text = renderText({
     heading: c.heading,
@@ -92,12 +96,26 @@ function compose(data: EmailData, c: Composed): EmailContent {
     links: [...(c.primary ? [c.primary] : []), ...c.secondary],
     senderName: data.brand.senderName,
     manageUrl: data.guest.manageUrl,
+    ...privacy,
   })
-  return { subject: c.subject, html, text, ...(c.attachments?.length ? { attachments: c.attachments } : {}) }
+  const headers = listUnsubscribeHeaders(privacy.unsubscribeUrl)
+  return {
+    subject: c.subject,
+    html,
+    text,
+    ...(c.attachments?.length ? { attachments: c.attachments } : {}),
+    ...(headers ? { headers } : {}),
+  }
 }
 
 function plainIntro(...lines: string[]) {
   return { html: lines.map((l) => paragraph(esc(l))).join("\n"), text: lines }
+}
+
+/** "View event" only when there is an event page to open (never the home page of a private event). */
+function viewEventLink(event: EmailData["event"]): [string, string] | undefined {
+  const url = viewEventUrl(event)
+  return url ? ["View event", url] : undefined
 }
 
 /** M13: the marketing-consent confirmation link, only when the mailer set one. */
@@ -123,7 +141,7 @@ export function confirmationEmail(data: EmailData, custom?: CreatorCopy | null):
       heading: "You're on the waitlist",
       intro: plainIntro(`Hi ${name}, ${event.title} is full right now.${position}`, "We'll email you the moment a seat opens up."),
       facts: eventFacts(data),
-      primary: ["View event", event.pageUrl],
+      primary: viewEventLink(event),
       secondary: consentLinks(data),
     })
   }
@@ -161,7 +179,7 @@ export function confirmationEmail(data: EmailData, custom?: CreatorCopy | null):
     heading: isMaybe ? "You're a maybe" : "You're in",
     intro,
     facts: eventFacts(data, { ticket: true }),
-    primary: join ? ["Join the event", join] : ["View event", event.pageUrl],
+    primary: join ? ["Join the event", join] : viewEventLink(event),
     secondary,
     note: "The calendar file is attached. Show your ticket code at the door if there is one.",
     attachments: [icsAttachment(data)],
@@ -249,7 +267,7 @@ export function holdExpiredEmail(data: EmailData): EmailContent {
       "The seat has been released and you haven't been charged. If places are still available you can book again from the event page."
     ),
     facts: eventFacts(data),
-    primary: ["View event", event.pageUrl],
+    primary: viewEventLink(event),
     secondary: [],
   })
 }

@@ -2,9 +2,17 @@ import {useMutation, useQuery} from '@tanstack/react-query';
 import {Link, useParams} from '@tanstack/react-router';
 
 import {ApiError, call, type DoorGuest, type DoorEvent, type DoorToggle, doorTime, eventWhen, partyName} from '../checkin-queries';
-import {Badge, Button, buttonClass, Card, EmptyState, ErrorNote, PageHeader, useToast} from '../ui';
+import {Badge, Button, buttonClass, Card, EmptyState, ErrorNote, Notice, PageHeader, useToast} from '../ui';
 
 type ByCode = {event: DoorEvent; guest: DoorGuest};
+
+const STATUS_WORDS: Record<string, string> = {
+  pending: 'awaiting approval',
+  waitlisted: 'on the waitlist',
+  declined: 'not going',
+  cancelled: 'cancelled',
+  awaiting_payment: 'awaiting payment',
+};
 
 /** `/dashboard/checkin/code/$code`: what a ticket QR opens. Confirm the guest, then check them in. */
 export function CheckinCode() {
@@ -53,6 +61,8 @@ export function CheckinCode() {
 
   const {event, guest} = lookup.data;
   const checkedIn = guest.checkedInAt !== null;
+  // Only a confirmed guest can be checked in (the server answers 409 otherwise); an undo is always allowed.
+  const confirmed = guest.status === 'confirmed';
   return (
     <div className="app-page screen-checkin">
       <PageHeader
@@ -66,14 +76,21 @@ export function CheckinCode() {
       />
       <Card title={partyName(guest)} description={`Ticket ${guest.ticketCode}`}>
         <p>{checkedIn ? <Badge>Checked in {doorTime(guest.checkedInAt!, event.timezone)}</Badge> : <Badge>Not checked in</Badge>}</p>
-        <Button
-          size="lg"
-          variant={checkedIn ? 'secondary' : 'primary'}
-          pending={toggle.isPending}
-          pendingLabel={checkedIn ? 'Undoing…' : 'Checking in…'}
-          onClick={() => toggle.mutate(!checkedIn)}>
-          {checkedIn ? 'Undo check-in' : 'Check in'}
-        </Button>
+        {!checkedIn && !confirmed ? (
+          <Notice tone="warning" title="Not confirmed">
+            This guest is {STATUS_WORDS[guest.status] ?? guest.status.replace(/_/g, ' ')}, so they can't be checked in. Check the door list or ask
+            the host.
+          </Notice>
+        ) : (
+          <Button
+            size="lg"
+            variant={checkedIn ? 'secondary' : 'primary'}
+            pending={toggle.isPending}
+            pendingLabel={checkedIn ? 'Undoing…' : 'Checking in…'}
+            onClick={() => toggle.mutate(!checkedIn)}>
+            {checkedIn ? 'Undo check-in' : 'Check in'}
+          </Button>
+        )}
       </Card>
     </div>
   );

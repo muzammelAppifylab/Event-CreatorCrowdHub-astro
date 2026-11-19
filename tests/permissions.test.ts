@@ -1,3 +1,6 @@
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+
 import {describe, expect, it} from 'vitest';
 
 import {
@@ -26,6 +29,9 @@ describe('the permission catalogue', () => {
     expect(PERMISSIONS.EVENT_CHECKIN).toBe('site:event:checkin');
     expect(PERMISSIONS.EVENT_INTEGRATIONS).toBe('site:event:integrations');
     expect(CATALOGUE.EVENT_INTEGRATIONS.roles).toEqual([]);
+    expect(CATALOGUE.EVENT_MANAGE.roles).toEqual(['admin']);
+    // Admins may check guests in too; the door-staff role is granted by migration, not here.
+    expect(CATALOGUE.EVENT_CHECKIN.roles).toEqual(['admin']);
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
       ['checkinGuests', 'editRoles', 'manageEvents', 'manageIntegrations', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
     );
@@ -49,6 +55,15 @@ describe('the permission catalogue', () => {
     // The type is exact: a key nobody declared does not exist.
     // @ts-expect-error not in the catalogue
     void NO_ABILITIES.manageEverything;
+  });
+
+  it('ships the door-staff role under a slug the platform role API accepts', () => {
+    // src/platform/auth/admin.ts SLUG_RE: lowercase letters, digits and hyphens (no underscore).
+    const slugRe = /^[a-z][a-z0-9-]{1,47}$/;
+    const migration = readFileSync(resolve(__dirname, '../prisma/migrations/20261113160000_checkin_role_slug/migration.sql'), 'utf8');
+    expect(migration).toContain(`'checkin-staff'`);
+    expect(slugRe.test('checkin-staff')).toBe(true);
+    expect(slugRe.test('checkin_staff')).toBe(false);
   });
 
   it('refuses a malformed entry at load', () => {

@@ -40,10 +40,13 @@
   --subtle-foreground: var(--ink-500);
   --destructive: var(--ember-600);
   --destructive-foreground: var(--paper);
+  /* A filled danger button: white text on ember-600 is 5.4:1 in both themes (ember-500 is only 4.34:1). */
+  --destructive-fill: var(--ember-600);
 
   --border: var(--ink-200);
   --border-strong: var(--ink-1000);
-  --input: var(--ink-200);
+  /* Field outlines: at least 3:1 against the card (WCAG 1.4.11). ink-200 was 1.4:1. */
+  --input: #8f8f8f;
   --control-off: var(--ink-500);
   --ring: var(--primary-text);
 
@@ -138,7 +141,7 @@
 
   --border: color-mix(in oklab, var(--paper) 14%, transparent);
   --border-strong: var(--paper);
-  --input: color-mix(in oklab, var(--paper) 18%, transparent);
+  --input: color-mix(in oklab, var(--paper) 40%, transparent);
   --control-off: var(--ink-600);
 
   --rsvp-going-soft: color-mix(in oklab, var(--leaf-500) 18%, var(--ink-1000));
@@ -212,7 +215,7 @@
 
     --border: color-mix(in oklab, var(--paper) 14%, transparent);
     --border-strong: var(--paper);
-    --input: color-mix(in oklab, var(--paper) 18%, transparent);
+    --input: color-mix(in oklab, var(--paper) 40%, transparent);
     --control-off: var(--ink-600);
 
     --rsvp-going-soft: color-mix(in oklab, var(--leaf-500) 18%, var(--ink-1000));

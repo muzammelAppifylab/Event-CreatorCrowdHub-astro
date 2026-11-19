@@ -3,6 +3,8 @@
  * The guest's own page: confirmation AND manage (`/r/<token>`, the link in their email and where the
  * RSVP form sends them). The token is the credential: the page is never cached, never indexed and never
  * sent on as a Referer. A bad, rotated or expired token is a real 404 (indistinguishable on purpose).
+ * A valid token whose event the host unpublished or deleted is a 410 "no longer available" page with
+ * only the title and the guest's privacy links (Your data, Unsubscribe: audit M-23).
  * Look: the original app's ConfirmationPage (the mint "You're in" band for a confirmed Going guest,
  * a quiet banner for every other state) followed by its ManageRsvpPage (summary, event, edit, cancel).
  */
@@ -11,8 +13,9 @@ import {renderSVG} from 'uqr';
 import ErrorScreen from '../../components/ErrorScreen.astro';
 import GIcon from '../../components/GIcon.astro';
 import {responseLabel, statusBadge, statusCopy} from '../../components/rsvp/copy';
+import EventUnavailable from '../../components/rsvp/EventUnavailable.astro';
 import RsvpForm from '../../components/rsvp/RsvpForm.astro';
-import {rsvpRead} from '../../components/rsvp/server';
+import {rsvpReadOr410} from '../../components/rsvp/unavailable';
 import Base from '../../layouts/Base.astro';
 import {formatShortWhen, formatDay, formatRange, guestCopy, routeCopy} from '../../lib/guest-format';
 import type {AnswerValue, GuestRsvpView} from '../../lib/rsvp-types';
@@ -23,15 +26,17 @@ import {pageContext} from '../../server/page';
 const token = Astro.params.token ?? '';
 const [{site, viewer}, found] = await Promise.all([
   pageContext(Astro.request, Astro.response),
-  rsvpRead<GuestRsvpView>(Astro.request, `/manage/${encodeURIComponent(token)}`),
+  rsvpReadOr410<GuestRsvpView>(Astro.request, `/manage/${encodeURIComponent(token)}`),
 ]);
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 Astro.response.headers.set('X-Robots-Tag', 'noindex');
+// 410: a valid link whose event the host unpublished or deleted. Only its title, never the RSVP.
+const {unavailable} = found;
 const guest = found.data;
-const missing = !guest && found.status === 404;
+const missing = !guest && !unavailable && found.status === 404;
 if (!guest) {
-  Astro.response.status = missing ? 404 : 503;
-  if (!missing) Astro.response.headers.set('Retry-After', '60');
+  Astro.response.status = unavailable ? 410 : missing ? 404 : 503;
+  if (!unavailable && !missing) Astro.response.headers.set('Retry-After', '60');
 }
 const hostName = site?.name ?? 'The host';
 const ticket = guest?.event.ticketTypes.find(t => t.id === guest.rsvp.ticketTypeId);
@@ -44,6 +49,14 @@ const confirmed = !!guest && guest.rsvp.status === 'confirmed' && guest.rsvp.res
 const saved = Astro.url.searchParams.get('saved') === '1';
 const cancelledEvent = guest?.event.status === 'cancelled';
 const active = !!guest && guest.rsvp.status !== 'cancelled' && guest.rsvp.status !== 'declined' && !cancelledEvent;
+// Declined or cancelled: the same form re-opens this RSVP here (audit M-11). The event page's form
+// can't: the email already has an RSVP, so it would only email a link back to this page.
+const reopen = !!guest && !active && !cancelledEvent && guest.rsvp.canEdit && !guest.event.closed;
+// A private event's page answers 404 without an invite (audit L-1): the server then points pageUrl at this
+// page, and no link to the event page is shown.
+const publicPage = guest && guest.event.pageUrl.includes('/events/') ? `/events/${guest.event.slug}/` : null;
+// A waitlisted guest holds no seat: their cancel step says "leave the waitlist" (audit L-35).
+const onWaitlist = guest?.rsvp.status === 'waitlisted';
 const joinUrl = confirmed && guest && guest.event.format !== 'in_person' ? guest.event.joinUrl : null;
 const showTicket = confirmed && !!guest?.rsvp.ticketCode && guest.event.format !== 'online';
 const qr = guest && showTicket ? renderSVG(`${Astro.url.origin}/dashboard/checkin/code/${encodeURIComponent(guest.rsvp.ticketCode ?? '')}`, {border: 1}) : '';
@@ -148,8 +161,8 @@ const failed = routeCopy.loadFailed;
                   {guest.rsvp.status === 'awaiting_payment' && (
                     <p class="g-body-sm g-muted">If you closed the payment page, check your email or ask the host for a new link.</p>
                   )}
-                  {guest.rsvp.status === 'cancelled' && (
-                    <a class="g-btn g-btn-lg g-btn-outline" href={`/events/${guest.event.slug}/`}>Back to the event</a>
+                  {guest.rsvp.status === 'cancelled' && publicPage && (
+                    <a class="g-btn g-btn-lg g-btn-outline" href={publicPage}>Back to the event</a>
                   )}
                 </div>
               </section>
@@ -303,10 +316,12 @@ const failed = routeCopy.loadFailed;
                     {guestCopy.hero.hostedBy} <span class="g-strong-inherit g-fg">{hostName}</span>
                   </p>
                   <div class="g-btn-row-wrap">
-                    <a class="g-btn g-btn-outline g-btn-lg" href={`/events/${guest.event.slug}/`}>
-                      View event page
-                      <GIcon name="arrow-right" />
-                    </a>
+                    {publicPage && (
+                      <a class="g-btn g-btn-outline g-btn-lg" href={publicPage}>
+                        View event page
+                        <GIcon name="arrow-right" />
+                      </a>
+                    )}
                     {guest.event.mapUrl && inPerson && (
                       <a class="g-btn g-btn-ghost g-btn-lg" href={guest.event.mapUrl} rel="noopener noreferrer" target="_blank">
                         {guestCopy.location.openMap}
@@ -341,36 +356,70 @@ const failed = routeCopy.loadFailed;
                     </section>
 
                     <section class="g-section-rule" aria-labelledby="manage-cancel" data-cancel-root data-token={token}>
-                      <h2 id="manage-cancel" class="g-title-sm">Can't make it after all?</h2>
+                      <h2 id="manage-cancel" class="g-title-sm">{onWaitlist ? 'No longer want a spot?' : "Can't make it after all?"}</h2>
                       <p class="g-body-sm g-muted g-prose-max">
-                        This frees your {guest.rsvp.seats === 1 ? 'seat' : `${guest.rsvp.seats} seats`} for someone else, and the next person on the waitlist gets it. You can RSVP again later if spaces remain.
-                        {paid && ' For a refund on a paid ticket, contact the host.'}
+                        {onWaitlist ? (
+                          'Leaving the waitlist gives up your place in line. You can RSVP again later, but you join at the back.'
+                        ) : (
+                          <>
+                            This frees your {guest.rsvp.seats === 1 ? 'seat' : `${guest.rsvp.seats} seats`} for someone else, and the next person on the waitlist gets it. You can RSVP again later if spaces remain.
+                            {paid && ' For a refund on a paid ticket, contact the host.'}
+                          </>
+                        )}
                       </p>
-                      <button class="g-btn g-btn-outline g-btn-lg" type="button" data-cancel-open>Cancel my RSVP</button>
+                      <button class="g-btn g-btn-outline g-btn-lg" type="button" data-cancel-open>{onWaitlist ? 'Leave the waitlist' : 'Cancel my RSVP'}</button>
                       <div class="g-cancel-panel" data-cancel-confirm hidden>
-                        <h3 class="g-title-sm">Cancel your RSVP?</h3>
-                        <p class="g-body-sm g-muted">Your seat is released.</p>
+                        <h3 class="g-title-sm" tabindex="-1" data-cancel-heading>{onWaitlist ? 'Leave the waitlist?' : 'Cancel your RSVP?'}</h3>
+                        <p class="g-body-sm g-muted">{onWaitlist ? 'You lose your place in line.' : 'Your seat is released.'}</p>
                         <p class="g-notice g-notice-error" data-cancel-status hidden role="alert"></p>
                         <div class="g-btn-row">
-                          <button class="g-btn g-btn-lg g-btn-destructive" type="button" data-cancel-yes>Yes, cancel my RSVP</button>
-                          <button class="g-btn g-btn-lg g-btn-outline" type="button" data-cancel-no>Keep my RSVP</button>
+                          <button class="g-btn g-btn-lg g-btn-destructive" type="button" data-cancel-yes data-pending={onWaitlist ? 'Leaving…' : 'Cancelling…'}>{onWaitlist ? 'Yes, leave the waitlist' : 'Yes, cancel my RSVP'}</button>
+                          <button class="g-btn g-btn-lg g-btn-outline" type="button" data-cancel-no>{onWaitlist ? 'Stay on the waitlist' : 'Keep my RSVP'}</button>
                         </div>
                       </div>
                     </section>
                   </>
                 ) : guest.rsvp.canEdit && !cancelledEvent && active ? (
                   <p class="g-body-sm g-muted">RSVPs for this event have closed, so changes are no longer accepted here.</p>
-                ) : !active && !cancelledEvent ? (
-                  <a class="g-btn g-btn-lg g-fit" href={`/events/${guest.event.slug}/`}>
+                ) : reopen ? (
+                  <section class="g-section-rule" aria-labelledby="again-heading">
+                    <h2 id="again-heading" class="g-title-sm">RSVP again</h2>
+                    <p class="g-body-sm g-muted g-prose-max">Changed your mind? Send a new reply below. Seats go to whoever answers first.</p>
+                    <RsvpForm
+                      view={guest.event}
+                      mode="edit"
+                      token={token}
+                      hostName={hostName}
+                      values={{
+                        name: guest.rsvp.name,
+                        email: guest.rsvp.email,
+                        response: 'going',
+                        plusOnes: guest.rsvp.plusOnes,
+                        ticketTypeId: guest.rsvp.ticketTypeId,
+                        marketingConsent: guest.rsvp.marketingConsent,
+                        answers: guest.rsvp.answers,
+                      }}
+                    />
+                  </section>
+                ) : !active && !cancelledEvent && !guest.event.closed && publicPage ? (
+                  <a class="g-btn g-btn-lg g-fit" href={publicPage}>
                     RSVP again
                     <GIcon name="arrow-right" />
                   </a>
                 ) : null
               }
+              <nav class="g-section-rule g-btn-row-wrap g-body-sm" aria-label="Your data">
+                <a href={`/privacy/guest/${encodeURIComponent(token)}/`}>Your data</a>
+                <a href={`/privacy/unsubscribe/${encodeURIComponent(token)}/`}>Unsubscribe</a>
+              </nav>
             </div>
           </div>
         </div>
       </main>
+    </Base>
+  ) : unavailable ? (
+    <Base site={site} viewer={viewer} title="Event no longer available" noindex secretInUrl guest>
+      <EventUnavailable title={unavailable.event.title} privacyToken={token} />
     </Base>
   ) : missing ? (
     <Base site={site} viewer={viewer} title="Link not found" noindex guest>
@@ -400,7 +449,8 @@ const failed = routeCopy.loadFailed;
     open.addEventListener('click', () => {
       panel.hidden = false;
       open.hidden = true;
-      yes.focus();
+      // The question first, not the destructive button: an Enter press must not cancel by accident.
+      root.querySelector<HTMLElement>('[data-cancel-heading]')?.focus();
     });
     no.addEventListener('click', () => {
       panel.hidden = true;
@@ -413,7 +463,7 @@ const failed = routeCopy.loadFailed;
       yes.disabled = true;
       no.disabled = true;
       yes.setAttribute('aria-busy', 'true');
-      yes.textContent = 'Cancelling…';
+      yes.textContent = yes.dataset.pending ?? 'Cancelling…';
       status.hidden = true;
       try {
         const res = await siteFetch(`/site-api/rsvp/manage/${root.dataset.token}/cancel`, {method: 'POST'});

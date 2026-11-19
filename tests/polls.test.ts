@@ -1,7 +1,7 @@
 import {describe, expect, it, vi} from 'vitest';
 
 import {parsePollInput} from '../src/server/routes/admin-polls';
-import {invalidateResults, isUuid, normalizeJoinCode, orderedUuid, resultsFor} from '../src/server/routes/polls-public';
+import {invalidateResults, isUuid, normalizeJoinCode, orderedUuid, POLL_LIMITS, resultsFor, voteRefusal} from '../src/server/routes/polls-public';
 import {RATE_LIMITS} from '../src/platform/auth/rate-limit';
 
 describe('parsePollInput', () => {
@@ -54,11 +54,18 @@ describe('join codes and ids', () => {
   });
 });
 
-describe('vote rate limit', () => {
-  it('registers a per-IP policy for the vote kind', () => {
-    const policy = (RATE_LIMITS as Record<string, {ip?: {free: number; counts: string}}>)['vote'];
-    expect(policy?.ip?.free).toBeGreaterThan(100);
-    expect(policy?.ip?.counts).toBe('all');
+describe('vote rate limit (own table, no lock)', () => {
+  it('never adds kinds to the managed limiter', () => {
+    for (const kind of ['vote', 'vote_device', 'vote_new_device', 'poll_lookup']) expect((RATE_LIMITS as Record<string, unknown>)[kind]).toBeUndefined();
+  });
+  it('a room on one IP is allowed; new devices, the IP volume and a fast device are capped', () => {
+    const ok = {ip: 0, fresh: 0, device: 0};
+    expect(voteRefusal({...ok, ip: POLL_LIMITS.ipVotes.max - 1, fresh: POLL_LIMITS.newDevices.max - 1}, false)).toBeNull();
+    expect(voteRefusal({...ok, fresh: POLL_LIMITS.newDevices.max}, false)?.retryAfter).toBe(POLL_LIMITS.newDevices.retryAfter);
+    // A known device is not a new ballot: the new-device count doesn't stop it.
+    expect(voteRefusal({...ok, fresh: POLL_LIMITS.newDevices.max}, true)).toBeNull();
+    expect(voteRefusal({...ok, ip: POLL_LIMITS.ipVotes.max}, true)).not.toBeNull();
+    expect(voteRefusal({...ok, device: POLL_LIMITS.deviceVotes.max}, true)?.retryAfter).toBe(POLL_LIMITS.deviceVotes.retryAfter);
   });
 });
 
@@ -67,17 +74,18 @@ describe('resultsFor (per-isolate cache)', () => {
     {id: 'o1', pollId: 'p', label: 'A'},
     {id: 'o2', pollId: 'p', label: 'B'},
   ];
-  const fakeDb = (votes: unknown[]) => {
-    const findVotes = vi.fn(async () => votes);
-    const db = {pollOption: {findMany: vi.fn(async () => options)}, pollVote: {findMany: findVotes}};
+  // The database does the counting now (one GROUP BY statement): the fake answers its rows.
+  const fakeDb = (rows: unknown[]) => {
+    const findVotes = vi.fn(async () => rows);
+    const db = {pollOption: {findMany: vi.fn(async () => options)}, $queryRaw: findVotes};
     return {db: db as never, findVotes};
   };
   const poll = {id: 'cache-poll', type: 'single_choice' as const, status: 'open' as const};
-  const vote = (voterToken: string, optionIds: string[]) => ({voterToken, optionIds, ratingValue: null, textValue: null, createdAt: new Date(), updatedAt: new Date()});
+  const row = (kind: string, key: string | null, n: number) => ({kind, poll_id: poll.id, key, n, text: null, at: null});
 
   it('aggregates, shares one query for a second, and refreshes after invalidate', async () => {
     invalidateResults(poll.id);
-    const {db, findVotes} = fakeDb([vote('a', ['o1']), vote('b', ['o1']), vote('c', ['o2'])]);
+    const {db, findVotes} = fakeDb([row('o', 'o1', 2), row('o', 'o2', 1), row('v', null, 3)]);
     const [first, second] = await Promise.all([resultsFor(db, poll, 1000), resultsFor(db, poll, 1100)]);
     expect(first.totalVoters).toBe(3);
     expect(first.options.map(o => [o.label, o.count, o.percent])).toEqual([['A', 2, 67], ['B', 1, 33]]);
@@ -93,7 +101,7 @@ describe('resultsFor (per-isolate cache)', () => {
 
   it('does not keep a failed load', async () => {
     invalidateResults('bad');
-    const db = {pollOption: {findMany: async () => options}, pollVote: {findMany: vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue([])}} as never;
+    const db = {pollOption: {findMany: async () => options}, $queryRaw: vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue([])} as never;
     await expect(resultsFor(db, {id: 'bad', type: 'rating', status: 'open'}, 5000)).rejects.toThrow('down');
     await expect(resultsFor(db, {id: 'bad', type: 'rating', status: 'open'}, 5001)).resolves.toMatchObject({totalVoters: 0});
   });
@@ -122,7 +130,7 @@ describe('poll code lookup', () => {
     await eventByCode(db, 'K7Q42X');
     expect(findFirst.mock.calls[0][0]).toMatchObject({where: {pollJoinCode: 'K7Q42X', deletedAt: null, status: 'published'}});
   });
-  it('registers a miss throttle', () => {
-    expect((RATE_LIMITS as Record<string, unknown>)['poll_lookup']).toBeDefined();
+  it('caps lookup misses per IP', () => {
+    expect(POLL_LIMITS.lookupMisses.max).toBe(30);
   });
 });

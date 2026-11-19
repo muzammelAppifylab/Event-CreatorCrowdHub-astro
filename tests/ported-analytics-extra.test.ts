@@ -116,17 +116,15 @@ describe('createLimiter eviction', () => {
 });
 
 describe('visitorHash', () => {
-  const base = {secret: 's3cret', at: new Date('2026-10-30T10:00:00Z'), ip: '203.0.113.7', userAgent: 'UA', eventId: 'e1'};
+  const base = {salt: 'f'.repeat(64), ip: '203.0.113.7', userAgent: 'UA', eventId: 'e1'};
   it('is 64 hex chars and does not contain the ip or ua', async () => {
     const h = await visitorHash(base);
     expect(h).toMatch(/^[0-9a-f]{64}$/);
     expect(h).not.toContain('203');
   });
-  it('is the same at 00:00 and 23:59 UTC of one day, differs across midnight', async () => {
-    const a = await visitorHash({...base, at: new Date('2026-10-30T00:00:00Z')});
-    const b = await visitorHash({...base, at: new Date('2026-10-30T23:59:59Z')});
-    const c = await visitorHash({...base, at: new Date('2026-10-31T00:00:00Z')});
-    expect(a).toBe(b);
-    expect(a).not.toBe(c);
+  it('is the same under one day salt and differs under the next (random daily salt, L-43)', async () => {
+    const a = await visitorHash(base);
+    expect(await visitorHash(base)).toBe(a);
+    expect(await visitorHash({...base, salt: '0'.repeat(64)})).not.toBe(a);
   });
 });

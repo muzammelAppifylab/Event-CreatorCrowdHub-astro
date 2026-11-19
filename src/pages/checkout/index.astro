@@ -16,6 +16,7 @@ import CheckoutAskForm from '../../components/payments/CheckoutAskForm.astro';
 import TestModeBadge from '../../components/payments/TestModeBadge.astro';
 import Base from '../../layouts/Base.astro';
 import {formatMoney} from '../../lib/format';
+import {sameSitePath} from '../../lib/safe-path';
 import {allowEmbeddedCheckout, type EmbeddedCheckout as Embedded, type PaymentGateway} from '../../platform/payments';
 import {backend, read} from '../../server/backend';
 import {pageContext} from '../../server/page';
@@ -49,15 +50,19 @@ if (checkout?.status === 'paid') return Astro.redirect(`/thanks/?checkout=${enco
 const embedded = checkout?.status === 'open' ? checkout.embedded : null;
 // The provider's hosts on THIS page only: its form (element) or its popup's script. A payment
 // window is another window, so it needs nothing here.
-if (embedded && embedded.kind !== 'window') allowEmbeddedCheckout(Astro.csp, embedded.gateway);
+// Astro types `insertDirective` with a narrower directive string than the platform helper declares;
+// the object is the same at run time.
+const csp = Astro.csp as Parameters<typeof allowEmbeddedCheckout>[0];
+if (embedded && embedded.kind !== 'window') allowEmbeddedCheckout(csp, embedded.gateway);
 
 // Asking first: the hidden fields carry the Buy button's choice back to the checkout.
 const ask = askPrice
   ? {
       price: askPrice,
       quantity: q.get('quantity') ?? '1',
-      successPath: q.get('successPath') ?? '/thanks/',
-      cancelPath: q.get('cancelPath') ?? '/',
+      // Paths on this site only (the "Go back" link below is one): `/\evil.example` falls back.
+      successPath: sameSitePath(q.get('successPath'), '/thanks/'),
+      cancelPath: sameSitePath(q.get('cancelPath'), '/'),
       email: q.get('email') ?? '',
       gateway: q.get('gateway') ?? '',
       trialUsed: q.get('trialUsed') === '1',
@@ -68,7 +73,7 @@ const choosing = !!ask && !ask.gateway && gateways.length > 1;
 // With JavaScript the checkout island asks (and opens the payment); the form is the no-JavaScript way.
 const island = !!ask && !ask.trialUsed && !ask.gateway;
 // The island may open any of these ways to pay: their hosts on THIS page only.
-if (island) for (const g of gateways) allowEmbeddedCheckout(Astro.csp, g.slug);
+if (island) for (const g of gateways) allowEmbeddedCheckout(csp, g.slug);
 if (!embedded && !ask) Astro.response.status = error ? 422 : 404;
 
 const MESSAGES: Record<string, string> = {
@@ -116,7 +121,7 @@ const message = error ? (MESSAGES[error.toLowerCase()] ?? 'Checkout did not open
             <CheckoutAskForm ask={ask} gateways={choosing ? gateways : []} />
           )}
           <p>
-            <a href={ask.cancelPath.startsWith('/') && !ask.cancelPath.startsWith('//') ? ask.cancelPath : '/'}>Go back</a>
+            <a href={ask.cancelPath}>Go back</a>
           </p>
         </>
       ) : (

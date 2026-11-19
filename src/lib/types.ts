@@ -40,6 +40,8 @@ export interface EventDetail extends EventSummary {
   mapUrl: string | null;
   visibility: 'public' | 'unlisted' | 'private';
   waitlistEnabled: boolean;
+  /** The public page serves published and cancelled events (a cancelled one shows its banner). */
+  status: 'published' | 'cancelled';
 }
 
 export interface EventsPage {

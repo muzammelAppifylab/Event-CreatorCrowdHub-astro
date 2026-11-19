@@ -133,21 +133,28 @@ export async function drainWebhookOutbox(
     const send = options.send ?? sendJob;
     const url = options.requestUrl ?? siteBase();
     for (const chunk of jobs.slice(0, options.maxJobs ?? DRAIN_MAX_JOBS)) {
-      const leased = async (item: WebhookItem, undo: boolean) => {
+      // One write per distinct try count in the chunk (usually one), not one per event.
+      const byMade = new Map<number, string[]>();
+      for (const item of chunk) {
         const made = (item.attempt ?? 1) - 1;
-        await db.webhookOutbox.updateMany({
-          where: {id: {in: byItem.get(item) ?? []}},
-          data: undo ? {attempts: made, nextAttemptAt: now} : {attempts: made + 1, nextAttemptAt: new Date(now.getTime() + outboxBackoffMs(made + 1))},
-        });
+        byMade.set(made, [...(byMade.get(made) ?? []), ...(byItem.get(item) ?? [])]);
+      }
+      const leased = async (undo: boolean) => {
+        for (const [made, ids] of byMade) {
+          await db.webhookOutbox.updateMany({
+            where: {id: {in: ids}},
+            data: undo ? {attempts: made, nextAttemptAt: now} : {attempts: made + 1, nextAttemptAt: new Date(now.getTime() + outboxBackoffMs(made + 1))},
+          });
+        }
       };
-      for (const item of chunk) await leased(item, false);
+      await leased(false);
       try {
         const label = `Webhooks retry · ${chunk.length} event${chunk.length === 1 ? '' : 's'}`;
         await send(url, WEBHOOK_LIST, {items: chunk}, {key: `wr-${chunk[0].id}-${chunk[0].attempt}`, label});
         run.sent++;
       } catch (error) {
         const limited = error instanceof JobRejected && error.code === 'E_JOBS_RATE_LIMITED';
-        if (limited) for (const item of chunk) await leased(item, true); // the platform's limit is not the receiver's fault
+        if (limited) await leased(true); // the platform's limit is not the receiver's fault
         console.error(`[webhooks] outbox send stopped: ${reason(error)}`);
         run.waiting = true;
         return run;

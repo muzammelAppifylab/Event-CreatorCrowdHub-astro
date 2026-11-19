@@ -13,10 +13,16 @@
 import BrandMark from '../../components/BrandMark.astro';
 import App from '../../layouts/App.astro';
 import {config} from '../../platform/config';
+import {allowFileUploads} from '../../platform/files';
 import PortalApp from '../../portal/PortalApp';
 import {pageContext} from '../../server/page';
 
 export const prerender = false;
+
+// The event settings screen uploads the logo straight to storage (`putFile()`): let the browser reach it.
+// Astro types `insertDirective` with a narrower directive string than the platform helper declares;
+// the object is the same at run time.
+await allowFileUploads(Astro.csp as Parameters<typeof allowFileUploads>[0], Astro.url);
 
 const {site, viewer} = await pageContext(Astro.request, Astro.response);
 const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);

@@ -9,8 +9,9 @@
  *   and re-inserts them in one transaction. Nothing else is touched.
  * - Never touches users / roles / sessions and never creates passwords (template rule: no seeded
  *   admin accounts). Sign in through the normal flow.
- * - Refuses to run with NODE_ENV=production, or against a database that is neither local nor the
- *   editor Preview Database (SITE_PREVIEW=1).
+ * - Refuses to run with NODE_ENV=production, or against a database that isn't local unless it is
+ *   the editor Preview Database (SITE_PREVIEW=1 AND SEED_DEMO_HOST=<that database's host>).
+ * - Stops, changing nothing, when a demo slug belongs to an event it didn't create.
  *
  * Manage tokens are stored as sha256 hex (src/domain/secureToken.ts hashToken), so the raw sample
  * links printed at the end are the only way into a guest's `/r/<token>/` page without an email.
@@ -28,8 +29,13 @@ const url = process.env.DATABASE_URL;
 if (!url) throw new Error('db:seed:demo needs DATABASE_URL (run with `node --env-file=.env`).');
 const host = new URL(url).hostname;
 const isLocal = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(host) || host.endsWith('.localhost');
-if (!isLocal && process.env.SITE_PREVIEW !== '1') {
-  throw new Error(`db:seed:demo refuses to run against ${host}: not a local database and SITE_PREVIEW is not 1.`);
+// A database that isn't on this computer needs BOTH the editor Preview flag and the host typed
+// out again, so a production DATABASE_URL left in `.env` next to SITE_PREVIEW=1 is never touched.
+if (!isLocal && (process.env.SITE_PREVIEW !== '1' || process.env.SEED_DEMO_HOST !== host)) {
+  throw new Error(
+    `db:seed:demo refuses to run against ${host}: not a local database. ` +
+      'Only for the editor Preview Database: set SITE_PREVIEW=1 and SEED_DEMO_HOST to that host.',
+  );
 }
 const base = (process.env.SEED_BASE_URL || 'http://localhost:4321').replace(/\/$/, '');
 
@@ -70,7 +76,7 @@ function guest(n) {
   // Unique, deterministic name + lower-case email per global index.
   const name = `${FIRST[n % FIRST.length]} ${LAST[Math.floor(n / FIRST.length) % LAST.length]}${n >= FIRST.length * LAST.length ? ' ' + n : ''}`;
   guestNames.add(name);
-  return {name, email: `${name.toLowerCase().replace(/[^a-z0-9]+/g, '.')}@guest.example`};
+  return {name, email: `${name.toLowerCase().replace(/[^a-z0-9]+/g, '.')}@example.com`};
 }
 
 // ------------------------------------------------------------------ the data
@@ -229,7 +235,7 @@ inviteSpecs.forEach((s, i) => {
 });
 // Two extra invites that are only queued (no email sent yet).
 for (const k of ['queued.one', 'queued.two']) {
-  const email = `${k}@guest.example`;
+  const email = `${k}@example.com`;
   rows.invites.push({id: uuid(`invite:${mastermind.slug}:${email}`), event_id: mastermind.id, email, name: null, token: rawToken(`invite:${mastermind.slug}:${email}`), status: 'queued', sent_at: null, last_resent_at: null});
 }
 for (let i = 0; i < 12; i++) {
@@ -341,9 +347,16 @@ try {
   const number = (list, parent) => { const seen = new Map(); for (const r of list) { const n = seen.get(r[parent]) ?? 0; r.sort_order = n; seen.set(r[parent], n + 1); } };
   number(rows.ticketTypes, 'event_id'); number(rows.questions, 'event_id'); number(rows.polls, 'event_id'); number(rows.options, 'poll_id');
   // Children cascade from events (rsvps -> answers/orders/deliveries, polls -> options/votes, ...).
+  // An event that holds a demo slug but is not one of ours (a host made it): stop, never delete it.
+  const clash = await client.query(
+    `SELECT "slug" FROM "events" WHERE "slug" = ANY($1::text[]) AND NOT ("id" = ANY($2::uuid[])) LIMIT 5`,
+    [rows.events.map((e) => e.slug), rows.events.map((e) => e.id)],
+  );
+  if (clash.rowCount) {
+    throw new Error(`db:seed:demo stopped: these slugs belong to events it did not create: ${clash.rows.map((r) => r.slug).join(', ')}. Nothing was changed.`);
+  }
+  // Only the demo events this script made (fixed ids derived from their slugs).
   const del = await client.query(`DELETE FROM "events" WHERE "slug" LIKE 'demo-%' AND "id" = ANY($1::uuid[])`, [rows.events.map((e) => e.id)]);
-  // A previous run's slugs with different ids (should not happen: ids are derived from the slug).
-  await client.query(`DELETE FROM "events" WHERE "slug" = ANY($1::text[])`, [rows.events.map((e) => e.slug)]);
   await insert(client, 'events', rows.events);
   await insert(client, 'ticket_types', rows.ticketTypes);
   await insert(client, 'rsvp_questions', rows.questions);

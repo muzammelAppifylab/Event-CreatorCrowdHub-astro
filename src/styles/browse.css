@@ -3,8 +3,11 @@
  * Tokens from theme.css only, so dark mode follows on its own.
  */
 
+/* Slides up under the floating header (pill 3.5rem + border + 0.75rem top gap), like the
+   home hero, so the wash runs behind the menu instead of a white band. */
 .browse-hero {
-  padding: clamp(40px, 6vw, 72px) 0 clamp(24px, 4vw, 40px);
+  margin-top: calc(-1 * (3.5rem + 2px + 0.75rem));
+  padding: calc(clamp(40px, 6vw, 72px) + 3.5rem + 2px + 0.75rem) 0 clamp(24px, 4vw, 40px);
   background: var(--wash-aura);
   border-bottom: 1px solid var(--border);
 }
@@ -151,48 +154,137 @@
   list-style: none;
 }
 
-/* A horizontal rail of poster tiles (Sweatpals / Meetup): art first, three lines of type under it. */
+/* A horizontal rail of event cards: a poster (cover or a big calendar date), then date, title, price. */
+.home-rail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.home-rail-actions .home-more {
+  margin-right: 8px;
+}
+
+.home-rail-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease, opacity 150ms ease;
+}
+
+.home-rail-btn:hover:not(:disabled) {
+  border-color: var(--foreground);
+  background: var(--surface-muted);
+}
+
+.home-rail-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.home-rail-btn .flip {
+  transform: scaleX(-1);
+}
+
+.home-rail {
+  position: relative;
+}
+
+/* Soft fades at an edge that has more cards behind it. */
+.home-rail::before,
+.home-rail::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 3rem;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.home-rail::before {
+  left: 0;
+  background: linear-gradient(to right, var(--background), transparent);
+}
+
+.home-rail::after {
+  right: 0;
+  background: linear-gradient(to left, var(--background), transparent);
+}
+
+.home-rail[data-edge-start]::before,
+.home-rail[data-edge-end]::after {
+  opacity: 1;
+}
+
 .home-event-grid {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(11.5rem, 14rem);
+  grid-auto-columns: minmax(14rem, 16rem);
   gap: 20px;
   margin: 0;
-  padding: 0 0 8px;
+  padding: 4px 2px 12px;
   list-style: none;
   overflow-x: auto;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.home-event-grid::-webkit-scrollbar {
+  display: none;
 }
 
 .home-event-grid > li {
+  display: flex;
   scroll-snap-align: start;
 }
 
 .home-event {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 16px);
+  background: var(--background);
   color: inherit;
   text-decoration: none;
+  transition: transform 250ms var(--motion-ease-out), box-shadow 250ms var(--motion-ease-out), border-color 250ms ease;
+}
+
+.home-event:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in oklab, var(--foreground) 22%, var(--border));
+  box-shadow: 0 16px 32px -18px color-mix(in oklab, var(--foreground) 35%, transparent);
 }
 
 .home-event-art {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  aspect-ratio: 3 / 4;
-  padding: 14px;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
   overflow: hidden;
-  border-radius: var(--r-md);
   background: var(--surface-muted);
   color: var(--ink-1000);
-  transition: transform 300ms var(--motion-ease-out);
 }
 
-.home-event:hover .home-event-art {
-  transform: translateY(-3px);
+/* A faint dot grid gives the flat colour some texture. */
+.home-event-art::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(color-mix(in oklab, currentColor 18%, transparent) 1px, transparent 1.5px);
+  background-size: 14px 14px;
+  opacity: 0.6;
 }
 
 .home-event-art img {
@@ -201,6 +293,11 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transition: transform 400ms var(--motion-ease-out);
+}
+
+.home-event:hover .home-event-art img {
+  transform: scale(1.04);
 }
 
 .home-event-art[data-pal='0'] { background: var(--poster-tomato); }
@@ -208,37 +305,112 @@
 .home-event-art[data-pal='2'] { background: var(--poster-plum, #4b1b4f); color: var(--paper); }
 .home-event-art[data-pal='3'] { background: var(--poster-lime); }
 
-.home-event-date {
+.home-event-bigdate {
   position: relative;
-  align-self: flex-start;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--paper);
-  color: var(--ink-1000);
-  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+}
+
+.home-event-month {
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
-.home-event-name {
-  position: relative;
+.home-event-day {
+  margin-top: 4px;
   font-family: var(--type-display);
-  font-size: clamp(22px, 2.4vw, 28px);
-  line-height: 1;
+  font-size: clamp(56px, 6vw, 72px);
+  letter-spacing: var(--tracking-display);
+}
+
+.home-event-tag {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--paper);
+  color: var(--ink-1000);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
-  overflow-wrap: anywhere;
+}
+
+.home-event-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+
+.home-event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.home-event-when {
+  font-weight: 600;
+  color: var(--primary-text, var(--foreground));
+}
+
+.home-event-where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .home-event h3 {
+  display: -webkit-box;
   margin: 0;
-  font-size: 16px;
+  overflow: hidden;
+  font-size: 17px;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
-.home-event p {
-  margin: 2px 0 0;
-  font-size: 14px;
-  color: var(--muted-foreground);
+.home-event-price {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.home-event-price[data-free] {
+  background: color-mix(in oklab, var(--poster-lime) 45%, var(--background));
+  color: var(--ink-1000);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-event,
+  .home-event-art img {
+    transition: none;
+  }
+
+  .home-event:hover {
+    transform: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .home-rail-btn {
+    display: none;
+  }
 }
 
 .home-audience {

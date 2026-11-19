@@ -21,7 +21,7 @@ vi.mock('../src/server/webhook-emit', async () => {
 });
 
 import {audit} from '../src/platform/auth/audit';
-import {adminPollRoutes} from '../src/server/routes/admin-polls';
+import {adminPollRoutes, POLL_EXPORT_MAX_ROWS, POLL_EXPORT_PAGE} from '../src/server/routes/admin-polls';
 import {emitWebhook} from '../src/server/webhook-emit';
 
 const app = new Hono().route('/polls', adminPollRoutes);
@@ -57,6 +57,8 @@ beforeEach(() => {
     },
     pollOption: {findMany: vi.fn(async () => [])},
     pollVote: {findMany: vi.fn(async () => [])},
+    $executeRaw: vi.fn(async () => 2),
+    $queryRaw: vi.fn(async () => []),
     $transaction: vi.fn(async (arg: any) => (typeof arg === 'function' ? arg(tx) : Promise.all(arg))),
   };
 });
@@ -133,8 +135,10 @@ describe('admin polls routes', () => {
     state.db.poll.findMany.mockResolvedValue([{id: P1}, {id: P2}]);
     expect((await call(`/polls/event/${EV}/order`, 'PATCH', {ids: [P1]})).status).toBe(422);
     expect((await call(`/polls/event/${EV}/order`, 'PATCH', {ids: [P1, P1]})).status).toBe(422);
+    expect(state.db.$executeRaw).not.toHaveBeenCalled();
     expect((await call(`/polls/event/${EV}/order`, 'PATCH', {ids: [P2, P1]})).status).toBe(200);
-    expect(state.db.poll.updateMany.mock.calls.map((c: any) => c[0].data.sortOrder)).toEqual([0, 1]);
+    expect(state.db.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(state.db.$executeRaw.mock.calls[0].slice(1)).toEqual([[P2, P1], EV]);
   });
   it('csv export sets headers, audits, and flags truncation', async () => {
     state.db.poll.findUnique.mockResolvedValue({id: P1, question: 'Q', type: 'single_choice', status: 'closed', anonymous: true});
@@ -143,7 +147,26 @@ describe('admin polls routes', () => {
     expect(res.headers.get('content-type')).toContain('text/csv');
     expect(res.headers.get('x-export-truncated')).toBe('0');
     expect(res.headers.get('content-disposition')).toContain('poll-votes-0192f0a1');
-    expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'poll_results_exported'}));
+    expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'poll_results_exported', meta: {rows: 0, truncated: false}}));
+  });
+  it('csv export reads every page before it answers and cuts at POLL_EXPORT_MAX_ROWS', async () => {
+    state.db.poll.findUnique.mockResolvedValue({id: P1, question: 'Q', type: 'rating', status: 'closed', anonymous: true});
+    const when = new Date('2026-10-30T10:00:00Z');
+    let served = 0;
+    // An endless poll: every query answers as many votes as it asked for.
+    state.db.pollVote.findMany.mockImplementation(async (args: any) =>
+      Array.from({length: args.take}, () => ({id: `v${served++}`, optionIds: [], ratingValue: 3, textValue: null, createdAt: when, updatedAt: when}))
+    );
+    const res = await call(`/polls/${P1}/results.csv`);
+    // The database is done before the response exists: nothing is read while the body is sent.
+    const queries = state.db.pollVote.findMany.mock.calls.length;
+    expect(served).toBe(POLL_EXPORT_MAX_ROWS + 1);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-export-truncated')).toBe('1');
+    expect((await res.text()).trim().split('\r\n')).toHaveLength(POLL_EXPORT_MAX_ROWS + 1);
+    expect(state.db.pollVote.findMany).toHaveBeenCalledTimes(queries);
+    expect(Math.max(...state.db.pollVote.findMany.mock.calls.map((c: any[]) => c[0].take))).toBe(POLL_EXPORT_PAGE);
+    expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({meta: {rows: POLL_EXPORT_MAX_ROWS, truncated: true}}));
   });
   it('event csv: 404 for unknown event, rows per poll, emails only for named polls, audited', async () => {
     expect((await call('/polls/event/nope/results.csv')).status).toBe(404);
@@ -152,10 +175,12 @@ describe('admin polls routes', () => {
       {id: P1, question: 'Anon?', type: 'rating', anonymous: true},
       {id: P2, question: 'Named?', type: 'short_text', anonymous: false},
     ]);
-    state.db.pollVote.findMany.mockResolvedValue([
-      {pollId: P2, optionIds: [], ratingValue: null, textValue: 'hi', createdAt: when, updatedAt: when, rsvp: {email: 'a@x.test'}},
-      {pollId: P1, optionIds: [], ratingValue: 5, textValue: null, createdAt: when, updatedAt: when, rsvp: {email: 'b@x.test'}},
-    ]);
+    const votes = [
+      {id: 'v1', pollId: P2, optionIds: [], ratingValue: null, textValue: 'hi', createdAt: when, updatedAt: when, rsvp: {email: 'a@x.test'}},
+      {id: 'v2', pollId: P1, optionIds: [], ratingValue: 5, textValue: null, createdAt: when, updatedAt: when, rsvp: {email: 'b@x.test'}},
+    ];
+    // Read per poll (keyset pages), all before the answer: each call reads one poll's votes.
+    state.db.pollVote.findMany.mockImplementation(async (args: any) => votes.filter(v => v.pollId === args.where.pollId));
     const res = await call(`/polls/event/${EV}/results.csv`);
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/csv');
@@ -166,5 +191,21 @@ describe('admin polls routes', () => {
     expect(csv).toContain('Named?,hi,2026-10-30T10:00:00.000Z,a@x.test');
     expect(csv).not.toContain('b@x.test');
     expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({action: 'poll_results_exported', target: ['event', EV]}));
+  });
+  it("event csv: the cap counts votes across polls, and a later poll is not read once it is reached", async () => {
+    const when = new Date("2026-10-30T10:00:00Z");
+    state.db.poll.findMany.mockResolvedValue([
+      {id: P1, question: "One", type: "rating", anonymous: true},
+      {id: P2, question: "Two", type: "rating", anonymous: true},
+    ]);
+    let served = 0;
+    state.db.pollVote.findMany.mockImplementation(async (args: any) =>
+      Array.from({length: args.take}, () => ({id: `v${served++}`, optionIds: [], ratingValue: 1, textValue: null, createdAt: when, updatedAt: when}))
+    );
+    const res = await call(`/polls/event/${EV}/results.csv`);
+    expect(res.headers.get("x-export-truncated")).toBe("1");
+    expect(served).toBe(POLL_EXPORT_MAX_ROWS + 1);
+    expect(state.db.pollVote.findMany.mock.calls.every((c: any[]) => c[0].where.pollId === P1)).toBe(true);
+    expect(audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({target: ["event", EV], meta: {polls: 2, rows: POLL_EXPORT_MAX_ROWS, truncated: true}}));
   });
 });

@@ -1,12 +1,13 @@
 {
   "lists": {
     "event-scheduler": {"retries": 2, "concurrency": 1},
+    "guest-email-outbox": {"retries": 2, "concurrency": 1},
     "guest-retention": {"retries": 2, "concurrency": 1},
     "rsvp-emails": {"retries": 5, "concurrency": 5},
     "webhook-deliveries": {"retries": 3, "concurrency": 5}
   },
   "schedules": {
-    "event-scheduler": {"cron": "*/5 * * * *", "tz": "UTC", "label": "Reminders, waitlist claims, payment holds"},
+    "event-scheduler": {"cron": "*/5 * * * *", "tz": "UTC", "label": "Reminders, waitlist claims, payment holds, guest emails"},
     "guest-retention": {"cron": "17 3 * * *", "tz": "UTC", "label": "Anonymise guests past the retention period"}
   }
 }

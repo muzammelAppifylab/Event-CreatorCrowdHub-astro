@@ -24,7 +24,6 @@ describe.skipIf(!DATABASE_URL)('events guest flows (integration, real Postgres)'
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
-    await userWith('first@example.test', ['owner'], '203.0.113.1');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.2');
   });
 

@@ -46,6 +46,8 @@ interface Props {
     coverPoster?: string | null;
     coverStyle?: CoverStyle | null;
     visibility?: 'public' | 'unlisted' | 'private';
+    /** Shows the "Cancelled" banner even when the RSVP read failed. */
+    status?: 'published' | 'cancelled';
   };
   rsvp: RsvpEventView | null;
   site: Site | null;
@@ -60,7 +62,7 @@ const inPerson = format !== 'online';
 const online = format !== 'in_person';
 const now = new Date();
 const availability = rsvp ? availabilityOf(rsvp, event.endAt, now) : null;
-const enabled = !!availability && canRsvp(availability) && !invite?.alreadyResponded;
+const enabled = event.status !== 'cancelled' && !!availability && canRsvp(availability) && !invite?.alreadyResponded;
 const label = availability && rsvp ? ctaLabel(availability, {approvalRequired: rsvp.approvalRequired, hasTickets: rsvp.ticketTypes.length > 0, capacityLimited: rsvp.seatsLeft !== null}) : '';
 const note = invite?.alreadyResponded
   ? 'You have already answered this invitation. Open the link in your confirmation email to view or change your RSVP.'
@@ -80,7 +82,7 @@ function cancelledPhase() {
   const t = now.getTime();
   return t < start ? 'before' : t < end ? 'live' : 'ended';
 }
-const cancelled = rsvp?.status === 'cancelled';
+const cancelled = rsvp?.status === 'cancelled' || event.status === 'cancelled';
 const startsIn = countdownParts(Math.max(0, start - now.getTime()), false);
 const titleId = 'rsvp-sheet-title';
 ---
@@ -282,7 +284,7 @@ const titleId = 'rsvp-sheet-title';
             <p class="g-strong-inherit">{hostName}</p>
           </div>
         </div>
-        <a class="g-btn g-btn-ghost g-btn-lg g-more" href="/host/" data-astro-prefetch>
+        <a class="g-btn g-btn-ghost g-btn-lg g-more" href="/host/">
           {guestCopy.host.moreEvents(hostName)}
           <GIcon name="arrow-right" />
         </a>
@@ -349,6 +351,7 @@ const titleId = 'rsvp-sheet-title';
           view={rsvp}
           mode="create"
           inviteToken={invite?.token}
+          lockEmail={!!invite && event.visibility === 'private'}
           hostName={hostName}
           values={invite ? {name: invite.name ?? '', email: invite.email} : {}}
         />
@@ -387,7 +390,10 @@ const titleId = 'rsvp-sheet-title';
       if (day && range && event) {
         day.textContent = formatDay(startAt, local);
         range.textContent = formatRange(startAt, endAt, local);
-        event.textContent = `${formatRange(startAt, endAt, zone)} event time (${zone.replace(/_/g, ' ')})`;
+        // M-36: name the event's own date when it isn't the viewer's (a 01:00 start in Dhaka is the evening before in London).
+        const zoneDay = formatDay(startAt, zone);
+        const dated = zoneDay && zoneDay !== formatDay(startAt, local) ? `${zoneDay}, ` : '';
+        event.textContent = `${dated}${formatRange(startAt, endAt, zone)} event time (${zone.replace(/_/g, ' ')})`;
         event.hidden = false;
       }
     }

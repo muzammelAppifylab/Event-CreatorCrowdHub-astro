@@ -290,7 +290,7 @@ describe('settings patch (ported workspace PATCH validation)', () => {
   });
 
   it('422s invalid values with one message per field', () => {
-    const r = parseSettingsPatch({brandColor: 'red', fontPreset: 'comic', defaultTimezone: 'Mars/Olympus_Mons', replyToEmail: 'not-an-email', senderName: ''});
+    const r = parseSettingsPatch({brandColor: 'red', fontPreset: 'comic', defaultTimezone: 'Mars/Olympus_Mons', replyToEmail: 'not-an-email', senderName: 42});
     expect(r.ok).toBe(false);
     if (!r.ok) expect(Object.keys(r.fields).sort()).toEqual(['brandColor', 'defaultTimezone', 'fontPreset', 'replyToEmail', 'senderName']);
   });

@@ -10,6 +10,8 @@
  * `<script>` can't inject markup into an email.
  */
 
+import { escapeHtml } from "./richText"
+
 export type MergeTag =
   | "guest.first_name"
   | "guest.name"
@@ -94,14 +96,8 @@ function valueFor(tag: MergeTag, ctx: MergeContext): string {
   }
 }
 
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-}
+// ONE escaper for every email and rich-text path (audit L-37): richText.ts owns it.
+export { escapeHtml }
 
 export function renderTemplate(template: string, context: MergeContext, options: RenderOptions = {}): RenderResult {
   const unknown: string[] = []

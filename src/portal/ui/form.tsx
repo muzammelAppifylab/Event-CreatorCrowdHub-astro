@@ -1,4 +1,5 @@
 import {
+  cloneElement,
   type FormEvent,
   type InputHTMLAttributes,
   type ReactElement,
@@ -43,13 +44,27 @@ export function Field({
   optional?: boolean;
   children: ReactElement;
 }) {
+  // The control points at the hint or error THIS field renders, and only when it renders it (a
+  // describedby naming a missing id is noise to a screen reader). Its other ids (a checklist) stay.
+  const own = [`${id}-hint`, `${id}-error`];
+  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
+  const props = children.props as {id?: string; 'aria-describedby'?: string};
+  const control =
+    props.id === id
+      ? cloneElement(children as ReactElement<{'aria-describedby'?: string}>, {
+          'aria-describedby':
+            [...(props['aria-describedby'] ?? '').split(/\s+/).filter(token => token && !own.includes(token)), describedBy]
+              .filter(Boolean)
+              .join(' ') || undefined,
+        })
+      : children;
   return (
     <div className="field" data-invalid={error ? '' : undefined}>
       <label htmlFor={id}>
         {label}
         {optional && <span className="muted"> (optional)</span>}
       </label>
-      {children}
+      {control}
       {hint && !error && (
         <p className="field-hint" id={`${id}-hint`}>
           {hint}
@@ -122,7 +137,7 @@ type Errors<V extends Values> = Partial<Record<keyof V, string>>;
  *   first wrong field, and only then calls `onValid`.
  * - `setServerErrors` puts the server's answer on the fields it names.
  */
-export function useForm<V extends Values>(initial: V, schema: Schema<V>) {
+export function useForm<V extends Values>(initial: V, schema: Schema<V>, options: {idPrefix?: string} = {}) {
   const [values, setValues] = useState<V>(initial);
   const [touched, setTouched] = useState<Partial<Record<keyof V, boolean>>>({});
   const [submitted, setSubmitted] = useState(false);
@@ -149,7 +164,8 @@ export function useForm<V extends Values>(initial: V, schema: Schema<V>) {
   /** Everything a text input, textarea or select needs. */
   const field = (name: keyof V & string) => {
     const error = errorOf(name);
-    const id = `f-${name}`;
+    // Two forms on one screen with the same field name (`password`) need an `idPrefix` each, or their ids clash.
+    const id = options.idPrefix ? `f-${options.idPrefix}-${name}` : `f-${name}`;
     return {
       id,
       name,
@@ -160,7 +176,8 @@ export function useForm<V extends Values>(initial: V, schema: Schema<V>) {
       onChange: (event: {target: {value: string}}) => set(name, event.target.value as V[typeof name]),
       onBlur: () => setTouched(current => ({...current, [name]: true})),
       'aria-invalid': error ? true : undefined,
-      'aria-describedby': error ? `${id}-error` : `${id}-hint`,
+      // A hint is added by `Field`, which knows whether it renders one.
+      'aria-describedby': error ? `${id}-error` : undefined,
     };
   };
 

@@ -6,6 +6,7 @@ const queued: Array<{kind: string; rsvpId: string}> = [];
 vi.mock('../src/server/jobs/guest-emails', () => ({
   GUEST_EMAIL_LIST: 'rsvp-emails',
   queueGuestEmail: async (kind: string, rsvpId: string) => void queued.push({kind, rsvpId}),
+  queueGuestEmails: async (items: Array<{kind: string; rsvpId: string}>) => void queued.push(...items.map(({kind, rsvpId}) => ({kind, rsvpId}))),
   sendGuestEmail: vi.fn(),
 }));
 
@@ -119,6 +120,41 @@ describe('startTicketCheckout', () => {
     expect(await startTicketCheckout(asDb(db), rsvp.id)).toMatchObject({ok: false, code: 'ticket_price_mismatch'});
     expect(payments.createCheckout).not.toHaveBeenCalled();
   });
+  it('sends one idempotency key per attempt: the same on a retry, a new one once the attempt is retired', async () => {
+    const {db, rsvp} = setup();
+    payments.findPrice.mockResolvedValue({ok: true, data: {amountCents: 2500, currency: 'USD'}});
+    payments.createCheckout.mockResolvedValue({ok: true, data: {id: 'pcs_samecheck1', mode: 'test', embedded: null}});
+    const keyOf = (n: number) => (payments.createCheckout.mock.calls[n]![1] as {idempotencyKey: string}).idempotencyKey;
+
+    await startTicketCheckout(asDb(db), rsvp.id);
+    expect(payments.createCheckout).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({idempotencyKey: expect.stringMatching(/^tkt-[0-9a-f]{48}$/)}));
+    db.ticketOrder.rows.length = 0; // the first answer was lost: no order recorded
+    await startTicketCheckout(asDb(db), rsvp.id);
+    expect(keyOf(1)).toBe(keyOf(0));
+
+    payments.getCheckout.mockResolvedValue({ok: true, data: {status: 'expired', embedded: null}});
+    await startTicketCheckout(asDb(db), rsvp.id);
+    expect(db.ticketOrder.rows[0]!.status).toBe('expired');
+    expect(keyOf(2)).toMatch(/^tkt-[0-9a-f]{48}$/);
+    expect(keyOf(2)).not.toBe(keyOf(0));
+  });
+
+  it('answers 409 while the same attempt is still starting', async () => {
+    const {db, rsvp} = setup();
+    payments.findPrice.mockResolvedValue({ok: true, data: {amountCents: 2500, currency: 'USD'}});
+    payments.createCheckout.mockResolvedValue({ok: false, code: 'E_SITE_PAYMENTS_IN_PROGRESS', status: 409, message: 'in progress'});
+    expect(await startTicketCheckout(asDb(db), rsvp.id)).toMatchObject({ok: false, status: 409, code: 'checkout_in_progress'});
+    expect(db.ticketOrder.rows).toHaveLength(0);
+  });
+
+  it('sends the buyer to the thanks page when this attempt is already paid', async () => {
+    const {db, rsvp} = setup();
+    payments.findPrice.mockResolvedValue({ok: true, data: {amountCents: 2500, currency: 'USD'}});
+    payments.createCheckout.mockResolvedValue({ok: true, data: {id: 'pcs_paidagain1', mode: 'test', embedded: null, paid: true}});
+    expect(await startTicketCheckout(asDb(db), rsvp.id)).toMatchObject({ok: true, paid: true, redirectUrl: '/thanks/?checkout=pcs_paidagain1'});
+    expect(db.ticketOrder.rows).toHaveLength(1);
+    expect(db.ticketOrder.rows[0]).toMatchObject({checkoutId: 'pcs_paidagain1', status: 'pending'});
+  });
 });
 
 describe('confirmPaidTicket', () => {
@@ -192,6 +228,20 @@ describe('refunds', () => {
     expect(db.rsvp.rows.find(r => r.id === rsvp.id)!.status).toBe('cancelled');
     expect(db.rsvp.rows.find(r => r.id === waiting.id)!.claimExpiresAt).toBeInstanceOf(Date);
     expect(queued).toEqual([{kind: 'waitlist_offer', rsvpId: waiting.id}]);
+  });
+
+  it('a second paid checkout for one booking is refund_due, and refunding it leaves the ticket alone', async () => {
+    const {db, rsvp} = setup();
+    db.rsvp.rows[0]!.status = 'confirmed';
+    const a = db.addOrder(rsvp.id, {status: 'paid', amountCents: 5000, seats: 2});
+    const b = db.addOrder(rsvp.id, {status: 'pending', amountCents: 5000, seats: 2});
+    expect(await confirmPaidTicket(asDb(db), paidCheckout(b) as never)).toMatchObject({kind: 'refund_due', reason: 'duplicate_payment'});
+    expect(db.ticketOrder.rows.find(o => o.id === b.id)!.status).toBe('refund_due');
+
+    expect(await refundedTicket(asDb(db), {checkoutId: b.checkoutId, amountCents: 5000, currency: 'USD', full: true, refundedAt: new Date().toISOString()})).toEqual({closed: true});
+    expect(db.rsvp.rows[0]!.status).toBe('confirmed');
+    expect(db.ticketOrder.rows.find(o => o.id === a.id)!.status).toBe('paid');
+    expect(db.ticketOrder.rows.find(o => o.id === b.id)!.status).toBe('refunded');
   });
 
   it('a partial refund changes nothing', async () => {

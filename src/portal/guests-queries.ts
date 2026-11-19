@@ -85,7 +85,8 @@ export type GuestFilter = {status: string; response: string; ticketTypeId: strin
 export const NO_GUEST_FILTER: GuestFilter = {status: '', response: '', ticketTypeId: '', checkedIn: '', q: ''};
 
 export type BulkAction = 'approve' | 'decline' | 'promote' | 'remove' | 'erase';
-export type BulkResult = {action: BulkAction; succeeded: string[]; failed: {rsvpId: string; reason: string}[]};
+/** `emailsQueued`: notices the action queued for sending (approved, declined, promoted guests; unsubscribing stops broadcasts only, never these). */
+export type BulkResult = {action: BulkAction; succeeded: string[]; failed: {rsvpId: string; reason: string}[]; emailsQueued?: number};
 
 export const guestsQuery = (eventId: string, filter: GuestFilter) =>
   infiniteQueryOptions({
@@ -265,7 +266,8 @@ export type MessageLogRow = {
   sentBy: number | null;
   createdAt: string;
 };
-export type BroadcastResult = {message: MessageLogRow; failed: number};
+/** `queued`: emails handed to the outbox by this send (absent on a replay of an earlier send). */
+export type BroadcastResult = {message: MessageLogRow; failed: number; queued?: number};
 export type EmailPreview = {
   subject: string;
   html: string;
@@ -360,9 +362,11 @@ const reasonLabel = (reason: string) => REASONS[reason] ?? REASONS[reason.split(
 const DONE: Record<BulkAction, string> = {approve: 'approved', decline: 'declined', promote: 'promoted', remove: 'removed', erase: 'erased'};
 export const guestCount = (n: number) => `${n} ${n === 1 ? 'guest' : 'guests'}`;
 
-/** One toast line for a partial-success report: "2 promoted. 3 skipped: no seats left (3)." */
+/** One toast line for a partial-success report: "2 guests promoted. 2 emails queued. 3 skipped: no seats left (3)." */
 export function summarizeBulk(result: BulkResult): {ok: boolean; message: string} {
-  const done = `${guestCount(result.succeeded.length)} ${DONE[result.action]}.`;
+  const queued = result.emailsQueued ?? 0;
+  const emails = queued > 0 ? ` ${queued} ${queued === 1 ? 'email' : 'emails'} queued.` : '';
+  const done = `${guestCount(result.succeeded.length)} ${DONE[result.action]}.${emails}`;
   if (!result.failed.length) return {ok: true, message: done};
   const byReason = new Map<string, number>();
   for (const f of result.failed) byReason.set(f.reason, (byReason.get(f.reason) ?? 0) + 1);
@@ -395,18 +399,6 @@ export function shareUrl(platform: SharePlatform, eventUrl: string, title: strin
     case 'facebook':
       return `https://www.facebook.com/sharer/sharer.php?${params({u: eventUrl})}`;
   }
-}
-
-const escapeAttr = (value: string) =>
-  value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-/** An iframe for the event page without its header (`?embed=1`). */
-export function embedCode(base: string, slug: string, title: string): string {
-  const src = `${base.replace(/\/+$/, '')}/e/${encodeURIComponent(slug)}?embed=1`;
-  return (
-    `<iframe src="${escapeAttr(src)}" title="${escapeAttr(`RSVP: ${title}`)}" ` +
-    `width="100%" height="720" style="border:0;max-width:640px" loading="lazy"></iframe>`
-  );
 }
 
 /**

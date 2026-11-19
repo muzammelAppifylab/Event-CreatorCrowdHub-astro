@@ -165,8 +165,12 @@ describe('settings patch', () => {
   it('normalises the colour and validates the rest', () => {
     expect(parseSettingsPatch({brandColor: '#ABC'})).toEqual({ok: true, value: {brandColor: '#aabbcc'}});
     expect(parseSettingsPatch({brandColor: ''})).toEqual({ok: true, value: {brandColor: null}});
-    const bad = parseSettingsPatch({brandColor: 'red', fontPreset: 'comic', defaultTimezone: 'No/Where', replyToEmail: 'nope', senderName: ''});
+    const bad = parseSettingsPatch({brandColor: 'red', fontPreset: 'comic', defaultTimezone: 'No/Where', replyToEmail: 'nope', senderName: 5});
     expect(!bad.ok && Object.keys(bad.fields).sort()).toEqual(['brandColor', 'defaultTimezone', 'fontPreset', 'replyToEmail', 'senderName']);
+    // L-3: the sender name can be cleared (blank or null -> '', emails fall back to a default).
+    expect(parseSettingsPatch({senderName: '  '})).toEqual({ok: true, value: {senderName: ''}});
+    expect(parseSettingsPatch({senderName: null})).toEqual({ok: true, value: {senderName: ''}});
+    expect(parseSettingsPatch({senderName: 'x'.repeat(81)}).ok).toBe(false);
   });
 
   it('checks default email rules against the offset limits', () => {

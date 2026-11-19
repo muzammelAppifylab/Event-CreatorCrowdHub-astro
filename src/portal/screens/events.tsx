@@ -12,6 +12,7 @@ import {
 } from '../../lib/event-schemas';
 import {api, ApiError, read} from '../api';
 import {eventsListQuery, fieldAria, focusFirstInvalid, useEventsNav} from '../events-queries';
+import {canCancel, canDelete, canUnpublish, guarded} from './event-hub-actions';
 import {
   Badge,
   Button,
@@ -91,6 +92,7 @@ export function Events() {
   const preview = useMutation({
     mutationFn: (e: AdminEventSummary) => read<CancelPreview>(api['admin-events'][':id']['cancel-preview'].$get({param: {id: e.id}})),
   });
+  const previewFlight = useRef(false);
 
   const busyKey =
     (publish.isPending && publish.variables?.id) ||
@@ -102,7 +104,8 @@ export function Events() {
   const rowError = publish.error ?? unpublish.error ?? preview.error;
 
   const askCancel = async (e: AdminEventSummary) => {
-    const p = await preview.mutateAsync(e).catch(() => null);
+    // While the preview is read the row is pending (busyKey); a second select meanwhile is ignored.
+    const p = await guarded(previewFlight, () => preview.mutateAsync(e).catch(() => null));
     if (!p) return;
     const money = p.ordersToRefund
       ? ` ${p.ordersToRefund} paid ${p.ordersToRefund === 1 ? 'order needs' : 'orders need'} a refund (${(p.refundTotalCents / 100).toFixed(2)} ${p.currency ?? ''}).`
@@ -197,13 +200,13 @@ export function Events() {
               e.status === 'draft'
                 ? {label: 'Publish', icon: 'check-circle', onSelect: () => publish.mutate(e)}
                 : e.status === 'published'
-                  ? {label: 'Unpublish', icon: 'ban', onSelect: () => unpublish.mutate(e)}
+                  ? {label: 'Unpublish', icon: 'ban', disabled: !canUnpublish(e), onSelect: () => unpublish.mutate(e)}
                   : {label: 'Cancelled', icon: 'ban', disabled: true, onSelect: () => undefined},
               {label: 'Duplicate', icon: 'copy', onSelect: () => setCopying(e)},
               {label: 'View public page', icon: 'external', disabled: e.status !== 'published', onSelect: () => void window.open(`/e/${encodeURIComponent(e.slug)}`, '_blank', 'noopener')},
               'separator',
-              ...(e.status === 'published' ? [{label: 'Cancel event', icon: 'x' as const, danger: true, onSelect: () => void askCancel(e)}] : []),
-              ...(e.status === 'draft' ? [{label: 'Delete draft', icon: 'trash' as const, danger: true, onSelect: () => askDelete(e)}] : []),
+              ...(canCancel(e) ? [{label: 'Cancel event', icon: 'x' as const, danger: true, onSelect: () => void askCancel(e)}] : []),
+              ...(canDelete(e) ? [{label: 'Delete draft', icon: 'trash' as const, danger: true, onSelect: () => askDelete(e)}] : []),
             ]}
           />
         ),
@@ -266,8 +269,8 @@ export function Events() {
               )
             }
           />
+          <LoadMore query={events} count={all?.length} noun={['event', 'events']} />
         </Card>
-        <LoadMore query={events} />
       </Tabs>
 
       <DuplicateModal

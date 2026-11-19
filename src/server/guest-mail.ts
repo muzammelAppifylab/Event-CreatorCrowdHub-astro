@@ -12,7 +12,8 @@ import {logoPath} from '../lib/event-brand';
 import type {PrismaClient} from '../generated/prisma/client';
 import {publicGet} from '../platform/api';
 import {config} from '../platform/config';
-import {sendEventEmail} from './mailer';
+import {deliverEventEmail, type SendOutcome} from './mailer';
+import {guestEmailLinks} from './privacy';
 
 /**
  * Glue between the organiser routes (guests, invites, messages) and the mailer:
@@ -21,21 +22,22 @@ import {sendEventEmail} from './mailer';
  * email was not sent, e.g. no provider configured; invites stay queued, deliveries `failed`).
  */
 
-export type MailMessage = {to: string; subject: string; html: string; text: string; replyTo?: string; fromName?: string | null};
-export type MailResult = {ok: boolean};
+export type MailMessage = {to: string; subject: string; html: string; text: string; replyTo?: string; fromName?: string | null; idempotencyKey?: string};
+export type MailResult = {ok: boolean; outcome?: SendOutcome};
 
 /** Sends one event email through `mailer.ts` (Resend when configured). Never throws: a failure is `{ok: false}`. */
 export async function sendMail(message: MailMessage): Promise<MailResult> {
   try {
-    const ok = await sendEventEmail({
+    const {outcome} = await deliverEventEmail({
       to: message.to,
       content: {subject: message.subject, html: message.html, text: message.text},
       fromName: message.fromName,
       replyTo: message.replyTo,
+      idempotencyKey: message.idempotencyKey,
     });
-    return {ok};
+    return {ok: outcome === 'sent', outcome};
   } catch {
-    return {ok: false};
+    return {ok: false, outcome: 'failed'};
   }
 }
 
@@ -55,6 +57,7 @@ export const eventMailSelect = {
   pollJoinCode: true,
   thankYouLink: true,
   status: true,
+  visibility: true,
   capacity: true,
   waitlistEnabled: true,
   maxPlusOnes: true,
@@ -75,6 +78,8 @@ export type MailEvent = {
   pollJoinCode: string;
   thankYouLink: string | null;
   status: 'draft' | 'published' | 'cancelled';
+  /** From `eventMailSelect`; picks the event link in emails (`eventPageLinks`). */
+  visibility?: 'public' | 'unlisted' | 'private';
   capacity: number | null;
   waitlistEnabled: boolean;
   maxPlusOnes: number;
@@ -93,6 +98,19 @@ export type MailGuest = {
 /** The site's address for links in emails (no trailing slash). */
 export function publicBase(requestUrl: string): string {
   return (config.siteUrl ?? new URL(requestUrl).origin).replace(/\/+$/, '');
+}
+
+/**
+ * The event links for an email built without the guest's raw manage token (only its hash is
+ * stored). A private event's page answers 404 without an invite, so it has no public page: the
+ * "View event" button then opens the site's home page instead of a dead link, and nothing goes to
+ * another service (Google Calendar). Emails that hold the raw token use `/r/<token>/` instead.
+ */
+export function eventPageLinks(base: string, event: {slug: string; visibility?: string | null}): {pageUrl: string; publicPageUrl: string | null} {
+  const root = base.replace(/\/+$/, '');
+  if (event.visibility === 'private') return {pageUrl: `${root}/`, publicPageUrl: null};
+  const url = `${root}/events/${encodeURIComponent(event.slug)}/`;
+  return {pageUrl: url, publicPageUrl: url};
 }
 
 /** `/i/<token>?e=<slug>`: the invite's personal link. */
@@ -151,7 +169,7 @@ export async function loadBrand(db: Pick<PrismaClient, 'eventSettings'>, request
  * guest's "Manage RSVP" link points at the event page, where they can ask for it again.
  */
 export function emailDataFor(base: string, event: MailEvent, guest: MailGuest, brand: EmailBrand, now = new Date()): EmailData {
-  const pageUrl = `${base}/e/${encodeURIComponent(event.slug)}/`;
+  const {pageUrl, publicPageUrl} = eventPageLinks(base, event);
   return {
     now,
     brand,
@@ -167,6 +185,7 @@ export function emailDataFor(base: string, event: MailEvent, guest: MailGuest, b
       mapUrl: event.mapUrl,
       joinUrl: event.joinUrl,
       pageUrl,
+      publicPageUrl,
       pollUrl: pollLinkFor(base, event.pollJoinCode, guest.id, event.id, config.jwtSecret, now),
       thankYouLink: event.thankYouLink,
     },
@@ -178,6 +197,8 @@ export function emailDataFor(base: string, event: MailEvent, guest: MailGuest, b
       ticketCode: guest.ticketCode,
       manageUrl: pageUrl,
       waitlistPosition: guest.waitlistPosition,
+      // A signed one-click unsubscribe link (M-25): broadcasts and host notices carry it.
+      unsubscribeUrl: guestEmailLinks(base, guest.id, config.jwtSecret).unsubscribeUrl,
     },
   };
 }
@@ -197,28 +218,5 @@ export function noticeContent(base: string, event: MailEvent, brand: EmailBrand,
       return declinedEmail(data);
     case 'waitlist_offer':
       return waitlistOfferEmail(data, formatInZone(notice.claimExpiresAt, event.timezone));
-  }
-}
-
-/** Sends the notices one after another; a failure is logged (ids only) and never thrown. */
-export async function notifyGuests(
-  db: PrismaClient,
-  base: string,
-  event: MailEvent,
-  notices: Array<GuestNotice & {guest: MailGuest}>
-): Promise<void> {
-  if (!notices.length || event.status === 'cancelled') return;
-  const brand = await loadBrand(db, base);
-  for (const notice of notices) {
-    const content = noticeContent(base, event, brand, notice);
-    const result = await sendMail({
-      to: notice.guest.email,
-      subject: content.subject,
-      html: content.html,
-      text: content.text,
-      replyTo: brand.replyToEmail ?? undefined,
-      fromName: brand.senderName,
-    });
-    if (!result.ok) console.warn(`[guests] ${notice.kind} email not sent for rsvp ${notice.guest.id}`);
   }
 }

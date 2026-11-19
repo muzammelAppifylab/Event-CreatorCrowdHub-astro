@@ -4,6 +4,7 @@
  * (`?token=`). PRERENDERED. A button press, not the page load, uses the token: email scanners
  * open links too.
  */
+import AuthShell from '../../components/AuthShell.astro';
 import Base from '../../layouts/Base.astro';
 import {staticContext} from '../../server/page';
 
@@ -13,16 +14,14 @@ const {site, viewer} = await staticContext(Astro.request);
 ---
 
 <Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Cancel the email change">
-  <main id="main" tabindex="-1" class="wrap auth-wrap section">
-    <div class="card auth-card">
+  <AuthShell variant="login" name={site?.name}>
       <h1>Cancel the email change</h1>
       <form id="cancel-form" class="auth-form" novalidate>
         <p class="muted">Your account keeps signing in with this address.</p>
         <p class="notice" data-form-status hidden></p>
         <button class="button" type="submit">Cancel the change</button>
       </form>
-    </div>
-  </main>
+    </AuthShell>
 </Base>
 
 <script>

@@ -1,0 +1,52 @@
+---
+/**
+ * The guest's dead end when the host has unpublished or deleted the event behind a valid link
+ * (`/r/<token>`, `/i/<token>`; the route answered 410 `event_unavailable` with only the title).
+ * Same look as `ErrorScreen` (guest tone), plus the guest's privacy links when the link is a manage
+ * token: export, erase and unsubscribe keep working whatever the event became (audit M-23).
+ */
+import GIcon from '../GIcon.astro';
+
+interface Props {
+  /** The event's title: the link's holder already knows it. */
+  title: string;
+  /** The guest's manage token: shows "Your data" and "Unsubscribe". Never an invite token. */
+  privacyToken?: string;
+}
+
+const {title, privacyToken} = Astro.props;
+const enc = privacyToken ? encodeURIComponent(privacyToken) : '';
+---
+
+<main id="main" tabindex="-1" class="g-main">
+  <section class="g-error" aria-labelledby="error-title" aria-describedby="error-description">
+    <div class="g-error-in">
+      <span class="g-quiet-icon" aria-hidden="true">
+        <GIcon name="calendar-x" class="g-icon-6" stroke={1.75} />
+      </span>
+      <h1 id="error-title" class="type-poster">
+        <span class="sr-only">This event is </span>
+        <span>No longer</span>
+        <span>available</span>
+      </h1>
+      <p id="error-description" class="g-lead">
+        The host has taken {title ? <span class="g-strong-inherit">{title}</span> : 'this event'} down, so its page and RSVPs can't be opened any more. If
+        anything changes, the host will let you know by email.
+      </p>
+      <div class="g-error-actions">
+        <a class="g-btn g-btn-lg" href="/" data-astro-prefetch>Go to the start</a>
+      </div>
+      {
+        privacyToken && (
+          <nav class="g-unavailable-privacy" aria-label="Your data">
+            <p class="g-body-sm g-muted">Your RSVP details are still yours to see, download or erase.</p>
+            <div class="g-btn-row-wrap g-body-sm">
+              <a href={`/privacy/guest/${enc}/`}>Your data</a>
+              <a href={`/privacy/unsubscribe/${enc}/`}>Unsubscribe</a>
+            </div>
+          </nav>
+        )
+      }
+    </div>
+  </section>
+</main>

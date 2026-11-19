@@ -73,6 +73,23 @@ export function renderResults(results: Results, mine: string[] = []): HTMLElemen
   return box;
 }
 
+/** Retries after a refused or busy vote, at most. */
+export const VOTE_RETRIES = 2;
+/** Longest server-asked wait (Retry-After) still retried for the voter; longer ones show the message. */
+const RETRY_AFTER_MAX_S = 10;
+
+/**
+ * Ms to wait before resending a vote, or null to give up. A 429 or 503 is retried (nothing was
+ * stored, so a resend is safe) after the server's Retry-After plus a random 0–1.5s, so a room that
+ * was refused together doesn't come back together (audit M-3).
+ */
+export function voteRetryDelay(status: number, retryAfter: string | null, attempt: number, random = Math.random): number | null {
+  if ((status !== 429 && status !== 503) || attempt >= VOTE_RETRIES) return null;
+  const asked = retryAfter === null || retryAfter === '' ? 1 : Number(retryAfter);
+  if (!Number.isFinite(asked) || asked < 0 || asked > RETRY_AFTER_MAX_S) return null;
+  return Math.round(asked * 1000 + random() * 1500);
+}
+
 export function mountPoll(root: HTMLElement): void {
   const code = root.dataset.code ?? '';
   const guest = root.dataset.guest ?? ''; // manage token from `?g=`: sent in the POST body only, never in a requested URL
@@ -98,11 +115,19 @@ export function mountPoll(root: HTMLElement): void {
     error = '';
     status.textContent = 'Sending…';
     try {
-      const res = await siteFetch(`${api}/votes`, {
-        method: 'POST',
-        headers: {'content-type': 'application/json', accept: 'application/json'},
-        body: JSON.stringify({pollId: poll.id, type: poll.type, ...vote, ...(guest ? {g: guest} : {})}),
-      });
+      const post = () =>
+        siteFetch(`${api}/votes`, {
+          method: 'POST',
+          headers: {'content-type': 'application/json', accept: 'application/json'},
+          body: JSON.stringify({pollId: poll.id, type: poll.type, ...vote, ...(guest ? {g: guest} : {})}),
+        });
+      let res = await post();
+      for (let attempt = 0; ; attempt++) {
+        const wait = voteRetryDelay(res.status, res.headers.get('retry-after'), attempt);
+        if (wait === null) break;
+        await new Promise(resolve => window.setTimeout(resolve, wait));
+        res = await post();
+      }
       const answer = (await res.json().catch(() => null)) as {message?: string; myVote?: MyVote; results?: Results | null} | null;
       if (!res.ok) throw new Error(answer?.message ?? 'Your answer was not sent. Try again.');
       if (active) active.myVote = answer?.myVote ?? vote;
@@ -114,6 +139,13 @@ export function mountPoll(root: HTMLElement): void {
     }
     status.textContent = '';
     draw(true);
+    // The form was rebuilt, so the button that had focus is gone: move focus to the outcome (the error, or
+    // "Your answer is in"), never back to <body>.
+    const outcome = body.querySelector<HTMLElement>(error ? '.notice[role="alert"]' : '.poll-done') ?? body.querySelector<HTMLElement>('button[type="submit"]');
+    if (outcome) {
+      if (!outcome.matches('button')) outcome.tabIndex = -1;
+      outcome.focus();
+    }
   }
 
   function form(poll: Poll): HTMLElement {

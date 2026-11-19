@@ -83,6 +83,8 @@ describe('date formatting', () => {
     expect(formatShortWhen('2026-10-27T18:30:00Z', 'UTC')).toContain('27 Oct');
     expect(formatRange('2026-11-01T18:00:00Z', '2026-11-01T20:00:00Z', 'Europe/London')).toMatch(/^18:00–20:00 GMT/);
     expect(formatRange('2026-11-01T18:00:00Z', undefined, 'UTC')).toMatch(/^18:00 UTC/);
+    // an overnight event names the day it ends
+    expect(formatRange('2026-11-01T22:00:00Z', '2026-11-02T02:00:00Z', 'UTC')).toMatch(/^22:00–Mon 2 Nov, 02:00 UTC/);
   });
   it('returns empty on a bad zone', () => {
     expect(formatClock('2026-11-01T18:30:00Z', 'Bad/Zone')).toBe('');

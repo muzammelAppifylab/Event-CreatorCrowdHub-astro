@@ -3,7 +3,6 @@ import {describe, expect, it} from 'vitest';
 import {
   DEFAULT_RULE_COPY as UI_COPY,
   describeOffset,
-  embedCode,
   insertAtCursor,
   joinOffset,
   RULE_OFFSET_LIMITS as UI_LIMITS,
@@ -236,6 +235,8 @@ describe('portal helpers', () => {
 
   it('summarises a bulk result', () => {
     expect(summarizeBulk({action: 'approve', succeeded: ['a'], failed: []})).toEqual({ok: true, message: '1 guest approved.'});
+    expect(summarizeBulk({action: 'approve', succeeded: ['a', 'b'], failed: [], emailsQueued: 2})).toEqual({ok: true, message: '2 guests approved. 2 emails queued.'});
+    expect(summarizeBulk({action: 'decline', succeeded: ['a'], failed: [], emailsQueued: 1}).message).toBe('1 guest declined. 1 email queued.');
     expect(
       summarizeBulk({
         action: 'promote',
@@ -248,10 +249,8 @@ describe('portal helpers', () => {
     ).toEqual({ok: true, message: '2 guests promoted. 2 skipped: no seats left (1), has a payment (erase instead) (1).'});
   });
 
-  it('builds share links and an escaped embed', () => {
+  it('builds share links', () => {
     expect(shareUrl('whatsapp', 'https://x.test/e/a', 'A & B')).toContain('wa.me');
-    expect(embedCode('https://x.test/', 'a b', 'Say "hi"')).toContain('src="https://x.test/e/a%20b?embed=1"');
-    expect(embedCode('https://x.test', 'a', 'Say "hi"')).toContain('title="RSVP: Say &quot;hi&quot;"');
   });
 });
 
@@ -277,6 +276,8 @@ describe('guest data export (organiser)', () => {
       ticketOrder: {findMany: async () => []},
       pollVote: {findMany: async () => []},
       messageDelivery: {findMany: async () => []},
+      invite: {findMany: async () => []},
+      order: {findMany: async () => []},
     } as any;
     const doc = await guestExportById(db, 'e1', UUID, new Date('2026-10-30'));
     expect(doc?.rsvp.ticketCode).toBe('ABC12345');

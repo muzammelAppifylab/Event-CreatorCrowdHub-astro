@@ -6,12 +6,13 @@ import {decideSeat, seatsFor, seatsRemaining, type SeatDecision} from '../../dom
 import {ticketCode, withUniqueRetry} from '../../domain/codes';
 import {hashToken, newToken} from '../../domain/secureToken';
 import {formatInZone} from '../../domain/time';
-import {nextWaitlistPosition, planPromotions, renumberWaitlist, type WaitlistEntry} from '../../domain/waitlist';
+import {nextWaitlistPosition, type WaitlistEntry} from '../../domain/waitlist';
 import {confirmationEmail, manageLinkEmail} from '../../emails';
 import type {EmailContent, EmailData} from '../../emails/types';
 import type {Prisma} from '../../generated/prisma/client';
 import {
   type AnswerValue,
+  type EventUnavailable,
   type FieldErrors,
   type GuestRsvpView,
   type InviteView,
@@ -33,7 +34,11 @@ import {sendClaimEmail} from '../claim-mail';
 import {sendConsentEmail} from '../consent-mail';
 import {canSendEventEmail, sendEventEmail} from '../mailer';
 import {confirmationRuleFor} from '../jobs/guest-emails';
+// Locks the event row for the transaction (`SELECT … FOR UPDATE`), so seat counts and writes are atomic per event.
+import {lockEvent} from '../jobs/shared';
 import {MAX_PUBLIC_ATTENDEES, shapeAttendees} from '../../lib/guest-list';
+import {notFound} from '../validate';
+import {promoteWaitlist} from '../waitlist-promote';
 import {emitPromoted, emitWebhook, rsvpPayload} from '../webhook-emit';
 
 /**
@@ -184,6 +189,8 @@ const rsvpSelect = {
   seats: true,
   ticketCode: true,
   marketingConsent: true,
+  // Read so a reverted edit can put consent back exactly (never sent to the browser).
+  consentConfirmedAt: true,
   waitlistPosition: true,
   claimExpiresAt: true,
   confirmedAt: true,
@@ -222,11 +229,23 @@ async function liveInvite(db: PrismaClient | Tx, event: Pick<EventRow, 'id' | 'e
   return invite && invite.eventId === event.id && invite.status !== 'bounced' ? invite : null;
 }
 
-/** Seats held, grouped by ticket type, in one query. */
-async function seatCounts(db: PrismaClient | Tx, eventId: string) {
+/**
+ * The rows whose seats are taken: confirmed or paying, plus seats under an open paid-waitlist claim
+ * (offered to someone else, so not free; audit M-10, as `ticket-checkout.ts` counts them). ONE rule
+ * for the booking check (`seatsTakenExcept`) and the public "seats left" (`seatCounts`), so they match.
+ */
+export const seatsTakenWhere = (eventId: string, now: Date) =>
+  ({
+    eventId,
+    response: 'going',
+    OR: [{status: {in: HELD}}, {status: 'waitlisted', claimExpiresAt: {gt: now}}],
+  }) satisfies Prisma.RsvpWhereInput;
+
+/** Seats taken (`seatsTakenWhere`), grouped by ticket type, in one query. */
+async function seatCounts(db: PrismaClient | Tx, eventId: string, now: Date) {
   const rows = await db.rsvp.groupBy({
     by: ['ticketTypeId'],
-    where: {eventId, response: 'going', status: {in: HELD}},
+    where: seatsTakenWhere(eventId, now),
     _sum: {seats: true},
   });
   const byTicket = new Map<string, number>();
@@ -240,20 +259,21 @@ async function seatCounts(db: PrismaClient | Tx, eventId: string) {
 }
 
 async function buildView(db: PrismaClient | Tx, event: EventRow, now: Date): Promise<RsvpEventView> {
-  const counts = await seatCounts(db, event.id);
-  const left = seatsRemaining(event.capacity, counts.total);
   // Public guest list: only when the host switched it on; first names of confirmed, going guests (explicit select, bounded).
-  let attendees: {name: string; initials: string}[] | null = null;
-  let goingCount = 0;
-  if (event.showGuestList) {
-    const where = {eventId: event.id, response: 'going', status: 'confirmed'} as const;
-    const [rows, going] = await Promise.all([
-      db.rsvp.findMany({where, orderBy: [{confirmedAt: 'asc'}, {createdAt: 'asc'}], take: MAX_PUBLIC_ATTENDEES, select: {name: true}}),
-      db.rsvp.aggregate({where, _sum: {seats: true}}),
-    ]);
-    attendees = shapeAttendees(rows.map(r => r.name));
-    goingCount = going._sum.seats ?? 0;
-  }
+  // Independent reads go together.
+  const where = {eventId: event.id, response: 'going', status: 'confirmed'} as const;
+  const [counts, guestList] = await Promise.all([
+    seatCounts(db, event.id, now),
+    event.showGuestList
+      ? Promise.all([
+          db.rsvp.findMany({where, orderBy: [{confirmedAt: 'asc'}, {createdAt: 'asc'}], take: MAX_PUBLIC_ATTENDEES, select: {name: true}}),
+          db.rsvp.aggregate({where, _sum: {seats: true}}),
+        ])
+      : null,
+  ]);
+  const left = seatsRemaining(event.capacity, counts.total);
+  const attendees: {name: string; initials: string}[] | null = guestList ? shapeAttendees(guestList[0].map(r => r.name)) : null;
+  const goingCount = guestList ? (guestList[1]._sum.seats ?? 0) : 0;
   return {
     id: event.id,
     slug: event.slug,
@@ -420,32 +440,27 @@ export function place(i: PlaceInput): Placement {
 
 interface Changed {
   rsvp: RsvpRow;
-  /** Raw manage token: only for a NEW RSVP or a promotion (its link is re-issued). */
-  token: string | null;
-  /** A paid-waitlist claim offer (no token: `sendClaimEmail` issues the claim link). */
+  /** A paid-waitlist claim offer (`sendClaimEmail` issues the claim link). */
   claim?: boolean;
+  /** A free-event promotion: confirmed from the waitlist (its confirmation carries a fresh manage link). */
+  promoted?: boolean;
 }
 
-/** Locks the event row for the transaction, so seat counts and writes are atomic per event. */
-async function lockEvent(tx: Tx, eventId: string) {
-  await tx.$queryRaw`SELECT id FROM events WHERE id = ${eventId}::uuid FOR UPDATE`;
-}
-
-async function seatsTakenExcept(tx: Tx, eventId: string, exceptId?: string) {
+/**
+ * Seats taken (`seatsTakenWhere`) by guests other than `exceptId`. `ticketTypeId` narrows it to one
+ * ticket type (its quantity limit).
+ */
+async function seatsTakenExcept(tx: Tx, eventId: string, now: Date, exceptId?: string, ticketTypeId?: string) {
   const sum = await tx.rsvp.aggregate({
     _sum: {seats: true},
-    where: {eventId, response: 'going', status: {in: HELD}, ...(exceptId ? {id: {not: exceptId}} : {})},
+    where: {
+      ...seatsTakenWhere(eventId, now),
+      ...(exceptId ? {id: {not: exceptId}} : {}),
+      ...(ticketTypeId ? {ticketTypeId} : {}),
+    },
   });
   return sum._sum.seats ?? 0;
 }
-
-const waitlistOf = (tx: Tx, eventId: string): Promise<WaitlistEntry[]> =>
-  tx.rsvp.findMany({
-    select: {id: true, seats: true, waitlistPosition: true, createdAt: true, claimExpiresAt: true},
-    where: {eventId, status: 'waitlisted', response: 'going'},
-    orderBy: [{waitlistPosition: 'asc'}, {createdAt: 'asc'}, {id: 'asc'}],
-    take: 1000,
-  });
 
 async function loadPlaceInput(
   tx: Tx,
@@ -457,19 +472,19 @@ async function loadPlaceInput(
   // An edit keeps the ticket the guest has (the manage form can omit it).
   const ticketId = input.ticketTypeId ?? current?.ticketTypeId ?? null;
   const ticket = event.ticketTypes.find(t => t.id === ticketId) ?? null;
-  const ticketSeatsTaken = ticket
-    ? ((
-        await tx.rsvp.aggregate({
-          _sum: {seats: true},
-          where: {
-            ticketTypeId: ticket.id,
-            response: 'going',
-            status: {in: HELD},
-            ...(current ? {id: {not: current.id}} : {}),
-          },
-        })
-      )._sum.seats ?? 0)
-    : 0;
+  // Independent reads, together (all under the event lock taken by the caller).
+  const [ticketSeatsTaken, seatsTaken, waitlist] = await Promise.all([
+    ticket ? seatsTakenExcept(tx, event.id, now, current?.id, ticket.id) : Promise.resolve(0),
+    seatsTakenExcept(tx, event.id, now, current?.id),
+    // Only the back of the line is needed (a new guest joins after it): one row, not the whole waitlist,
+    // so the next position is right however long the line is.
+    tx.rsvp.findMany({
+      select: {id: true, seats: true, waitlistPosition: true, createdAt: true, claimExpiresAt: true},
+      where: {eventId: event.id, status: 'waitlisted', response: 'going', waitlistPosition: {not: null}},
+      orderBy: [{waitlistPosition: 'desc'}],
+      take: 1,
+    }),
+  ]);
   return {
     event,
     current,
@@ -477,9 +492,9 @@ async function loadPlaceInput(
     plusOnes: input.plusOnes,
     ticket,
     anyPaidTicket: event.ticketTypes.some(t => t.priceCents > 0),
-    seatsTaken: await seatsTakenExcept(tx, event.id, current?.id),
+    seatsTaken,
     ticketSeatsTaken,
-    waitlist: await waitlistOf(tx, event.id),
+    waitlist,
     paymentsEnabled: paidCheckout !== null,
     now,
   };
@@ -494,48 +509,39 @@ async function replaceAnswers(tx: Tx, rsvpId: string, answers: Record<string, An
 }
 
 /**
- * Fills freed seats from the waitlist (US-4) and closes position gaps. Runs after every write and is a
- * no-op when nothing changed. Promoted guests get a NEW manage link (the old token is only a hash).
- * Paid events offer a claim instead of confirming (`claimExpiresAt`); that offer's email is the
- * payments agent's job (it reads `claim_expires_at`).
+ * Fills freed seats from the waitlist (US-4) and closes position gaps: the shared, set-based
+ * `promoteWaitlist` (src/server/waitlist-promote.ts), which also respects each ticket type's
+ * quantity. Runs after every write and is a no-op when nothing changed. Free events confirm (the
+ * guest's link is re-issued only when the confirmation email actually goes out: `sendPromotions`);
+ * paid events offer a claim instead (`claimExpiresAt`, emailed by `sendClaimEmail`).
  */
 async function promote(tx: Tx, event: EventRow, now: Date): Promise<Changed[]> {
   if (event.status !== 'published' || now >= event.endAt) return [];
-  const waitlist = await waitlistOf(tx, event.id);
-  if (waitlist.length === 0) return [];
-  const kind = event.ticketTypes.some(t => t.priceCents > 0) ? 'paid' : 'free';
-  const plan = planPromotions({
-    entries: waitlist,
-    seatsAvailable: seatsRemaining(event.capacity, await seatsTakenExcept(tx, event.id)),
-    kind,
-    now,
+  const {promotions} = await promoteWaitlist(tx, event, now);
+  if (promotions.length === 0) return [];
+  const rows = await tx.rsvp.findMany({where: {id: {in: promotions.map(p => p.rsvpId)}, eventId: event.id}, select: rsvpSelect});
+  const byId = new Map(rows.map(r => [r.id, r]));
+  return promotions.flatMap(p => {
+    const rsvp = byId.get(p.rsvpId);
+    return rsvp ? [{rsvp, claim: p.kind === 'offer_claim', promoted: p.kind === 'confirm'}] : [];
   });
-  const changed: Changed[] = [];
-  const promoted = new Set<string>();
-  for (const p of plan.promotions) {
-    if (p.kind === 'confirm') {
-      promoted.add(p.rsvpId);
-      const token = newToken();
-      const rsvp = await tx.rsvp.update({
-        where: {id: p.rsvpId},
-        data: {status: 'confirmed', confirmedAt: now, waitlistPosition: null, claimExpiresAt: null, manageToken: hashToken(token)},
-        select: rsvpSelect,
-      });
-      changed.push({rsvp, token});
-    } else {
-      const rsvp = await tx.rsvp.update({where: {id: p.rsvpId}, data: {claimExpiresAt: p.claimExpiresAt}, select: rsvpSelect});
-      changed.push({rsvp, token: null, claim: true});
-    }
-  }
-  for (const r of renumberWaitlist(waitlist.filter(e => !promoted.has(e.id)))) {
-    await tx.rsvp.update({where: {id: r.id}, data: {waitlistPosition: r.waitlistPosition}, select: {id: true}});
-  }
-  return changed;
 }
 
+type InviteStatus = Prisma.InviteGetPayload<{select: {status: true}}>['status'];
+
 type Submitted =
-  | {created: true; rsvp: RsvpRow; token: string; promoted: Changed[]}
+  /** `inviteStatus`: the linked invite's status before this RSVP marked it `responded` (null: no invite). */
+  | {created: true; rsvp: RsvpRow; token: string; promoted: Changed[]; inviteStatus: InviteStatus | null}
   | {created: false; rsvp: RsvpRow};
+
+/**
+ * The status an invite goes back to when its new RSVP is discarded (audit M-1): what it was before
+ * the RSVP, else `sent` when it was sent, else `queued`. Never `responded`: no RSVP is left.
+ */
+export function inviteStatusAfterDiscard(previous: InviteStatus | null | undefined, sentAt: Date | null): InviteStatus {
+  if (previous && previous !== 'responded') return previous;
+  return sentAt ? 'sent' : 'queued';
+}
 
 async function submitRsvp(
   db: PrismaClient,
@@ -576,8 +582,13 @@ async function submitRsvp(
       select: rsvpSelect,
     });
     await replaceAnswers(tx, rsvp.id, input.answers);
-    if (inviteId) await tx.invite.update({where: {id: inviteId}, data: {status: 'responded'}, select: {id: true}});
-    return {created: true, rsvp, token, promoted: await promote(tx, event, now)};
+    let inviteStatus: InviteStatus | null = null;
+    if (inviteId) {
+      // Kept so a discarded RSVP (checkout could not start) can put the invite back (audit M-1).
+      inviteStatus = (await tx.invite.findUnique({where: {id: inviteId}, select: {status: true}}))?.status ?? null;
+      await tx.invite.update({where: {id: inviteId}, data: {status: 'responded'}, select: {id: true}});
+    }
+    return {created: true, rsvp, token, promoted: await promote(tx, event, now), inviteStatus};
   });
 }
 
@@ -598,6 +609,8 @@ async function updateRsvp(db: PrismaClient, rsvpId: string, input: RsvpFormInput
         plusOnes: input.plusOnes,
         seats: seatsFor(input.plusOnes),
         marketingConsent: input.marketingConsent,
+        // Unticking withdraws consent: its confirmation goes too, so ticking again needs a new one (audit L-41).
+        ...(input.marketingConsent ? {} : {consentConfirmedAt: null}),
         // A Maybe holds no seat and implies no ticket: it is dropped, so Going must choose (and pay for) one.
         ticketTypeId: input.response === 'maybe' ? null : (input.ticketTypeId ?? current.ticketTypeId),
         ...placement,
@@ -651,12 +664,9 @@ export async function confirmRsvpPayment(
     return {status: 'confirmed', confirmedAt: now, waitlistPosition: null, claimExpiresAt: null};
   });
   if (seated && out.previous.status === 'awaiting_payment') {
-    let token = manageToken;
-    if (!token) {
-      token = newToken();
-      await db.rsvp.update({where: {id: rsvpId}, data: {manageToken: hashToken(token)}, select: {id: true}});
-    }
-    await sendConfirmation(db, origin, out.event, out.rsvp, token);
+    // Without the guest's own token a new link is issued, but only if the email carrying it goes out.
+    if (manageToken) await sendConfirmation(db, origin, out.event, out.rsvp, manageToken);
+    else await sendConfirmationWithFreshLink(db, origin, out.event, out.rsvp);
   }
   await sendPromotions(db, origin, out.event, out.promoted);
   return {seated};
@@ -675,6 +685,9 @@ async function revertEdit(db: PrismaClient, previous: RsvpRow, origin: string): 
           waitlistPosition: previous.waitlistPosition,
           confirmedAt: previous.confirmedAt,
           claimExpiresAt: previous.claimExpiresAt,
+          // The whole edit is undone, consent included (and no consent email goes out for it).
+          marketingConsent: previous.marketingConsent,
+          consentConfirmedAt: previous.consentConfirmedAt,
         }
       : null
   );
@@ -703,7 +716,41 @@ export async function releaseRsvpHold(db: PrismaClient, rsvpId: string, origin: 
   await sendPromotions(db, origin, out.event, out.promoted);
 }
 
+/**
+ * Checkout could not start for a NEW RSVP: delete the row (the guest never had a seat or a page to
+ * show for it), so the same email can simply RSVP again (audit M-1). A row that already has an order
+ * is payment history: it is only released, like an expired hold.
+ */
+async function discardNewRsvp(db: PrismaClient, rsvpId: string, origin: string, inviteStatus: InviteStatus | null): Promise<void> {
+  const now = new Date();
+  const out = await db.$transaction(async tx => {
+    const found = await tx.rsvp.findUnique({where: {id: rsvpId}, select: {eventId: true, invite: {select: {id: true, sentAt: true}}}});
+    if (!found) return null;
+    await lockEvent(tx, found.eventId);
+    const gone = await tx.rsvp.deleteMany({where: {id: rsvpId, status: 'awaiting_payment', ticketOrders: {none: {}}, pollVotes: {none: {}}}});
+    if (gone.count === 0) return 'release' as const;
+    // The invite said `responded` for this RSVP: with the RSVP gone, put it back (still only if it says so).
+    if (found.invite) {
+      await tx.invite.updateMany({
+        where: {id: found.invite.id, status: 'responded'},
+        data: {status: inviteStatusAfterDiscard(inviteStatus, found.invite.sentAt)},
+      });
+    }
+    const event = await findEvent(tx, {id: found.eventId});
+    return event ? {event, promoted: await promote(tx, event, now)} : null;
+  });
+  if (out === 'release') return releaseRsvpHold(db, rsvpId, origin);
+  if (out) await sendPromotions(db, origin, out.event, out.promoted);
+}
+
 // ---------------------------------------------------------------- email
+
+/**
+ * The event's link for this guest: its public page, or for a PRIVATE event (whose page answers 404
+ * without an invite) the guest's own manage page, which shows the event (audit L-1).
+ */
+const eventLink = (origin: string, event: Pick<EventRow, 'slug' | 'visibility'>, token: string) =>
+  event.visibility === 'private' ? `${origin}/r/${token}/` : `${origin}/events/${event.slug}/`;
 
 async function emailDataFor(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow, token: string): Promise<EmailData> {
   const settings = await db.eventSettings.findUnique({where: {id: 1}, select: {senderName: true, replyToEmail: true, brandColor: true}});
@@ -732,7 +779,7 @@ async function emailDataFor(db: PrismaClient, origin: string, event: EventRow, r
       venueAddress: event.venueAddress,
       mapUrl: event.mapUrl,
       joinUrl: event.joinUrl,
-      pageUrl: `${origin}/events/${event.slug}/`,
+      pageUrl: eventLink(origin, event, token),
       pollUrl: null,
       thankYouLink: event.thankYouLink,
     },
@@ -750,16 +797,56 @@ async function emailDataFor(db: PrismaClient, origin: string, event: EventRow, r
   };
 }
 
+type GuestEmailKind = 'confirmation' | 'manage-link';
+
+/**
+ * The provider's idempotency key for one inline guest email: the same (kind, RSVP, status, link) is
+ * sent once; a new link (every fresh-link send) or a new status is a new email. The raw token never
+ * leaves the server: only a hash of it, derived apart from the stored `manageToken` hash.
+ */
+export function guestEmailKey(kind: GuestEmailKind, rsvpId: string, status: string, token: string): string {
+  return `rsvp-${kind}:${rsvpId}:${status}:${hashToken(`idempotency:${token}`).slice(0, 32)}`;
+}
+
 async function sendGuestEmail(
   db: PrismaClient,
   origin: string,
   event: EventRow,
   rsvp: RsvpRow,
   token: string,
+  kind: GuestEmailKind,
   template: (data: EmailData) => EmailContent
 ) {
   const data = await emailDataFor(db, origin, event, rsvp, token);
-  await sendEventEmail({to: rsvp.email, content: template(data), fromName: data.brand.senderName, replyTo: data.brand.replyToEmail});
+  return sendEventEmail({
+    to: rsvp.email,
+    content: template(data),
+    fromName: data.brand.senderName,
+    replyTo: data.brand.replyToEmail,
+    idempotencyKey: guestEmailKey(kind, rsvp.id, rsvp.status, token),
+  });
+}
+
+/**
+ * Emails the guest a NEW manage link (older links die) with `template`. Without a mail provider the
+ * new link could not reach the guest, so nothing changes and their working link stays (audit M-8);
+ * the new token is stored only once the email carrying it was accepted, so a failed send never kills
+ * the old link either. The write is conditional on the RSVP still having this email (an erased row
+ * never gets a working link back).
+ */
+async function sendWithFreshLink(
+  db: PrismaClient,
+  origin: string,
+  event: EventRow,
+  rsvp: RsvpRow,
+  kind: GuestEmailKind,
+  template: (data: EmailData) => EmailContent
+): Promise<boolean> {
+  if (!canSendEventEmail()) return false;
+  const token = newToken();
+  const sent = await sendGuestEmail(db, origin, event, rsvp, token, kind, template);
+  if (sent) await db.rsvp.updateMany({where: {id: rsvp.id, email: rsvp.email}, data: {manageToken: hashToken(token)}});
+  return sent;
 }
 
 /**
@@ -767,14 +854,25 @@ async function sendGuestEmail(
  * off, their edited copy when set. Only a confirmed guest is governed by the rule; waitlist, pending
  * and awaiting-payment mails explain the guest's status and always go out.
  */
-async function sendConfirmation(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow, token: string) {
+async function confirmationTemplate(db: PrismaClient, event: EventRow, rsvp: RsvpRow): Promise<((data: EmailData) => EmailContent) | null> {
   let copy: {subject: string; body: string} | null = null;
   if (rsvp.status === 'confirmed') {
     const rule = await confirmationRuleFor(db, event.id);
-    if (rule.skip) return;
+    if (rule.skip) return null;
     copy = rule.copy;
   }
-  await sendGuestEmail(db, origin, event, rsvp, token, data => confirmationEmail(data, copy));
+  return data => confirmationEmail(data, copy);
+}
+
+async function sendConfirmation(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow, token: string) {
+  const template = await confirmationTemplate(db, event, rsvp);
+  if (template) await sendGuestEmail(db, origin, event, rsvp, token, 'confirmation', template);
+}
+
+/** The confirmation when the caller has no raw token: it carries a new link, issued only if it is sent. */
+async function sendConfirmationWithFreshLink(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow) {
+  const template = await confirmationTemplate(db, event, rsvp);
+  if (template) await sendWithFreshLink(db, origin, event, rsvp, 'confirmation', template);
 }
 
 const sendPromotions = (db: PrismaClient, origin: string, event: EventRow, changed: Changed[]) =>
@@ -782,32 +880,55 @@ const sendPromotions = (db: PrismaClient, origin: string, event: EventRow, chang
     changed.flatMap((c): Promise<unknown>[] =>
       c.claim
         ? [sendClaimEmail(db, c.rsvp.id, {origin})]
-        : c.token
-          ? [sendConfirmation(db, origin, event, c.rsvp, c.token)]
+        : c.promoted
+          ? [sendConfirmationWithFreshLink(db, origin, event, c.rsvp)]
           : []
     )
   );
 
-/** Rotates the guest's token (older links die) and emails the new one; capped per (event, email). */
+/** Emails a new link (older links die), capped per (event, email); see `sendWithFreshLink`. */
 async function mailManageLink(db: PrismaClient, origin: string, event: EventRow, rsvp: RsvpRow) {
-  // Without a mail provider the new link could not reach the guest: keep their working one.
   if (!canSendEventEmail() || !hit(`mail:${event.id}:${rsvp.email}`, EMAIL_CAP.limit, EMAIL_CAP.windowMs)) return;
-  const token = newToken();
-  await db.rsvp.update({where: {id: rsvp.id}, data: {manageToken: hashToken(token)}, select: {id: true}});
-  await sendGuestEmail(db, origin, event, rsvp, token, manageLinkEmail);
+  await sendWithFreshLink(db, origin, event, rsvp, 'manage-link', manageLinkEmail);
 }
 
 // ---------------------------------------------------------------- manage token
 
-async function fromManageToken(db: PrismaClient, token: string, access: 'read' | 'write') {
-  const rsvp = await db.rsvp.findUnique({where: {manageToken: hashToken(token)}, select: rsvpSelect});
-  if (!rsvp) return null;
-  const event = await findEvent(db, {id: rsvp.eventId});
-  if (!event || !manageTokenAllows(event.endAt, access, new Date())) return null;
-  return {rsvp, event};
+/** Guests see an event only while it is published or cancelled and not deleted (as `findEvent`). */
+const guestVisible = (event: {status: string; deletedAt: Date | null}) =>
+  event.deletedAt === null && (event.status === 'published' || event.status === 'cancelled');
+
+/**
+ * A valid link whose event the host has unpublished or deleted: 410 with only the event's title, which
+ * the link's holder already knows. No guest data and nothing to edit. An unknown token stays a 404.
+ */
+const eventUnavailable = (c: Context, title: string) =>
+  c.json({error: 'event_unavailable', message: 'This event is no longer available.', event: {title}} satisfies EventUnavailable, 410);
+
+/**
+ * The RSVP and its event in ONE query (same rules as `findEvent`: published or cancelled, not deleted).
+ * `unavailable`: the token is valid but the event is now a draft or deleted (the route answers 410).
+ */
+async function fromManageToken(
+  db: PrismaClient,
+  token: string,
+  access: 'read' | 'write'
+): Promise<{rsvp: RsvpRow; event: EventRow; unavailable?: undefined} | {unavailable: {title: string}} | null> {
+  const found = await db.rsvp.findUnique({
+    where: {manageToken: hashToken(token)},
+    select: {...rsvpSelect, event: {select: {...eventSelect, deletedAt: true}}},
+  });
+  if (!found) return null;
+  const {event: withDeleted, ...rsvp} = found;
+  const {deletedAt, ...event} = withDeleted;
+  if (!guestVisible({status: event.status, deletedAt})) {
+    // Same lifetime as a readable link: a long-dead token stays a plain 404.
+    return manageTokenAllows(event.endAt, 'read', new Date()) ? {unavailable: {title: event.title}} : null;
+  }
+  if (!manageTokenAllows(event.endAt, access, new Date())) return null;
+  return {rsvp: rsvp as RsvpRow, event: event as EventRow};
 }
 
-const notFound = (c: Context, what = 'RSVP') => c.json(problem('not_found', `${what} not found.`), 404);
 
 function fail(c: Context, err: unknown) {
   if (err instanceof RsvpError) {
@@ -838,7 +959,7 @@ const inviteParam = validator('param', (value, c) => {
   return typeof token === 'string' && INVITE_RE.test(token) ? {token} : c.json(problem('not_found', 'Invite not found.'), 404);
 });
 const inviteQuery = validator('query', value => ({
-  invite: typeof value.invite === 'string' ? value.invite.slice(0, 128) : '',
+  invite: typeof value.invite === 'string' ? value.invite.slice(0, 600) : '',
 }));
 /** A JSON object (the field-by-field check needs the event's rules, so it runs in the handler). */
 const objectBody = validator('json', (value, c) =>
@@ -873,6 +994,8 @@ export const rsvpRoutes = new Hono()
   })
 
   .post('/events/:slug', slugParam, objectBody, withDb, async c => {
+    // Every answer from here carries the same headers, so a new and a repeat RSVP look alike (audit L-6).
+    privateHeaders(c);
     if (!hit(`rsvp:${clientIp(c)}`, RSVP_LIMIT.limit, RSVP_LIMIT.windowMs)) {
       return c.json(problem('rate_limited', 'Too many RSVPs. Try again in a minute.'), 429);
     }
@@ -891,9 +1014,24 @@ export const rsvpRoutes = new Hono()
     if (!parsed.ok) return c.json({...problem('validation_failed', 'Some fields need attention.'), fields: parsed.fields}, 422);
     const utm = typeof raw.utmSource === 'string' ? raw.utmSource.slice(0, 80) : null;
 
+    // An invite is for the person it was sent to (audit M-5): on a private event only that email may
+    // RSVP with it, so a forwarded link can't let anyone else in (one invite, one guest: emails are
+    // unique per event). The invite's holder already sees that address on the invite page. On a public
+    // or unlisted event anyone may RSVP anyway: a different email simply isn't credited to the invite.
+    let inviteId = invite?.id ?? null;
+    if (invite && parsed.value.email !== invite.email.trim().toLowerCase()) {
+      if (event.visibility === 'private') {
+        return c.json(
+          {...problem('validation_failed', 'Some fields need attention.'), fields: {email: 'Use the email address this invite was sent to.'}},
+          422
+        );
+      }
+      inviteId = null;
+    }
+
     let out: Submitted;
     try {
-      out = await submitRsvp(db, event.id, parsed.value, invite?.id ?? null, {utm}, now);
+      out = await submitRsvp(db, event.id, parsed.value, inviteId, {utm}, now);
     } catch (err) {
       return fail(c, err);
     }
@@ -909,7 +1047,8 @@ export const rsvpRoutes = new Hono()
       // HOOK: paid ticket. The seat is held; the payments agent starts the checkout, and a failure frees the seat.
       checkoutUrl = await startPayment(origin, event, rsvp, token);
       if (!checkoutUrl) {
-        await releaseRsvpHold(db, rsvp.id, origin).catch(() => undefined);
+        // Undo the new RSVP entirely, so this email isn't stuck with a cancelled row (audit M-1).
+        await discardNewRsvp(db, rsvp.id, origin, out.inviteStatus).catch(err => console.error('[rsvp] could not discard unpaid RSVP', rsvp.id, err instanceof Error ? err.message : 'failed'));
         return c.json(problem('payments_unavailable', RSVP_CONFLICTS.payments_unavailable!), 409);
       }
     }
@@ -924,12 +1063,12 @@ export const rsvpRoutes = new Hono()
     // Same status and shape as a repeat RSVP (no existence oracle): the manage link, the only way to the
     // guest's page, goes to their inbox and never into this response. Only a paid RSVP adds the pay link.
     const body: RsvpSubmitResult = {...CHECK_EMAIL, checkoutUrl};
-    privateHeaders(c);
     return c.json(body, 202);
   })
 
   // "Lost my link": always 202, so it can't tell anyone whether an email has RSVP'd.
   .post('/events/:slug/manage-link', slugParam, emailBody, withDb, async c => {
+    privateHeaders(c);
     if (!hit(`link:${clientIp(c)}`, 10, 60_000)) return c.json(problem('rate_limited', 'Too many requests. Try again in a minute.'), 429);
     const db = c.var.db;
     const event = await findEvent(db, {slug: c.req.valid('param').slug});
@@ -944,16 +1083,21 @@ export const rsvpRoutes = new Hono()
     const db = c.var.db;
     const now = new Date();
     privateHeaders(c);
+    // The invite and its event in ONE query; the event is checked here with `findEvent`'s rules.
     const found = await db.invite.findUnique({
       where: {token: c.req.valid('param').token},
-      select: {id: true, eventId: true, email: true, name: true, status: true, token: true},
+      select: {id: true, eventId: true, email: true, name: true, status: true, token: true, event: {select: {...eventSelect, deletedAt: true}}},
     });
-    const event = found ? await findEvent(db, {id: found.eventId}) : null;
-    if (!found || !event || found.status === 'bounced' || now >= event.endAt) return notFound(c, 'Invite');
+    if (!found || found.status === 'bounced') return notFound(c, 'Invite');
+    const {deletedAt, ...event} = found.event;
+    // A live invite whose event the host unpublished or deleted: a friendly "no longer available" (410).
+    if (!guestVisible({status: event.status, deletedAt})) return eventUnavailable(c, event.title);
+    if (now >= event.endAt) return notFound(c, 'Invite');
     const existing = await db.rsvp.findUnique({where: {eventId_email: {eventId: event.id, email: found.email.toLowerCase()}}, select: {id: true}});
     const view = await buildView(db, event, now);
     const body: InviteView = {
-      event: {...view, description: event.description, venueName: event.venueName, venueAddress: event.venueAddress},
+      // `visibility`: a private event takes an RSVP only from the invited address, so the form locks its email (M-5).
+      event: {...view, description: event.description, venueName: event.venueName, venueAddress: event.venueAddress, visibility: event.visibility},
       invite: {name: found.name, email: found.email.toLowerCase(), token: found.token},
       // A repeat visit never reveals the guest's manage token (only its hash is stored).
       alreadyResponded: existing !== null,
@@ -965,7 +1109,8 @@ export const rsvpRoutes = new Hono()
     const db = c.var.db;
     privateHeaders(c);
     const found = await fromManageToken(db, c.req.valid('param').token, 'read');
-    if (!found) return notFound(c);
+    if (!found) return notFound(c, 'RSVP');
+    if (found.unavailable) return eventUnavailable(c, found.unavailable.title);
     const {rsvp, event} = found;
     const now = new Date();
     const answerRows = await db.rsvpAnswer.findMany({where: {rsvpId: rsvp.id}, select: {questionId: true, value: true}, take: 100});
@@ -986,7 +1131,7 @@ export const rsvpRoutes = new Hono()
         format: event.format,
         // The private join link is for confirmed guests only (US-2).
         joinUrl: confirmed && rsvp.response === 'going' ? event.joinUrl : null,
-        pageUrl: `${origin}/events/${event.slug}/`,
+        pageUrl: eventLink(origin, event, c.req.valid('param').token),
       },
       rsvp: {
         name: rsvp.name,
@@ -1000,13 +1145,15 @@ export const rsvpRoutes = new Hono()
         marketingConsent: rsvp.marketingConsent,
         waitlistPosition: rsvp.status === 'waitlisted' ? rsvp.waitlistPosition : null,
         answers,
-        canEdit: manageTokenAllows(event.endAt, 'write', now) && rsvp.status !== 'cancelled' && event.status !== 'cancelled',
+        // A declined or cancelled guest may re-open their RSVP from this page (audit M-11): placement treats it as new.
+        canEdit: manageTokenAllows(event.endAt, 'write', now) && event.status !== 'cancelled',
       },
       calendar: {
         icsPath: `/site-api/rsvp/manage/${c.req.valid('param').token}/calendar.ics`,
         googleUrl: googleCalendarUrl({
           title: event.title,
-          description: `${origin}/events/${event.slug}/`,
+          // A Google link is an outside URL: never the manage token in it (a private event gets no link).
+          description: event.visibility === 'private' ? null : `${origin}/events/${event.slug}/`,
           startAt: event.startAt,
           endAt: event.endAt,
           location: [event.venueName, event.venueAddress].filter(Boolean).join(', ') || (event.format === 'in_person' ? null : 'Online'),
@@ -1024,7 +1171,8 @@ export const rsvpRoutes = new Hono()
     const db = c.var.db;
     privateHeaders(c);
     const found = await fromManageToken(db, c.req.valid('param').token, 'write');
-    if (!found) return notFound(c);
+    if (!found) return notFound(c, 'RSVP');
+    if (found.unavailable) return eventUnavailable(c, found.unavailable.title);
     // The email is the RSVP's identity: it never changes here.
     const parsed = validateRsvp(c.req.valid('json'), rulesOf(found.event), {fixedEmail: found.rsvp.email});
     if (!parsed.ok) return c.json({...problem('validation_failed', 'Some fields need attention.'), fields: parsed.fields}, 422);
@@ -1035,13 +1183,15 @@ export const rsvpRoutes = new Hono()
         // A move to a seat on a paid ticket (e.g. Maybe -> Going) pays exactly like a fresh RSVP.
         checkoutUrl = await startPayment(originOf(c), found.event, out.rsvp, c.req.valid('param').token);
         if (!checkoutUrl) {
-          await revertEdit(db, out.previous, originOf(c)).catch(() => undefined);
+          await revertEdit(db, out.previous, originOf(c)).catch(err => console.error('[rsvp] could not revert paid edit', out.previous.id, err instanceof Error ? err.message : 'failed'));
           return c.json(problem('payments_unavailable', RSVP_CONFLICTS.payments_unavailable!), 409);
         }
       }
       background(c, sendPromotions(db, originOf(c), found.event, out.promoted));
       emitWebhook(c, db, out.rsvp.status === 'cancelled' ? 'rsvp.cancelled' : 'rsvp.updated', rsvpPayload(out.rsvp));
       emitPromoted(c, db, out.promoted);
+      // Newly ticked "send me updates": the inbox owner confirms it (double opt-in, as a new RSVP does).
+      if (out.rsvp.marketingConsent && !out.previous.marketingConsent) background(c, sendConsentEmail(db, out.rsvp.id, {origin: originOf(c)}));
       // Tell the guest when their status changed (a new seat, the waitlist, awaiting approval). Same link.
       if (out.rsvp.status !== out.previous.status && out.rsvp.status !== 'awaiting_payment') {
         background(c, sendConfirmation(db, originOf(c), found.event, out.rsvp, c.req.valid('param').token));
@@ -1056,7 +1206,8 @@ export const rsvpRoutes = new Hono()
     const db = c.var.db;
     privateHeaders(c);
     const found = await fromManageToken(db, c.req.valid('param').token, 'write');
-    if (!found) return notFound(c);
+    if (!found) return notFound(c, 'RSVP');
+    if (found.unavailable) return eventUnavailable(c, found.unavailable.title);
     try {
       const out = await transition(db, found.rsvp.id, current =>
         current.status === 'cancelled' ? null : {status: 'cancelled', waitlistPosition: null, claimExpiresAt: null}
@@ -1074,19 +1225,20 @@ export const rsvpRoutes = new Hono()
     const db = c.var.db;
     privateHeaders(c);
     const found = await fromManageToken(db, c.req.valid('param').token, 'read');
-    if (!found) return notFound(c);
+    if (!found) return notFound(c, 'RSVP');
+    if (found.unavailable) return eventUnavailable(c, found.unavailable.title);
     const {rsvp, event} = found;
     const gone = event.status === 'cancelled' || rsvp.status === 'cancelled' || rsvp.status === 'declined';
     const settings = await db.eventSettings.findUnique({where: {id: 1}, select: {senderName: true, replyToEmail: true}});
     const ics = buildIcs({
       uid: icsUid(rsvp.id),
       title: event.title,
-      description: `${originOf(c)}/events/${event.slug}/`,
+      description: eventLink(originOf(c), event, c.req.valid('param').token),
       startAt: event.startAt,
       endAt: event.endAt,
       timezone: event.timezone,
       location: [event.venueName, event.venueAddress].filter(Boolean).join(', ') || null,
-      url: `${originOf(c)}/events/${event.slug}/`,
+      url: eventLink(originOf(c), event, c.req.valid('param').token),
       organizerName: settings?.senderName || null,
       organizerEmail: settings?.replyToEmail || null,
       method: gone ? 'CANCEL' : 'PUBLISH',

@@ -1,11 +1,11 @@
 import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
-import {useParams} from '@tanstack/react-router';
+import {Link, useParams} from '@tanstack/react-router';
 import {useCallback, useEffect} from 'react';
 
 import {nextPollToOpen} from '../../domain/polls';
 import {type AdminPoll, closePoll, exportPollCsv, formatJoinCode, openPoll, presenterPollsQuery} from '../polls-queries';
 import {QrCode} from '../qr';
-import {BarChart, Button, EmptyState, ErrorNote, LoadingBlock, StatusBadge, Stat, useToast} from '../ui';
+import {BarChart, Button, buttonClass, EmptyState, Icon, ErrorNote, LoadingBlock, StatusBadge, Stat, useToast} from '../ui';
 
 /** The poll on screen: the open one, else the last opened (its final results), else the first. */
 function displayed(polls: AdminPoll[]): AdminPoll | null {
@@ -99,6 +99,9 @@ export function PollPresenter({code: codeProp}: {code?: string}) {
     <div className="app-page screen-poll-present">
       <header className="poll-present-top">
         <div className="toolbar-group">
+          <Link className={buttonClass({variant: 'ghost', size: 'sm'})} to={`/events/${event.id}` as never} search={{tab: 'polls'} as never}>
+            <Icon name="arrow-left" size={16} /> Back to event
+          </Link>
           {shown && (
             <StatusBadge tone={shown.status === 'open' ? 'success' : 'neutral'}>
               {shown.status === 'open' ? 'Open' : shown.status === 'closed' ? 'Closed' : 'Draft'}

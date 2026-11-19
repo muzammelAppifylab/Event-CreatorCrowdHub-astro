@@ -13,3 +13,16 @@
 .screen-poll-present .poll-present-answers { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); font-size: clamp(1.1rem, 2vw, 1.6rem); font-weight: 600; }
 .screen-poll-present .poll-present-answers li { padding: 1rem 1.25rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
 .screen-poll-present .poll-present-note { font-size: 1.5rem; }
+
+/* Polls tab: how guests join, the actions, and the result bars in the table. */
+.screen-polls .polls-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.screen-polls .polls-join { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; padding: 1rem 1.25rem; flex: 1 1 26rem; max-width: 40rem; }
+.screen-polls .polls-join-text { display: grid; gap: 0.15rem; flex: 1 1 14rem; min-width: 0; }
+.screen-polls .polls-join-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.screen-polls .polls-join-code { font-family: var(--font-mono); font-size: 1.75rem; letter-spacing: 0.08em; line-height: 1.2; }
+.screen-polls .polls-join-url { font-weight: 600; overflow-wrap: anywhere; }
+.screen-polls .polls-actions { align-self: center; }
+.screen-polls .poll-result-bars { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.4rem; max-width: 28rem; }
+.screen-polls .poll-result-row { display: grid; grid-template-columns: minmax(3rem, 8rem) 1fr 4.5rem; align-items: center; gap: 0.75rem; font-size: 0.875rem; }
+.screen-polls .poll-result-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.screen-polls .poll-result-value { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }

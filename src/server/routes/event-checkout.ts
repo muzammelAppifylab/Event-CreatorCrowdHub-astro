@@ -17,6 +17,12 @@ import {startTicketCheckout} from '../ticket-checkout';
  * the same shape as `/site-api/checkout`: `{id, redirectUrl, embedded}`; the page sends the buyer to
  * `redirectUrl` (`/checkout/?id=…`) where `EmbeddedCheckout` takes the payment. The thanks page
  * confirms the payment (`GET /site-api/checkout/:id` runs the paid hook).
+ *
+ * Never charged twice (docs/agent/orders-and-stock.md): every start sends the platform an
+ * idempotency key made from the RSVP and the attempt (`ticketAttemptKey`), so a double click, a
+ * retry or a second tab answer the SAME checkout. An attempt that was already paid answers
+ * `{id, redirectUrl: '/thanks/?checkout=…', embedded: null, paid: true}` (nothing new charged);
+ * the same attempt still starting answers 409 `checkout_in_progress` ("try again in a moment").
  * Mount in app.ts AFTER csrf: `.route('/event-checkout', eventCheckoutRoutes)`.
  */
 const TOKEN = /^[A-Za-z0-9_-]{20,128}$/;
@@ -47,6 +53,6 @@ export const eventCheckoutRoutes = new Hono().post(
     const started = await startTicketCheckout(c.var.db, rsvp.id, {requestUrl: c.req.url});
     c.header('Cache-Control', 'private, no-store');
     if (!started.ok) return c.json(problem(started.code, started.message), started.status);
-    return c.json({id: started.checkoutId, redirectUrl: started.redirectUrl, embedded: started.embedded});
+    return c.json({id: started.checkoutId, redirectUrl: started.redirectUrl, embedded: started.embedded, ...(started.paid ? {paid: true} : {})});
   },
 );

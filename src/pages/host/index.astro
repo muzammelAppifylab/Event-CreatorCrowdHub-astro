@@ -12,10 +12,15 @@ import Base from '../../layouts/Base.astro';
 import {initials} from '../../lib/format';
 import {guestCopy} from '../../lib/guest-format';
 import type {EventsPage} from '../../lib/types';
+import {parseKeysetCursor} from '../../lib/text';
 import {backend, read} from '../../server/backend';
 import {pageContext} from '../../server/page';
 
-const before = Astro.url.searchParams.get('before') ?? undefined;
+// A crafted or broken `?before=` cursor is the visitor's error (400), not an outage (503):
+// show the first page with that status instead of asking the API.
+const rawBefore = Astro.url.searchParams.get('before') ?? undefined;
+const badCursor = parseKeysetCursor(rawBefore) === 'invalid';
+const before = badCursor ? undefined : rawBefore;
 const api = backend(Astro.request);
 const [{site, viewer}, result, brand, pastResult] = await Promise.all([
   pageContext(Astro.request, Astro.response),
@@ -25,7 +30,8 @@ const [{site, viewer}, result, brand, pastResult] = await Promise.all([
 ]);
 const past = pastResult?.events ?? [];
 const events = result?.events ?? [];
-if (!result) Astro.response.status = 503;
+if (badCursor) Astro.response.status = 400;
+else if (!result) Astro.response.status = 503;
 const color = brand?.brandColor && /^#[0-9a-fA-F]{6}$/.test(brand.brandColor) ? brand.brandColor : null;
 const name = site?.name ?? 'Our events';
 ---
@@ -73,7 +79,7 @@ const name = site?.name ?? 'Our events';
       {
         result?.next && (
           <nav class="g-pager" aria-label="More events">
-            <a class="g-btn g-btn-outline g-btn-lg" href={`/host/?before=${encodeURIComponent(result.next)}`} data-astro-prefetch>
+            <a class="g-btn g-btn-outline g-btn-lg" href={`/host/?before=${encodeURIComponent(result.next)}`}>
               Later events
               <GIcon name="arrow-right" />
             </a>

@@ -2,7 +2,6 @@ import {describe, expect, it} from 'vitest';
 
 import {
   describeOffset,
-  embedCode,
   insertAtCursor,
   joinOffset,
   shareText,
@@ -65,13 +64,6 @@ describe('ported share kit', () => {
     const fb = new URL(shareUrl('facebook', url, title));
     expect(fb.pathname).toBe('/sharer/sharer.php');
     expect(fb.searchParams.get('u')).toBe(url);
-  });
-  it('embed code escapes attributes', () => {
-    const code = embedCode('https://events.example.com/', 'pricing-workshop', 'The "Big" <Show>');
-    expect(code).toContain('src="https://events.example.com/e/pricing-workshop?embed=1"');
-    expect(code).toContain('title="RSVP: The &quot;Big&quot; &lt;Show&gt;"');
-    expect(code.startsWith('<iframe ')).toBe(true);
-    expect(code.endsWith('></iframe>')).toBe(true);
   });
 });
 

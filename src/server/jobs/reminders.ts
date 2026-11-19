@@ -1,9 +1,10 @@
 import {appConfig} from '../../config/app.config';
 import {deliveryKey, dueReminders, type ReminderRule} from '../../domain/reminders';
 import {addMinutes} from '../../domain/time';
-import {creatorEmail} from '../../emails';
-import {claimDelivery, sendClaimed, type SendFn} from './deliveries';
-import {type Db, loadGuestMail, PERMANENT_ERROR_PREFIX, STALE_CLAIM_MINUTES} from './shared';
+import {creatorEmail, type EmailBrand} from '../../emails';
+import {loadBrand} from '../guest-mail';
+import {claimDelivery, retryableNow, sendClaimed, type SendFn} from './deliveries';
+import {type Db, loadGuestMail, PERMANENT_ERROR_PREFIX, siteBase, STALE_CLAIM_MINUTES} from './shared';
 
 /** Reminders go at most 14 days before the start, thank-yous at most 7 days after the end (+ late allowance). */
 const LEAD_MINUTES = 14 * 24 * 60 + appConfig.reminderWindowMinutes;
@@ -22,8 +23,9 @@ export interface ReminderRun {
 /**
  * Reminders, "we're live" and thank-yous. `dueReminders` (pure) decides what is due; for each
  * (rsvp, rule) pair we CLAIM a message_deliveries row first (unique rsvp+rule: only one run
- * wins), then send, then mark it sent or failed. Running twice sends once; a failed send is
- * due again next run while the domain still says it is due; a crash between claim and send is
+ * wins), then send, then mark it sent or failed. Running twice sends once; a failed send is tried
+ * again after a backoff (1, 2, 4, 8 min) while the domain still says it is due, at most MAX_DELIVERY_ATTEMPTS
+ * times, then it is permanent; a crash between claim and send is
  * re-claimed after STALE_CLAIM_MINUTES. `budget` bounds the sends per run; the rest is due again.
  */
 export async function runReminders(
@@ -45,6 +47,13 @@ export async function runReminders(
     take: EVENT_LIMIT,
   });
   const staleBefore = addMinutes(now, -STALE_CLAIM_MINUTES);
+  // The sender identity is the same for every email of this run: read it once, at the first send.
+  let brand: Promise<EmailBrand> | null = null;
+  const brandOnce = () =>
+    (brand ??= loadBrand(db, siteBase()).catch(error => {
+      brand = null; // a failed read is tried again for the next guest
+      throw error;
+    }));
 
   for (const event of events) {
     const rules = await db.reminderRule.findMany({
@@ -67,15 +76,16 @@ export async function runReminders(
       if (guests.length === 0) break;
       after = guests[guests.length - 1]!.id;
 
-      // What this page of guests already has: sent, fresh claims, permanent failures.
+      // What this page of guests already has: sent, fresh claims, failures that are permanent, at the
+      // attempt cap or still in their backoff (audit M-19: never one send per tick forever).
       const known = await db.messageDelivery.findMany({
         where: {rsvpId: {in: guests.map(g => g.id)}, reminderRuleId: {in: rules.map(r => r.id)}},
-        select: {rsvpId: true, reminderRuleId: true, status: true, error: true, sentAt: true},
+        select: {rsvpId: true, reminderRuleId: true, status: true, error: true, sentAt: true, attempts: true},
       });
       const delivered = new Set<string>();
       for (const d of known) {
         if (!d.rsvpId || !d.reminderRuleId) continue;
-        const final = d.status === 'sent' || (d.status === 'failed' && (d.error ?? '').startsWith(PERMANENT_ERROR_PREFIX));
+        const final = d.status === 'sent' || (d.status === 'failed' && !retryableNow(d, now));
         const freshClaim = d.status === 'queued' && d.sentAt !== null && d.sentAt > staleBefore;
         if (final || freshClaim) delivered.add(deliveryKey(d.rsvpId, d.reminderRuleId));
       }
@@ -92,7 +102,8 @@ export async function runReminders(
       run.due += due.length;
 
       for (const item of due) {
-        if (budget <= 0) return run;
+        // L-16: the run's deadline holds inside a page of guests too (each send may take seconds).
+        if (budget <= 0 || (options.deadline !== undefined && Date.now() >= options.deadline)) return run;
         budget -= 1;
         let deliveryId: string | null = null;
         // One guest's failure never stops the batch; its error lands on its own row.
@@ -102,7 +113,7 @@ export async function runReminders(
             run.skipped += 1;
             continue;
           }
-          const mail = await loadGuestMail(db, item.rsvpId, now);
+          const mail = await loadGuestMail(db, item.rsvpId, now, {brand: await brandOnce()});
           const rule = ruleById.get(item.ruleId)!;
           if (!mail || rule.kind === 'confirmation') {
             // The guest or event vanished between the read and now: nothing to send, never retried.

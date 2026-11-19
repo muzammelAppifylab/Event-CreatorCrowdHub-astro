@@ -2,8 +2,9 @@ import {Hono} from 'hono';
 import {validator} from 'hono/validator';
 
 import {renderTemplate} from '../../domain/mergeTags';
+import {keysetAfter} from '../../lib/text';
 import {confirmationEmail, creatorEmail, type CreatorCopy} from '../../emails';
-import type {PrismaClient} from '../../generated/prisma/client';
+import type {Prisma, PrismaClient} from '../../generated/prisma/client';
 import {audit} from '../../platform/auth';
 import {problem, requireAuth, requirePermission, withDb, withViewer} from '../../platform/guards';
 import {
@@ -13,10 +14,10 @@ import {
   type MailEvent,
   type MailGuest,
   publicBase,
-  sendMail,
 } from '../guest-mail';
+import {enqueueGuestEmails, kickGuestEmails} from '../jobs/outbox';
 import {PERMISSIONS} from '../permissions';
-import {isUuid} from './admin-invites';
+import {isUuid, notFound, parsePageCursor} from '../validate';
 
 /**
  * Messages for event organisers (`site:event:manage`): broadcasts to guest
@@ -34,11 +35,16 @@ import {isUuid} from './admin-invites';
  *   DELETE /events/:eventId/messages/rules/:ruleId
  *
  * Consent: a broadcast goes to every guest in the segment, whatever their
- * marketing consent. It is event-operational mail (a room change, the replay),
- * like reminders; `marketingConsent` records opt-in to the host's own marketing.
+ * marketing consent (it is event-operational mail: a room change, the replay),
+ * EXCEPT guests who unsubscribed (`unsubscribed_at` set, audit M-25): they are left
+ * out of the segment counts, the recipients and the outbox's send. `marketingConsent`
+ * records opt-in to the host's own marketing.
  *
  * Idempotency: the composer mints a UUID `idempotencyKey` when it opens. A repeat
  * with the same key returns the first send's message (200) and sends nothing.
+ *
+ * Sending: a broadcast only QUEUES its emails (guest email outbox, src/server/jobs/outbox.ts) and
+ * answers 201 with `queued`; the outbox sends them in batches and counts `sentCount` as they go out.
  */
 
 export const SEGMENTS = ['going', 'maybe', 'waitlisted', 'pending', 'checked_in', 'no_show', 'all'] as const;
@@ -47,9 +53,8 @@ export type ReminderKind = 'confirmation' | 'reminder' | 'live_now' | 'thank_you
 export const REMINDER_KINDS: readonly ReminderKind[] = ['confirmation', 'reminder', 'live_now', 'thank_you'];
 
 export const MESSAGE_LOG_PAGE_SIZE = 50;
-/** Most guests one broadcast reaches (a Worker request makes a bounded number of calls). */
+/** Most guests one broadcast reaches (the request enqueues them; the guest email outbox sends). */
 export const MAX_BROADCAST_RECIPIENTS = 500;
-const SEND_CONCURRENCY = 5;
 
 /** Offset bounds per kind, in minutes (negative = before the start). */
 export const RULE_OFFSET_LIMITS: Record<ReminderKind, {min: number; max: number}> = {
@@ -119,6 +124,53 @@ export function segmentCounts(guests: SegmentGuest[], eventEnd: Date, now: Date)
   const counts = Object.fromEntries(SEGMENTS.map(s => [s, 0])) as Record<Segment, number>;
   for (const guest of guests) for (const s of SEGMENTS) if (inSegment(s, guest, eventEnd, now)) counts[s] += 1;
   return counts;
+}
+
+const ACTIVE_STATUSES = [...ACTIVE] as ('confirmed' | 'pending' | 'waitlisted' | 'awaiting_payment')[];
+
+/**
+ * The same rule as `inSegment`, as a database filter, so a broadcast reads only its recipients
+ * (bounded) instead of every guest of the event. `null` = nobody can be in it yet (no-shows before the end).
+ */
+export function segmentWhere(segment: Segment, eventEnd: Date, now: Date): Prisma.RsvpWhereInput | null {
+  switch (segment) {
+    case 'going':
+      return {status: 'confirmed', response: 'going'};
+    case 'maybe':
+      return {status: 'confirmed', response: 'maybe'};
+    case 'waitlisted':
+      return {status: 'waitlisted'};
+    case 'pending':
+      return {status: 'pending'};
+    case 'checked_in':
+      return {checkedInAt: {not: null}, status: {in: ACTIVE_STATUSES}};
+    case 'no_show':
+      return now >= eventEnd
+        ? {status: 'confirmed', response: 'going', checkedInAt: null, OR: [{attended: null}, {attended: false}]}
+        : null;
+    case 'all':
+      return {status: {in: ACTIVE_STATUSES}};
+  }
+}
+
+type SegmentCountRow = Record<Exclude<Segment, 'no_show'> | 'no_show_after_end', number>;
+
+/** Every segment's size in ONE aggregate over the event's RSVPs (`rsvps_event_status_idx`), never the rows. */
+async function segmentCountsOf(db: PrismaClient, eventId: string): Promise<SegmentCountRow> {
+  const rows = await db.$queryRaw<SegmentCountRow[]>`
+    SELECT
+      (count(*) FILTER (WHERE status = 'confirmed' AND response = 'going'))::int AS going,
+      (count(*) FILTER (WHERE status = 'confirmed' AND response = 'maybe'))::int AS maybe,
+      (count(*) FILTER (WHERE status = 'waitlisted'))::int AS waitlisted,
+      (count(*) FILTER (WHERE status = 'pending'))::int AS pending,
+      (count(*) FILTER (WHERE checked_in_at IS NOT NULL
+        AND status IN ('confirmed', 'pending', 'waitlisted', 'awaiting_payment')))::int AS checked_in,
+      (count(*) FILTER (WHERE status = 'confirmed' AND response = 'going'
+        AND checked_in_at IS NULL AND attended IS NOT TRUE))::int AS no_show_after_end,
+      (count(*) FILTER (WHERE status IN ('confirmed', 'pending', 'waitlisted', 'awaiting_payment')))::int AS "all"
+    FROM rsvps
+    WHERE event_id = ${eventId}::uuid AND unsubscribed_at IS NULL`;
+  return rows[0] ?? {going: 0, maybe: 0, waitlisted: 0, pending: 0, checked_in: 0, no_show_after_end: 0, all: 0};
 }
 
 /* ── Validation ─────────────────────────────────────────────────────── */
@@ -207,6 +259,11 @@ const previewBody = validator('json', (value, c) => {
   return {kind: kind as ReminderKind | 'broadcast', subject, body};
 });
 
+/**
+ * Stricter than the shared `isUuid` ON PURPOSE (audit L-37): the idempotency key is minted by the
+ * composer (`crypto.randomUUID()`), so anything but an RFC 4122 v1-8 key is not ours and is ignored.
+ * Row ids keep the shared any-version check: seeded or imported rows need not carry RFC nibbles.
+ */
 const UUID_STRICT = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const broadcastBody = validator('json', (value, c) => {
@@ -233,6 +290,11 @@ const broadcastBody = validator('json', (value, c) => {
 
 const ruleSelect = {id: true, eventId: true, kind: true, offsetMinutes: true, enabled: true, subject: true, body: true} as const;
 const messageSelect = {id: true, segment: true, subject: true, sentCount: true, sentBy: true, createdAt: true} as const;
+/** The message plus its failed deliveries, counted in the SAME query (no second round trip by ids). */
+const messageLogSelect = {
+  ...messageSelect,
+  _count: {select: {messageDeliveries: {where: {status: 'failed' as const}}}},
+} as const;
 const guestSelect = {
   id: true,
   name: true,
@@ -257,15 +319,8 @@ const logEntry = (m: MessageRow, failedCount: number) => ({
   createdAt: m.createdAt.toISOString(),
 });
 
-async function failedCounts(db: PrismaClient, ids: string[]): Promise<Map<string, number>> {
-  if (!ids.length) return new Map();
-  const groups = await db.messageDelivery.groupBy({
-    by: ['messageId'],
-    where: {messageId: {in: ids}, status: 'failed'},
-    _count: {_all: true},
-  });
-  return new Map(groups.map(g => [g.messageId ?? '', g._count._all]));
-}
+type MessageLogRow = MessageRow & {_count: {messageDeliveries: number}};
+const logEntryOf = (m: MessageLogRow) => logEntry(m, m._count.messageDeliveries);
 
 async function loadEvent(db: PrismaClient, id: string) {
   if (!isUuid(id)) return null;
@@ -273,44 +328,48 @@ async function loadEvent(db: PrismaClient, id: string) {
 }
 
 const MANAGE = PERMISSIONS.EVENT_MANAGE;
-const notFound = (what: string) => problem('not_found', `${what} not found.`);
-
-/** `<createdAt ISO>_<id>`; anything malformed means the first page. */
-function parseCursor(raw: string): {at: Date; id: string} | null {
-  const [iso, id] = raw.split('_');
-  const at = new Date(iso ?? '');
-  return id && isUuid(id) && !Number.isNaN(at.getTime()) ? {at, id} : null;
-}
 
 const isUniqueViolation = (err: unknown) => (err as {code?: string} | null)?.code === 'P2002';
+const isNotFound = (err: unknown) => (err as {code?: string} | null)?.code === 'P2025';
 
 const logQuery = validator('query', v => ({before: typeof v.before === 'string' ? v.before : ''}));
 
 export const adminMessageRoutes = new Hono()
   .get('/events/:eventId/messages/rules', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
-    const event = await loadEvent(c.var.db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
-    const rules = await c.var.db.reminderRule.findMany({
-      where: {eventId: event.id},
-      select: ruleSelect,
-      orderBy: [{offsetMinutes: 'asc'}, {id: 'asc'}],
-      take: 100,
-    });
+    const eventId = c.req.param('eventId');
+    if (!isUuid(eventId)) return notFound(c, 'Event');
+    // Independent reads: one trip.
+    const [event, rules] = await Promise.all([
+      loadEvent(c.var.db, eventId),
+      c.var.db.reminderRule.findMany({
+        where: {eventId},
+        select: ruleSelect,
+        orderBy: [{offsetMinutes: 'asc'}, {id: 'asc'}],
+        take: 100,
+      }),
+    ]);
+    if (!event) return notFound(c, 'Event');
     return c.json({rules});
   })
 
   .post('/events/:eventId/messages/rules', ruleBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
-    const event = await loadEvent(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    const eventId = c.req.param('eventId');
+    if (!isUuid(eventId)) return notFound(c, 'Event');
+    // The event and its rules' kinds in one trip: the kinds answer both limits below (at most 50 rules exist).
+    const [event, kinds] = await Promise.all([
+      loadEvent(db, eventId),
+      db.reminderRule.findMany({where: {eventId}, select: {kind: true}, take: 51}),
+    ]);
+    if (!event) return notFound(c, 'Event');
     const input = c.req.valid('json');
     if (input.kind === 'live_now' && event.format === 'in_person') {
       return c.json(invalid({kind: 'In-person events don’t send a “we’re live” email.'}), 422);
     }
-    if (input.kind === 'confirmation' && (await db.reminderRule.count({where: {eventId: event.id, kind: 'confirmation'}})) > 0) {
+    if (input.kind === 'confirmation' && kinds.some(r => r.kind === 'confirmation')) {
       return c.json(problem('conflict', 'This event already has a confirmation email. Edit that one instead.'), 409);
     }
-    if ((await db.reminderRule.count({where: {eventId: event.id}})) >= 50) {
+    if (kinds.length >= 50) {
       return c.json(problem('too_many_rules', 'An event can have up to 50 automatic emails.'), 409);
     }
     const rule = await db.reminderRule.create({data: {...input, eventId: event.id}, select: ruleSelect});
@@ -319,11 +378,12 @@ export const adminMessageRoutes = new Hono()
 
   .patch('/events/:eventId/messages/rules/:ruleId', rulePatchBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
-    const event = await loadEvent(db, c.req.param('eventId'));
+    const eventId = c.req.param('eventId');
     const ruleId = c.req.param('ruleId');
-    if (!event || !isUuid(ruleId)) return c.json(notFound('Rule'), 404);
-    const existing = await db.reminderRule.findFirst({where: {id: ruleId, eventId: event.id}, select: ruleSelect});
-    if (!existing) return c.json(notFound('Rule'), 404);
+    if (!isUuid(eventId) || !isUuid(ruleId)) return notFound(c, 'Rule');
+    // The rule of a live (not deleted) event, in one query.
+    const existing = await db.reminderRule.findFirst({where: {id: ruleId, eventId, event: {deletedAt: null}}, select: ruleSelect});
+    if (!existing) return notFound(c, 'Rule');
     const patch = c.req.valid('json');
     // Offset limits depend on the kind, so check the merged rule.
     const checked = checkRule({...existing, ...patch});
@@ -336,34 +396,45 @@ export const adminMessageRoutes = new Hono()
   .post('/events/:eventId/messages/rules/:ruleId/toggle', toggleBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const ruleId = c.req.param('ruleId');
     const eventId = c.req.param('eventId');
-    if (!isUuid(ruleId) || !isUuid(eventId)) return c.json(notFound('Rule'), 404);
-    const {count} = await c.var.db.reminderRule.updateMany({
-      where: {id: ruleId, eventId},
-      data: {enabled: c.req.valid('json').enabled},
-    });
-    if (!count) return c.json(notFound('Rule'), 404);
-    const rule = await c.var.db.reminderRule.findFirst({where: {id: ruleId, eventId}, select: ruleSelect});
-    return rule ? c.json(rule) : c.json(notFound('Rule'), 404);
+    if (!isUuid(ruleId) || !isUuid(eventId)) return notFound(c, 'Rule');
+    // One write that returns the row; the event id in the WHERE scopes it (P2025: no such rule there).
+    try {
+      const rule = await c.var.db.reminderRule.update({
+        where: {id: ruleId, eventId},
+        data: {enabled: c.req.valid('json').enabled},
+        select: ruleSelect,
+      });
+      return c.json(rule);
+    } catch (err) {
+      if (isNotFound(err)) return notFound(c, 'Rule');
+      throw err;
+    }
   })
 
   .delete('/events/:eventId/messages/rules/:ruleId', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const ruleId = c.req.param('ruleId');
     const eventId = c.req.param('eventId');
-    if (!isUuid(ruleId) || !isUuid(eventId)) return c.json(notFound('Rule'), 404);
+    if (!isUuid(ruleId) || !isUuid(eventId)) return notFound(c, 'Rule');
     const {count} = await c.var.db.reminderRule.deleteMany({where: {id: ruleId, eventId}});
-    return count ? c.json({ok: true}) : c.json(notFound('Rule'), 404);
+    return count ? c.json({ok: true}) : notFound(c, 'Rule');
   })
 
   .post('/events/:eventId/messages/preview', previewBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
-    const event = await loadEvent(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    const eventId = c.req.param('eventId');
+    if (!isUuid(eventId)) return notFound(c, 'Event');
     const input = c.req.valid('json');
-    const found = await db.rsvp.findFirst({
-      where: {eventId: event.id, status: 'confirmed'},
-      select: {id: true, name: true, email: true, response: true, status: true, ticketCode: true, waitlistPosition: true},
-      orderBy: {createdAt: 'asc'},
-    });
+    // Independent reads: the event, the first confirmed guest and the brand travel together.
+    const [event, found, brand] = await Promise.all([
+      loadEvent(db, eventId),
+      db.rsvp.findFirst({
+        where: {eventId, status: 'confirmed'},
+        select: {id: true, name: true, email: true, response: true, status: true, ticketCode: true, waitlistPosition: true},
+        orderBy: [{createdAt: 'asc'}, {id: 'asc'}],
+      }),
+      loadBrand(db, c.req.url),
+    ]);
+    if (!event) return notFound(c, 'Event');
     const guest: MailGuest = found ?? {
       id: '00000000-0000-4000-8000-000000000000',
       name: 'Sam Rivera',
@@ -373,7 +444,7 @@ export const adminMessageRoutes = new Hono()
       ticketCode: 'AB23CD45',
       waitlistPosition: null,
     };
-    const data = emailDataFor(publicBase(c.req.url), event, guest, await loadBrand(db, c.req.url));
+    const data = emailDataFor(publicBase(c.req.url), event, guest, brand);
     const copy: CreatorCopy = {subject: input.subject, body: input.body};
     // Unknown tags do not fail a preview: the editor shows them as a warning while typing.
     const unknownTags = [...new Set([...renderTemplate(copy.subject, {}).unknownTags, ...renderTemplate(copy.body, {}).unknownTags])];
@@ -383,56 +454,62 @@ export const adminMessageRoutes = new Hono()
 
   .get('/events/:eventId/messages/segments', withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
-    const event = await loadEvent(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
-    const guests = await db.rsvp.findMany({
-      where: {eventId: event.id},
-      select: {response: true, status: true, checkedInAt: true, attended: true},
-      take: 20_000,
-    });
+    const eventId = c.req.param('eventId');
+    if (!isUuid(eventId)) return notFound(c, 'Event');
+    const [event, row] = await Promise.all([loadEvent(db, eventId), segmentCountsOf(db, eventId)]);
+    if (!event) return notFound(c, 'Event');
     const now = new Date();
-    return c.json({counts: segmentCounts(guests, event.endAt, now), eventEnded: now >= event.endAt});
+    const ended = now >= event.endAt;
+    const {no_show_after_end, ...rest} = row;
+    const counts: Record<Segment, number> = {...rest, no_show: ended ? no_show_after_end : 0};
+    return c.json({counts, eventEnded: ended});
   })
 
   .get('/events/:eventId/messages', logQuery, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
-    const event = await loadEvent(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
-    const cursor = parseCursor(c.req.valid('query').before);
-    const rows = await db.message.findMany({
-      where: {
-        eventId: event.id,
-        ...(cursor ? {OR: [{createdAt: {lt: cursor.at}}, {createdAt: cursor.at, id: {lt: cursor.id}}]} : {}),
-      },
-      select: messageSelect,
-      orderBy: [{createdAt: 'desc'}, {id: 'desc'}],
-      take: MESSAGE_LOG_PAGE_SIZE + 1,
-    });
-    const page = rows.slice(0, MESSAGE_LOG_PAGE_SIZE) as MessageRow[];
-    const failed = await failedCounts(db, page.map(m => m.id));
-    const items = page.map(m => logEntry(m, failed.get(m.id) ?? 0));
+    const eventId = c.req.param('eventId');
+    if (!isUuid(eventId)) return notFound(c, 'Event');
+    const cursor = parsePageCursor(c.req.valid('query').before);
+    // The event and one page of the log (failed counts in the same query) in one trip.
+    const [event, rows] = await Promise.all([
+      loadEvent(db, eventId),
+      db.message.findMany({
+        where: {
+          eventId,
+          // Millisecond cursor vs microsecond column: `keysetAfter` compares at the cursor's precision.
+          ...(cursor ? keysetAfter('createdAt', 'desc', cursor) : {}),
+        },
+        select: messageLogSelect,
+        orderBy: [{createdAt: 'desc'}, {id: 'desc'}],
+        take: MESSAGE_LOG_PAGE_SIZE + 1,
+      }),
+    ]);
+    if (!event) return notFound(c, 'Event');
+    const page = rows.slice(0, MESSAGE_LOG_PAGE_SIZE) as MessageLogRow[];
+    const items = page.map(logEntryOf);
     const last = page.at(-1);
     return c.json({items, nextBefore: rows.length > MESSAGE_LOG_PAGE_SIZE && last ? `${last.createdAt.toISOString()}_${last.id}` : null});
   })
 
   .post('/events/:eventId/messages/broadcast', broadcastBody, withViewer, requireAuth, requirePermission(MANAGE), withDb, async c => {
     const {db} = c.var;
-    const event = await loadEvent(db, c.req.param('eventId'));
-    if (!event) return c.json(notFound('Event'), 404);
+    const eventId = c.req.param('eventId');
+    if (!isUuid(eventId)) return notFound(c, 'Event');
     const input = c.req.valid('json');
 
     const alreadySent = async () => {
       if (!input.idempotencyKey) return null;
-      const previous = await db.message.findFirst({
-        where: {eventId: event.id, idempotencyKey: input.idempotencyKey},
-        select: messageSelect,
-      });
+      const previous = (await db.message.findFirst({
+        where: {eventId, idempotencyKey: input.idempotencyKey},
+        select: messageLogSelect,
+      })) as MessageLogRow | null;
       if (!previous) return null;
-      const failed = (await failedCounts(db, [previous.id])).get(previous.id) ?? 0;
-      return {message: logEntry(previous as MessageRow, failed), failed};
+      return {message: logEntryOf(previous), failed: previous._count.messageDeliveries};
     };
+    // The event, an earlier send with this key, and the brand: independent reads, one trip.
+    const [event, again] = await Promise.all([loadEvent(db, eventId), alreadySent()]);
+    if (!event) return notFound(c, 'Event');
     // Before any other check: a retry of a send that went through must not 409 on a changed count.
-    const again = await alreadySent();
     if (again) return c.json(again, 200);
 
     const unknown = unknownTagFields(input);
@@ -440,7 +517,17 @@ export const adminMessageRoutes = new Hono()
     if (event.status === 'draft') return c.json(problem('conflict', 'Publish the event before messaging guests.'), 409);
 
     const now = new Date();
-    const guests = await db.rsvp.findMany({where: {eventId: event.id}, select: guestSelect, take: 20_000});
+    // Only the segment's guests, one past the cap (the cap check below must see it), never the whole guest list.
+    const where = segmentWhere(input.segment, event.endAt, now);
+    // M-25: guests who unsubscribed are never recipients (the same filter as the segment counts, in the same query).
+    const guests = where
+      ? await db.rsvp.findMany({
+          where: {eventId, ...where, unsubscribedAt: null},
+          select: guestSelect,
+          orderBy: {id: 'asc'},
+          take: MAX_BROADCAST_RECIPIENTS + 1,
+        })
+      : [];
     const recipients = segmentMembers(input.segment, guests, event.endAt, now);
     if (recipients.length === 0) return c.json(invalid({segment: 'No guests in this segment yet.'}), 422);
     if (recipients.length > MAX_BROADCAST_RECIPIENTS) {
@@ -454,56 +541,45 @@ export const adminMessageRoutes = new Hono()
       );
     }
 
+    // The message, its delivery rows and one outbox row per guest: ONE transaction, so a send is
+    // either fully queued or not at all. The request only enqueues (audit M-21); the guest email
+    // outbox sends in bounded batches, with retries, and counts `sentCount` as emails go out.
     let message: MessageRow;
     try {
-      message = (await db.message.create({
-        data: {
-          eventId: event.id,
-          segment: input.segment,
-          subject: input.subject,
-          body: input.body,
-          sentBy: c.var.viewer.id ?? null,
-          idempotencyKey: input.idempotencyKey,
-        },
-        select: messageSelect,
-      })) as MessageRow;
+      message = await db.$transaction(async tx => {
+        const created = (await tx.message.create({
+          data: {
+            eventId: event.id,
+            segment: input.segment,
+            subject: input.subject,
+            body: input.body,
+            sentBy: c.var.viewer.id ?? null,
+            idempotencyKey: input.idempotencyKey,
+          },
+          select: messageSelect,
+        })) as MessageRow;
+        // The guest ids were read by this request (<= 500), never sent by the client.
+        await tx.messageDelivery.createMany({
+          data: recipients.map(g => ({rsvpId: g.id, messageId: created.id, status: 'queued' as const})),
+        });
+        await enqueueGuestEmails(
+          tx,
+          recipients.map(g => ({key: `broadcast-${created.id}-${g.id}`, kind: 'broadcast' as const, rsvpId: g.id, messageId: created.id})),
+          now
+        );
+        return created;
+      });
     } catch (err) {
       // Two identical requests raced past the lookup: the unique index let one through.
       const winner = isUniqueViolation(err) ? await alreadySent() : null;
       if (winner) return c.json(winner, 200);
       throw err;
     }
-
-    await db.messageDelivery.createMany({
-      data: recipients.map(g => ({rsvpId: g.id, messageId: message.id, status: 'queued' as const})),
-    });
-    const brand = await loadBrand(db, c.req.url);
-    const base = publicBase(c.req.url);
-    const copy: CreatorCopy = {subject: input.subject, body: input.body};
-    let sent = 0;
-    let failed = 0;
-    for (let i = 0; i < recipients.length; i += SEND_CONCURRENCY) {
-      const batch = recipients.slice(i, i + SEND_CONCURRENCY);
-      await Promise.all(
-        batch.map(async guest => {
-          const email = creatorEmail('broadcast', emailDataFor(base, event, guest as MailGuest, brand, now), copy);
-          const result = await sendMail({
-            to: guest.email,
-            subject: email.subject,
-            html: email.html,
-            text: email.text,
-            replyTo: brand.replyToEmail ?? undefined,
-          });
-          if (result.ok) sent += 1;
-          else failed += 1;
-          await db.messageDelivery.updateMany({
-            where: {messageId: message.id, rsvpId: guest.id},
-            data: result.ok ? {status: 'sent', sentAt: new Date()} : {status: 'failed', error: 'send_failed'},
-          });
-        })
-      );
-    }
-    await db.message.update({where: {id: message.id}, data: {sentCount: sent}, select: {id: true}});
-    await audit(db, {actorUserId: c.var.viewer.id, action: 'message_broadcast', target: ['event', event.id], meta: {sent, failed}});
-    return c.json({message: logEntry({...message, sentCount: sent}, failed), failed}, 201);
+    const queued = recipients.length;
+    await audit(db, {actorUserId: c.var.viewer.id, action: 'message_broadcast', target: ['event', event.id], meta: {queued}});
+    await kickGuestEmails();
+    // Locally the kick has already sent them; live, `sentCount` grows as the outbox sends.
+    const fresh = await db.message.findUnique({where: {id: message.id}, select: messageLogSelect});
+    const entry = fresh ? logEntryOf(fresh as MessageLogRow) : logEntry(message, 0);
+    return c.json({message: entry, failed: entry.failedCount, queued}, 201);
   });

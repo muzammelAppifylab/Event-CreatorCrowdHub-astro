@@ -8,12 +8,13 @@ import type {Viewer} from '../../platform/types';
 import {PERMISSIONS} from '../permissions';
 import {checkedInPayload, emitWebhook} from '../webhook-emit';
 import {escapeLike} from '../like';
+import {isUuid, notFound} from '../validate';
 
 /**
  * Door check-in and online attendance (ported from CreatorCrowdHub, US-27 / US-28).
  * Mount: `.route('/checkin', adminCheckinRoutes)`.
  *
- * Holders of `site:event:checkin` OR `site:event:manage` (a `checkin_staff` role holds only the first):
+ * Holders of `site:event:checkin` OR `site:event:manage` (a `checkin-staff` role holds only the first):
  *   GET  /checkin/events                      events to check guests into (picker)
  *   GET  /checkin/events/:eventId?q=          the door list (<= 200, by name) + counts
  *   GET  /checkin/codes/:code                 one guest by ticket code
@@ -33,7 +34,6 @@ const EVENT_LIMIT = 50;
 const ATTENDEE_PAGE = 50;
 const MAX_IDS = 200;
 const MAX_EMAILS = 1000;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Ticket codes are 8 characters; allow slack for hand-typed ones. */
 const CODE_SHAPE = /^[A-Z0-9]{4,12}$/;
 const EMAIL_SHAPE = /^[^\s@]{1,64}@[^\s@]{1,255}$/;
@@ -64,11 +64,22 @@ const toEvent = (e: EventRow) => ({
 /** Door work only makes sense for live, published events. */
 const doorEvent = {status: 'published', deletedAt: null} as const;
 
+/** The door window: today's and upcoming events. Anything that ended more than a day ago is done. */
+export const DOOR_WINDOW_MS = 24 * 3_600_000;
+const doorWindowStart = (now = Date.now()) => new Date(now - DOOR_WINDOW_MS);
+/** Door staff (check-in only) work events inside the window; managers may still fix past ones. */
+export const inDoorWindow = (endAt: Date, now = Date.now()) => endAt.getTime() >= now - DOOR_WINDOW_MS;
+
 /** Either capability opens the door screens: managers may also work the door. */
 const doorAccess = createMiddleware<{Variables: {viewer: Viewer}}>(async (c, next) => {
   if (!(await can(c, PERMISSIONS.EVENT_CHECKIN)) && !(await can(c as never, PERMISSIONS.EVENT_MANAGE))) return forbidden(c);
   await next();
 });
+
+/** Managers pass; door staff only inside the window. `can` is memoized per request (doorAccess asked). */
+async function doorWindowOk(c: unknown, endAt: Date): Promise<boolean> {
+  return (await can(c as never, PERMISSIONS.EVENT_MANAGE)) || inDoorWindow(endAt);
+}
 
 type Counts = {checkedInSeats: number; expectedSeats: number; checkedInGuests: number; expectedGuests: number};
 
@@ -86,7 +97,7 @@ async function doorCounts(db: PrismaClient, eventId: string): Promise<Counts> {
 
 const eventParam = validator('param', (value, c) => {
   const id = typeof value.eventId === 'string' ? value.eventId : '';
-  if (!UUID.test(id)) return c.json(problem('not_found', 'Event not found.'), 404);
+  if (!isUuid(id)) return notFound(c, 'Event');
   return {eventId: id.toLowerCase()};
 });
 
@@ -116,7 +127,7 @@ const attendanceBody = validator('json', (value, c) => {
     typeof v.attended !== 'boolean' ||
     ids.length === 0 ||
     ids.length > MAX_IDS ||
-    !ids.every(id => typeof id === 'string' && UUID.test(id))
+    !ids.every(id => isUuid(id))
   ) {
     return c.json(problem('invalid_input', `Pick 1 to ${MAX_IDS} guests and say whether they attended.`), 422);
   }
@@ -139,17 +150,16 @@ const importBody = validator('json', (value, c) => {
 });
 
 const attendeesQuery = validator('query', value => ({
-  before: typeof value.before === 'string' && UUID.test(value.before) ? value.before.toLowerCase() : '',
+  before: isUuid(value.before) ? value.before.toLowerCase() : '',
 }));
 
 export const adminCheckinRoutes = new Hono()
   // --- door staff (checkin OR manage) --------------------------------------
   .get('/events', withViewer, requireAuth, doorAccess, withDb, async c => {
     // Today's and upcoming events: anything that ended more than a day ago is done.
-    const since = new Date(Date.now() - 24 * 3_600_000);
     const rows = await c.var.db.event.findMany({
       select: eventSelect,
-      where: {...doorEvent, endAt: {gte: since}},
+      where: {...doorEvent, endAt: {gte: doorWindowStart()}},
       orderBy: [{startAt: 'asc'}, {id: 'asc'}],
       take: EVENT_LIMIT,
     });
@@ -159,10 +169,8 @@ export const adminCheckinRoutes = new Hono()
   .get('/events/:eventId', eventParam, searchQuery, withViewer, requireAuth, doorAccess, withDb, async c => {
     const {eventId} = c.req.valid('param');
     const {q} = c.req.valid('query');
-    const event = await c.var.db.event.findFirst({select: eventSelect, where: {id: eventId, ...doorEvent}});
-    if (!event) return c.json(problem('not_found', 'Event not found.'), 404);
-
     // Staff search name and code only; managers may match email too (they see emails anyway).
+    // `can` is memoized per request (doorAccess already asked): no database trip here.
     const manager = await can(c as never, PERMISSIONS.EVENT_MANAGE);
     const search: Prisma.RsvpWhereInput[] = q
       ? [
@@ -171,7 +179,10 @@ export const adminCheckinRoutes = new Hono()
           ...(manager ? [{email: {contains: escapeLike(q), mode: 'insensitive' as const}}] : []),
         ]
       : [];
-    const [rows, counts] = await Promise.all([
+    // The event, its door list and its counts are independent reads: one trip, not two.
+    const [event, rows, counts] = await Promise.all([
+      // Door staff only see events inside the door window (the same one the picker uses).
+      c.var.db.event.findFirst({select: eventSelect, where: {id: eventId, ...doorEvent, ...(manager ? {} : {endAt: {gte: doorWindowStart()}})}}),
       c.var.db.rsvp.findMany({
         select: guestSelect,
         where: {eventId, AND: [{OR: [{status: 'confirmed', response: 'going'}, {checkedInAt: {not: null}}]}, ...(search.length ? [{OR: search}] : [])]},
@@ -180,13 +191,15 @@ export const adminCheckinRoutes = new Hono()
       }),
       doorCounts(c.var.db, eventId),
     ]);
+    if (!event) return notFound(c, 'Event');
     return c.json({event: toEvent(event), guests: rows.map(toDoorGuest), counts, canManage: manager});
   })
 
   .get('/codes/:code', codeParam, withViewer, requireAuth, doorAccess, withDb, async c => {
     const {code} = c.req.valid('param');
     const rsvp = await c.var.db.rsvp.findUnique({where: {ticketCode: code}, select: {...guestSelect, event: {select: {...eventSelect, status: true, deletedAt: true}}}});
-    if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt) {
+    // Outside the door window a code answers like an unknown one for door staff (L-5).
+    if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt || !(await doorWindowOk(c, rsvp.event.endAt))) {
       return c.json(problem('not_found', 'No guest has that ticket code.'), 404);
     }
     return c.json({event: toEvent(rsvp.event), guest: toDoorGuest(rsvp)});
@@ -198,9 +211,9 @@ export const adminCheckinRoutes = new Hono()
     const db = c.var.db;
     const rsvp = await db.rsvp.findUnique({
       where: {ticketCode: code},
-      select: {id: true, eventId: true, status: true, response: true, checkedInAt: true, event: {select: {status: true, deletedAt: true}}},
+      select: {id: true, eventId: true, status: true, response: true, checkedInAt: true, event: {select: {status: true, deletedAt: true, endAt: true}}},
     });
-    if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt) {
+    if (!rsvp || rsvp.event.status !== 'published' || rsvp.event.deletedAt || !(await doorWindowOk(c, rsvp.event.endAt))) {
       return c.json(problem('not_found', 'No guest has that ticket code.'), 404);
     }
     // Only a confirmed guest has a place to check into; the door can still undo any check-in.
@@ -252,15 +265,11 @@ export const adminCheckinRoutes = new Hono()
     const {eventId} = c.req.valid('param');
     const {emails} = c.req.valid('json');
     const db = c.var.db;
-    // Emails are stored lowercase; one indexed read for the event's matches, one write.
-    const found = await db.rsvp.findMany({
-      select: {id: true, email: true},
-      where: {eventId, status: 'confirmed', email: {in: emails}},
-      take: MAX_EMAILS,
-    });
-    if (found.length > 0) {
-      await db.rsvp.updateMany({where: {eventId, id: {in: found.map(r => r.id)}}, data: {attended: true}});
-    }
+    // Emails are stored lowercase; one indexed read for the event's matches (rsvps_event_email_uq),
+    // then one write with the SAME filter (no ids shipped back to the database).
+    const match = {eventId, status: 'confirmed' as const, email: {in: emails}};
+    const found = await db.rsvp.findMany({select: {email: true}, where: match, take: MAX_EMAILS});
+    if (found.length > 0) await db.rsvp.updateMany({where: match, data: {attended: true}});
     const matched = new Set(found.map(r => r.email));
     return c.json({matched: found.length, unmatched: emails.filter(e => !matched.has(e)).slice(0, 100)});
   });

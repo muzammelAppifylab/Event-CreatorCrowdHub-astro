@@ -2,8 +2,9 @@ import type {Prisma, PrismaClient} from '../../generated/prisma/client';
 import {config} from '../../platform/config';
 import {formatInZone} from '../../domain/time';
 import {pollLinkFor} from '../../domain/tokens';
-import type {EmailData} from '../../emails';
-import {loadBrand} from '../guest-mail';
+import type {EmailBrand, EmailData} from '../../emails';
+import {eventPageLinks, loadBrand} from '../guest-mail';
+import {guestEmailLinks} from '../privacy';
 
 /** The client or a transaction's client: helpers work with either. */
 export type Db = PrismaClient | Prisma.TransactionClient;
@@ -42,36 +43,37 @@ export interface GuestMail {
   to: string;
   replyTo?: string;
   data: EmailData;
+  eventId: string;
   eventStatus: string;
+  /** A paid-waitlist seat offer's deadline, when one is outstanding or lapsed. */
+  claimExpiresAt: Date | null;
 }
 
-/**
- * Everything an email template needs for one RSVP, loaded by id. `null` when the RSVP or its
- * event is gone. The manage token is stored hashed, so links point at the event page where a
- * guest can ask for their link again.
- */
-export async function loadGuestMail(db: Db, rsvpId: string, now = new Date()): Promise<GuestMail | null> {
-  const rsvp = await db.rsvp.findUnique({
-    where: {id: rsvpId},
+/** The columns one guest email reads (the event is a joined select). */
+const guestMailSelect = {
+  id: true, eventId: true, name: true, email: true, response: true, status: true, ticketCode: true, waitlistPosition: true,
+  claimExpiresAt: true,
+  event: {
     select: {
-      id: true, eventId: true, name: true, email: true, response: true, status: true, ticketCode: true, waitlistPosition: true,
-      event: {
-        select: {
-          title: true, slug: true, startAt: true, endAt: true, timezone: true, format: true, venueName: true,
-          venueAddress: true, mapUrl: true, joinUrl: true, pollJoinCode: true, thankYouLink: true, status: true, deletedAt: true,
-        },
-      },
+      title: true, slug: true, startAt: true, endAt: true, timezone: true, format: true, venueName: true,
+      venueAddress: true, mapUrl: true, joinUrl: true, pollJoinCode: true, thankYouLink: true, status: true, visibility: true, deletedAt: true,
     },
-  });
-  if (!rsvp || rsvp.event.deletedAt) return null;
-  const base = siteBase();
-  const brand = await loadBrand(db, base);
-  const pageUrl = `${base}/e/${encodeURIComponent(rsvp.event.slug)}/`;
+  },
+} satisfies Prisma.RsvpSelect;
+
+type GuestMailRow = Prisma.RsvpGetPayload<{select: typeof guestMailSelect}>;
+
+/** One loaded row as a GuestMail (shared by `loadGuestMail` and `loadGuestMails`); null when its event is deleted. */
+function toGuestMail(rsvp: GuestMailRow, base: string, brand: EmailBrand, now: Date): GuestMail | null {
+  if (rsvp.event.deletedAt) return null;
+  const {pageUrl, publicPageUrl} = eventPageLinks(base, rsvp.event);
   const {event} = rsvp;
   return {
     to: rsvp.email,
     replyTo: brand.replyToEmail ?? undefined,
+    eventId: rsvp.eventId,
     eventStatus: event.status,
+    claimExpiresAt: rsvp.claimExpiresAt ?? null,
     data: {
       now,
       brand,
@@ -87,6 +89,7 @@ export async function loadGuestMail(db: Db, rsvpId: string, now = new Date()): P
         mapUrl: event.mapUrl,
         joinUrl: event.joinUrl,
         pageUrl,
+        publicPageUrl,
         pollUrl: pollLinkFor(base, event.pollJoinCode, rsvp.id, rsvp.eventId, config.jwtSecret, now),
         thankYouLink: event.thankYouLink,
       },
@@ -98,7 +101,48 @@ export async function loadGuestMail(db: Db, rsvpId: string, now = new Date()): P
         ticketCode: rsvp.ticketCode,
         manageUrl: pageUrl,
         waitlistPosition: rsvp.waitlistPosition,
+        // A signed one-click unsubscribe link (M-25) for reminders and the other guest emails.
+        unsubscribeUrl: guestEmailLinks(base, rsvp.id, config.jwtSecret).unsubscribeUrl,
       },
     },
   };
+}
+
+/**
+ * Everything an email template needs for one RSVP, loaded by id in ONE query (the event is a
+ * joined select). `null` when the RSVP or its event is gone. The manage token is stored hashed,
+ * so links point at the event page where a guest can ask for their link again (a private event
+ * has no public page: `eventPageLinks`). A caller that
+ * sends many emails in one run loads the brand once and passes it as `brand`.
+ */
+export async function loadGuestMail(db: Db, rsvpId: string, now = new Date(), options: {brand?: EmailBrand} = {}): Promise<GuestMail | null> {
+  const rsvp = await db.rsvp.findUnique({where: {id: rsvpId}, select: guestMailSelect});
+  if (!rsvp || rsvp.event.deletedAt) return null;
+  const base = siteBase();
+  const brand = options.brand ?? (await loadBrand(db, base));
+  return toGuestMail(rsvp, base, brand, now);
+}
+
+/**
+ * `loadGuestMail` for many RSVPs in ONE query (a drain round). The map holds only the RSVPs whose
+ * row and event still exist; each value is a fresh object (a caller may change its links).
+ */
+export async function loadGuestMails(
+  db: Db,
+  rsvpIds: readonly string[],
+  now = new Date(),
+  options: {brand?: EmailBrand} = {},
+): Promise<Map<string, GuestMail>> {
+  const ids = [...new Set(rsvpIds)];
+  const mails = new Map<string, GuestMail>();
+  if (!ids.length) return mails;
+  const rows = await db.rsvp.findMany({where: {id: {in: ids}}, select: guestMailSelect});
+  if (!rows.some(r => !r.event.deletedAt)) return mails;
+  const base = siteBase();
+  const brand = options.brand ?? (await loadBrand(db, base));
+  for (const row of rows) {
+    const mail = toGuestMail(row, base, brand, now);
+    if (mail) mails.set(row.id, mail);
+  }
+  return mails;
 }

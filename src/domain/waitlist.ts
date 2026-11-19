@@ -28,7 +28,12 @@ export interface WaitlistEntry {
   createdAt: Date
   /** Paid events only: set while a claim offer is outstanding. */
   claimExpiresAt?: Date | null
+  /** The ticket type the guest asked for; a limited one caps how many of its seats can be handed out. */
+  ticketTypeId?: string | null
 }
+
+/** Why a guest the host picked could not be promoted. */
+export type PromotionRefusal = "not_waitlisted" | "claim_pending" | "event_full" | "ticket_sold_out"
 
 export type EventKind = "free" | "paid"
 
@@ -47,12 +52,26 @@ export interface PromotionInput {
   kind: EventKind
   now: Date
   claimMinutes?: number
+  /**
+   * Seats still for sale per LIMITED ticket type (its quantity minus the seats confirmed or awaiting
+   * payment on it). A type missing from the map is unlimited. Outstanding claims on a type are
+   * subtracted here, like `seatsAvailable`.
+   */
+  ticketsLeft?: ReadonlyMap<string, number>
+  /**
+   * The host picked these guests: only they are considered, a lapsed claim may be offered again, and
+   * every pick that can't be promoted is reported in `failed`. Without it, every guest who fits is
+   * promoted, first in line first.
+   */
+  only?: ReadonlySet<string>
 }
 
 export interface PromotionPlan {
   promotions: Promotion[]
   /** Seats still free after the promotions (and outstanding claims). */
   seatsLeft: number
+  /** `only` mode: the picks that could not be promoted, and why. */
+  failed: Array<{ rsvpId: string; reason: PromotionRefusal }>
 }
 
 export function orderWaitlist<T extends WaitlistEntry>(entries: readonly T[]): T[] {
@@ -75,24 +94,60 @@ export function planPromotions(input: PromotionInput): PromotionPlan {
   const { kind, now } = input
   const claimMinutes = input.claimMinutes ?? appConfig.waitlistClaimMinutes
   const ordered = orderWaitlist(input.entries)
+  const only = input.only
+  const failed: PromotionPlan["failed"] = []
+  if (only) {
+    const present = new Set(ordered.map((e) => e.id))
+    for (const id of only) if (!present.has(id)) failed.push({ rsvpId: id, reason: "not_waitlisted" })
+  }
 
-  // Outstanding offers already hold their seats; lapsed ones are expireClaims()'s job.
-  const held = ordered.filter((e) => hasActiveClaim(e, now)).reduce((sum, e) => sum + e.seats, 0)
-  let seatsLeft = Math.max(0, input.seatsAvailable - held)
+  // Outstanding offers already hold their seats (and their ticket's); lapsed ones are expireClaims()'s job.
+  const ticketsLeft = new Map(input.ticketsLeft ?? [])
+  const takeTicket = (entry: WaitlistEntry, seats: number) => {
+    const id = entry.ticketTypeId
+    if (id && ticketsLeft.has(id)) ticketsLeft.set(id, ticketsLeft.get(id)! - seats)
+  }
+  const ticketRoom = (entry: WaitlistEntry) =>
+    entry.ticketTypeId && ticketsLeft.has(entry.ticketTypeId) ? ticketsLeft.get(entry.ticketTypeId)! : Number.POSITIVE_INFINITY
+  let held = 0
+  for (const e of ordered) {
+    if (!hasActiveClaim(e, now)) continue
+    held += e.seats
+    takeTicket(e, e.seats)
+  }
+  let seatsLeft = input.seatsAvailable - held
 
   const promotions: Promotion[] = []
   for (const entry of ordered) {
-    if (seatsLeft <= 0) break
-    if (entry.claimExpiresAt != null) continue // offered already (active or lapsed)
-    if (entry.seats > seatsLeft) continue // doesn't fit: keep scanning (see header)
-    seatsLeft -= entry.seats
+    if (only) {
+      if (!only.has(entry.id)) continue
+    } else {
+      if (seatsLeft <= 0) break
+      if (entry.claimExpiresAt != null) continue // offered already (active or lapsed)
+    }
+    // A host pick with its own live claim: on a paid event the claim decides; otherwise its held seats count for it.
+    const ownHold = hasActiveClaim(entry, now) ? entry.seats : 0
+    if (ownHold > 0 && kind === "paid") {
+      failed.push({ rsvpId: entry.id, reason: "claim_pending" })
+      continue
+    }
+    if (entry.seats > seatsLeft + ownHold) {
+      if (only) failed.push({ rsvpId: entry.id, reason: "event_full" })
+      continue // doesn't fit: keep scanning (see header)
+    }
+    if (entry.seats > ticketRoom(entry) + ownHold) {
+      if (only) failed.push({ rsvpId: entry.id, reason: "ticket_sold_out" })
+      continue // its ticket type is sold out: a guest on another type may still fit
+    }
+    seatsLeft = seatsLeft + ownHold - entry.seats
+    takeTicket(entry, entry.seats - ownHold)
     promotions.push(
       kind === "free"
         ? { kind: "confirm", rsvpId: entry.id, seats: entry.seats }
         : { kind: "offer_claim", rsvpId: entry.id, seats: entry.seats, claimExpiresAt: addMinutes(now, claimMinutes) },
     )
   }
-  return { promotions, seatsLeft }
+  return { promotions, seatsLeft: Math.max(0, seatsLeft), failed }
 }
 
 export interface ClaimExpiryResult {
@@ -113,11 +168,12 @@ export function expireClaims(
   now: Date,
   seatsAvailable: number,
   claimMinutes: number = appConfig.waitlistClaimMinutes,
+  ticketsLeft?: ReadonlyMap<string, number>,
 ): ClaimExpiryResult {
   const isLapsed = (e: WaitlistEntry) => e.claimExpiresAt != null && e.claimExpiresAt <= now
   const lapsed = orderWaitlist(entries.filter(isLapsed)).map((e) => e.id)
   const remaining = entries.filter((e) => !isLapsed(e))
-  const { promotions, seatsLeft } = planPromotions({ entries: remaining, seatsAvailable, kind: "paid", now, claimMinutes })
+  const { promotions, seatsLeft } = planPromotions({ entries: remaining, seatsAvailable, kind: "paid", now, claimMinutes, ticketsLeft })
   return { lapsed, offers: promotions, seatsLeft }
 }
 

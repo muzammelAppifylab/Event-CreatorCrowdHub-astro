@@ -159,6 +159,28 @@ export class FakeDb {
   async $queryRaw() {
     return [];
   }
+  /** Understands only the waitlist renumber statement (`renumberWaitlist` in src/server/waitlist-promote.ts). */
+  async $executeRaw(strings: TemplateStringsArray, ...values: unknown[]) {
+    const sql = strings.join('?');
+    if (!sql.includes('row_number()')) return 0;
+    const eventId = values[0];
+    const line = this.rsvp.rows
+      .filter(r => r.eventId === eventId && r.status === 'waitlisted')
+      .sort(
+        (a, b) =>
+          (a.waitlistPosition ?? Infinity) - (b.waitlistPosition ?? Infinity) ||
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+      );
+    let changed = 0;
+    line.forEach((r, i) => {
+      if (r.waitlistPosition !== i + 1) {
+        r.waitlistPosition = i + 1;
+        changed++;
+      }
+    });
+    return changed;
+  }
 
   // Seeding helpers
   addEvent(over: Row = {}) {

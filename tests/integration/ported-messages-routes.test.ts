@@ -1,6 +1,6 @@
 import {Hono} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
-import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {authRoutes} from '../../src/platform/auth';
 import {csrf, previewCookies, sameOrigin} from '../../src/platform/guards';
@@ -8,24 +8,37 @@ import {syncPermissions} from '../../src/platform/permission-sync';
 import {authSettings} from '../../src/server/auth-settings';
 import {CATALOGUE} from '../../src/server/permissions';
 import {adminMessageRoutes} from '../../src/server/routes/admin-messages';
+import {defineBackground} from '../../src/platform/background';
+import {OUTBOX_LIST} from '../../src/server/jobs/outbox';
+import {drainGuestEmailOutbox, type Deliver} from '../../src/server/jobs/outbox-drain';
 import {resetEvents, setRoles} from './support/events-fixtures';
 import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
 
-const mail = vi.hoisted(() => ({sent: [] as {to: string; subject: string; text: string}[], failNext: 0}));
-vi.mock('../../src/server/guest-mail', async importOriginal => {
-  const real = await importOriginal<typeof import('../../src/server/guest-mail')>();
-  return {
-    ...real,
-    sendMail: async (m: {to: string; subject: string; text: string}) => {
-      if (mail.failNext > 0) {
-        mail.failNext -= 1;
-        return {ok: false};
+const mail = {sent: [] as {to: string; subject: string; text: string}[], failNext: 0};
+
+/**
+ * A broadcast only queues its emails in the guest email outbox; the kick after the commit runs the
+ * outbox drain inline (jobs run locally in tests). The drain sends through this fake provider:
+ * `failNext` makes the next sends a refusal (permanent: counted as failed at once).
+ */
+const deliver: Deliver = async email => {
+  if (mail.failNext > 0) {
+    mail.failNext -= 1;
+    return {outcome: 'rejected'};
+  }
+  mail.sent.push({to: email.to, subject: email.content.subject, text: email.content.text ?? ''});
+  return {outcome: 'sent'};
+};
+function registerOutboxDrain() {
+  defineBackground({
+    [OUTBOX_LIST]: async () => {
+      for (let i = 0; i < 10; i++) {
+        const run = await drainGuestEmailOutbox(db as never, new Date(), {deliver, providerConfigured: true});
+        if (!run.more) break;
       }
-      mail.sent.push({to: m.to, subject: m.subject, text: m.text});
-      return {ok: true};
     },
-  };
-});
+  });
+}
 
 /** Same middleware chain as src/server/app.ts, with the event admin routes mounted at /event-admin. */
 const app = new Hono()
@@ -35,7 +48,7 @@ const app = new Hono()
   .use(csrf)
   .use(bodyLimit({maxSize: 1024 * 1024}))
   .use(syncPermissions(CATALOGUE))
-  .route('/auth', authRoutes({...authSettings, requireEmailVerification: true}))
+  .route('/auth', authRoutes(authSettings))
   .route('/event-admin', adminMessageRoutes);
 
 async function userWith(email: string, roles: string[], ip: string) {
@@ -93,14 +106,16 @@ describe.skipIf(!DATABASE_URL)('admin messages (integration, real Postgres)', ()
   let guest: Browser;
   let e: Awaited<ReturnType<typeof createEvent>>;
 
-  beforeAll(configureEnv);
+  beforeAll(() => {
+    configureEnv();
+    registerOutboxDrain();
+  });
   afterAll(() => db.$disconnect());
   beforeEach(async () => {
     await resetDatabase();
     await resetEvents();
     mail.sent.length = 0;
     mail.failNext = 0;
-    await userWith('first@example.test', ['owner'], '203.0.113.1');
     admin = await userWith('admin@example.test', ['admin'], '203.0.113.2');
     member = await userWith('member@example.test', ['member'], '203.0.113.4');
     guest = new Browser(app, '203.0.113.9');
@@ -314,7 +329,10 @@ describe.skipIf(!DATABASE_URL)('admin messages (integration, real Postgres)', ()
       const audits = await db.auditEvent.findMany({where: {action: 'message_broadcast'}});
       expect(audits).toHaveLength(1);
       expect(audits[0]).toMatchObject({actorUserId: adminId, targetType: 'event', targetId: e.id});
-      expect(audits[0]!.meta).toEqual({sent: 3, failed: 0});
+      expect(audits[0]!.meta).toEqual({queued: 3});
+      expect(res.json.queued).toBe(3);
+      // Every queued email is an outbox row, sent and keyed per message and guest.
+      expect(await db.guestEmailOutbox.count({where: {kind: 'broadcast', messageId, status: 'sent'}})).toBe(3);
     });
 
     it('sends to waitlisted, pending, maybe, all and checked_in segments with the right recipients', async () => {
@@ -354,7 +372,8 @@ describe.skipIf(!DATABASE_URL)('admin messages (integration, real Postgres)', ()
       const log = await admin.get(base(e.id));
       expect((log.json.items as unknown[])[0]).toMatchObject({sentCount: 2, failedCount: 1});
       expect(await db.messageDelivery.count({where: {status: 'failed'}})).toBe(1);
-      expect((await db.auditEvent.findFirstOrThrow({where: {action: 'message_broadcast'}})).meta).toEqual({sent: 2, failed: 1});
+      expect((await db.auditEvent.findFirstOrThrow({where: {action: 'message_broadcast'}})).meta).toEqual({queued: 3});
+      expect(await db.guestEmailOutbox.count({where: {kind: 'broadcast', status: 'failed'}})).toBe(1);
     });
 
     it('422s on unknown tags, an empty segment and malformed bodies', async () => {
@@ -405,7 +424,8 @@ describe.skipIf(!DATABASE_URL)('admin messages (integration, real Postgres)', ()
       await addGuests(e.id, {});
       const again = await admin.post(base(e.id, '/broadcast'), body);
       expect(again.status).toBe(200);
-      expect(again.json).toEqual(first.json);
+      expect(again.json.message).toEqual(first.json.message);
+      expect(again.json.failed).toBe(first.json.failed);
       expect(mail.sent).toHaveLength(2);
       expect(await db.message.count()).toBe(1);
 

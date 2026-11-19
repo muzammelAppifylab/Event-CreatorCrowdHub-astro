@@ -1,7 +1,7 @@
-import {Hono} from 'hono';
+import {Hono, type Context} from 'hono';
 
-import {attempt, invalid, keysFor, type Ctx} from '../../platform/auth/kit';
-import {RATE_LIMITS, type AttemptKind, type KindPolicy} from '../../platform/auth/rate-limit';
+import type {PrismaClient} from '../../generated/prisma/client';
+import {clientIp, invalid, rateLimitIp} from '../../platform/auth/kit';
 import {problem, withAuthCore} from '../../platform/guards';
 import {
   confirmConsent,
@@ -17,13 +17,14 @@ import {
 /**
  * Guest privacy, public and token-authenticated (ported from CreatorCrowdHub `privacy/routes.ts`,
  * `routes/consent.ts`). No session: the secret in the path IS the credential (the RSVP's manage
- * token, or the signed consent token from the confirmation email). A bad, rotated, expired or
- * foreign token is always the same 404, and no answer echoes the token. Mount: `.route('/privacy', privacyRoutes)`.
+ * token, the signed consent token from the confirmation email, or a signed unsubscribe token from
+ * any guest email). A bad, rotated, expired or foreign token is always the same 404, and no answer
+ * echoes the token. Mount: `.route('/privacy', privacyRoutes)`.
  *
  *   GET  /privacy/consent/:token        what the consent page shows (never changes anything)
  *   POST /privacy/consent/:token        confirm marketing consent (the click; double opt-in)
- *   GET  /privacy/unsubscribe/:token    current marketing state
- *   POST /privacy/unsubscribe/:token    withdraw marketing consent
+ *   GET  /privacy/unsubscribe/:token    current state (manage token or signed unsubscribe token)
+ *   POST /privacy/unsubscribe/:token    unsubscribe this person from the host's updates
  *   GET  /privacy/guest/:token          what we hold, in short
  *   GET  /privacy/guest/:token/export   the full data export (JSON download)
  *   POST /privacy/guest/:token/erase    body {confirm: "erase"}: erase this RSVP
@@ -31,19 +32,18 @@ import {
  * Confirming and unsubscribing are POSTs behind a button, never GET side effects: mail scanners
  * and link previews open every link. Writes also pass the app-wide `sameOrigin` + `csrf` guards.
  *
- * Abuse limits: kind `privacy`, per client IP and per token (hashed): the template's rate limiter.
+ * Abuse limits (audit L-40: never by changing the managed limiter's kinds): a bounded count on the
+ * site's own `privacy_attempts` table, per client IP and per token, both only as keyed hashes.
  */
 
-/**
- * `privacy` is not in the template's `AttemptKind` list: its policy is registered once, here, so
- * this slice needs no edit to `rate-limit.ts` (move it into `RATE_LIMITS` there when convenient).
- */
-const PRIVACY_KIND = 'privacy' as AttemptKind;
-(RATE_LIMITS as Record<string, KindPolicy>)['privacy'] ??= {
-  // One link opened over and over, or someone guessing links: 20 per token per hour, 120 per IP per 10 min.
-  subject: {windowSeconds: 60 * 60, free: 20, baseDelaySeconds: 60, maxDelaySeconds: 60 * 60, counts: 'all'},
-  ip: {windowSeconds: 10 * 60, free: 120, baseDelaySeconds: 10, maxDelaySeconds: 10 * 60, counts: 'all'},
-};
+type Env = {Variables: {db: PrismaClient; secret: string}};
+type Ctx = Context<Env>;
+
+/** One link opened over and over: 20 per token per hour. Someone guessing links: 120 per IP per 10 minutes. */
+export const PRIVACY_LIMITS = {
+  token: {windowMs: 60 * 60 * 1000, max: 20},
+  ip: {windowMs: 10 * 60 * 1000, max: 120},
+} as const;
 
 const NOT_FOUND = problem('not_found', 'This link is not valid any more.');
 const gone = (c: Ctx) => c.json(NOT_FOUND, 404);
@@ -54,33 +54,65 @@ const live = (c: Ctx) => {
   c.header('Referrer-Policy', 'no-referrer');
 };
 
-/** Rate limit by IP and by token; the token is only ever hashed (`keysFor`). Returns the 429 or null. */
-async function limited(c: Ctx, token: string): Promise<Response | null> {
-  const {stop} = await attempt(c, PRIVACY_KIND, await keysFor(c, token.slice(0, 256)));
-  return stop;
+/** HMAC-SHA256 hex under the site secret: the raw token or IP never reaches the table. */
+async function keyedHash(secret: string, kind: string, value: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(`privacy-${kind}:${value}`)));
+  return Array.from(mac, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export const privacyRoutes = new Hono()
+/**
+ * The rate limit: two bounded reads on `privacy_attempts` (indexes (ip_hash, created_at) and
+ * (token_hash, created_at)), each stopping at max rows (a count of max blocks: exactly max tries per window), then this attempt is recorded.
+ * Returns the 429 or null. Old rows are pruned by the daily retention job.
+ */
+async function limited(c: Ctx, token: string): Promise<Response | null> {
+  const {db, secret} = c.var;
+  const now = Date.now();
+  const [ipHash, tokenHash] = await Promise.all([
+    keyedHash(secret, 'ip', rateLimitIp(clientIp(c))),
+    keyedHash(secret, 'token', token.slice(0, 512)),
+  ]);
+  const ipSince = new Date(now - PRIVACY_LIMITS.ip.windowMs);
+  const tokenSince = new Date(now - PRIVACY_LIMITS.token.windowMs);
+  const [byIp, byToken] = await Promise.all([
+    db.$queryRaw<Array<{n: number}>>`
+      SELECT count(*)::int AS n FROM (SELECT 1 FROM privacy_attempts WHERE ip_hash = ${ipHash} AND created_at > ${ipSince} LIMIT ${PRIVACY_LIMITS.ip.max}) s`,
+    db.$queryRaw<Array<{n: number}>>`
+      SELECT count(*)::int AS n FROM (SELECT 1 FROM privacy_attempts WHERE token_hash = ${tokenHash} AND created_at > ${tokenSince} LIMIT ${PRIVACY_LIMITS.token.max}) s`,
+  ]);
+  if ((byIp[0]?.n ?? 0) >= PRIVACY_LIMITS.ip.max || (byToken[0]?.n ?? 0) >= PRIVACY_LIMITS.token.max) {
+    const seconds = (byIp[0]?.n ?? 0) >= PRIVACY_LIMITS.ip.max ? PRIVACY_LIMITS.ip.windowMs / 1000 : PRIVACY_LIMITS.token.windowMs / 1000;
+    c.header('Retry-After', String(seconds));
+    return c.json(problem('rate_limited', 'Too many tries with this link. Wait a while, then try again.'), 429);
+  }
+  await db.$executeRaw`INSERT INTO privacy_attempts (ip_hash, token_hash, created_at) VALUES (${ipHash}, ${tokenHash}, ${new Date(now)})`;
+  return null;
+}
+
+/** Shared head of every route: no-store headers, then the rate limit. Returns the token, or the 429. */
+async function begin(c: Ctx): Promise<{token: string; stop: Response | null}> {
+  live(c);
+  const token = c.req.param('token') ?? '';
+  return {token, stop: await limited(c, token)};
+}
+
+export const privacyRoutes = new Hono<Env>()
   .use('*', withAuthCore)
 
   .get('/consent/:token', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
     const state = await consentState(c.var.db, token, c.var.secret, new Date());
-    return state ? c.json(state) : gone(ctx);
+    return state ? c.json(state) : gone(c);
   })
 
   .post('/consent/:token', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
     const result = await confirmConsent(c.var.db, token, c.var.secret, new Date());
-    if (result === 'invalid') return gone(ctx);
+    if (result === 'invalid') return gone(c);
     return c.json({
       state: result,
       message:
@@ -91,44 +123,32 @@ export const privacyRoutes = new Hono()
   })
 
   .get('/unsubscribe/:token', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
-    const state = await unsubscribeState(c.var.db, token);
-    return state ? c.json(state) : gone(ctx);
+    const state = await unsubscribeState(c.var.db, token, c.var.secret);
+    return state ? c.json(state) : gone(c);
   })
 
   .post('/unsubscribe/:token', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
-    const result = await unsubscribe(c.var.db, token);
-    return result === 'ok' ? c.json({state: 'off', message: 'You are unsubscribed. No more updates from the host.'}) : gone(ctx);
+    const result = await unsubscribe(c.var.db, token, c.var.secret);
+    return result === 'ok' ? c.json({state: 'off', message: 'You are unsubscribed. No more updates from the host.'}) : gone(c);
   })
 
   .get('/guest/:token', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
     const summary = await guestSummary(c.var.db, token);
-    return summary ? c.json(summary) : gone(ctx);
+    return summary ? c.json(summary) : gone(c);
   })
 
   .get('/guest/:token/export', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
     const now = new Date();
     const doc = await guestExport(c.var.db, token, now);
-    if (!doc) return gone(ctx);
+    if (!doc) return gone(c);
     return c.body(JSON.stringify(doc, null, 2), 200, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Disposition': `attachment; filename="${exportFilename(doc.event.slug, now)}"`,
@@ -138,16 +158,13 @@ export const privacyRoutes = new Hono()
   })
 
   .post('/guest/:token/erase', async c => {
-    const ctx = c as unknown as Ctx;
-    live(ctx);
-    const token = c.req.param('token');
-    const stop = await limited(ctx, token);
+    const {token, stop} = await begin(c);
     if (stop) return stop;
     const parsed = await c.req.json().catch(() => null);
     const confirm = parsed && typeof parsed.confirm === 'string' ? parsed.confirm.trim().toLowerCase() : '';
     if (confirm !== 'erase') return invalid(c, {confirm: 'Type "erase" to confirm.'});
-    const result = await eraseByManageToken(c.var.db, token);
-    if (result === 'not_found') return gone(ctx);
+    const result = await eraseByManageToken(c.var.db, token, c);
+    if (result === 'not_found') return gone(c);
     if (result === 'checkout_in_progress') {
       return c.json(problem('checkout_in_progress', 'Your payment is still being completed. Try again once it has finished or expired.'), 409);
     }

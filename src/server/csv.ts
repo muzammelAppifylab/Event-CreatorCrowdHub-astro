@@ -81,3 +81,47 @@ export function attachmentHeader(filename: string): string {
   const safe = filename.replace(/[^A-Za-z0-9._-]+/g, "-")
   return `attachment; filename="${safe}"`
 }
+
+export interface CsvExport {
+  /** The whole CSV text: BOM, header row, then at most `maxRows` data rows. */
+  csv: string
+  /** Data rows written. */
+  rows: number
+  /** True when `pages` had more than `maxRows` rows (`X-Export-Truncated: 1`). */
+  truncated: boolean
+}
+
+/**
+ * A capped CSV export, read page by page (keyset, e.g. 1,000 rows per query) and turned into text
+ * one page at a time, so only the text and one page of rows are in memory, never every row object.
+ *
+ * Every page is read BEFORE the route returns, on purpose: the Site Database client is the
+ * request's (`getDb()`, `src/platform/db.ts`), and nothing in the platform promises it may still be
+ * used by a response body read after the handler returned (a client that disconnects cancels that
+ * work, so an audit row written at the end of a streamed body could be lost, and a database error
+ * mid-stream would leave a cut file behind a 200). Let `pages` yield ONE row past the cap when there
+ * are more: that row is not written and sets `truncated`. Stopping early ends `pages` (`return()`).
+ */
+export async function csvExport(
+  header: CsvValue[],
+  pages: AsyncIterable<CsvValue[][]>,
+  maxRows: number,
+  options: { bom?: boolean } = {},
+): Promise<CsvExport> {
+  const chunks = [toCsv([header], options)]
+  let rows = 0
+  let truncated = false
+  for await (const page of pages) {
+    const room = maxRows - rows
+    const kept = page.length > room ? page.slice(0, room) : page
+    if (kept.length > 0) {
+      chunks.push(toCsv(kept, { bom: false }))
+      rows += kept.length
+    }
+    if (page.length > room) {
+      truncated = true
+      break
+    }
+  }
+  return { csv: chunks.join(""), rows, truncated }
+}
