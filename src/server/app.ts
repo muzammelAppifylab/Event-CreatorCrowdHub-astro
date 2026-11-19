@@ -22,6 +22,8 @@ import {eventSettingsRoutes} from './routes/event-settings';
 import {pageViewRoutes} from './routes/pageviews';
 import {pollPublicRoutes} from './routes/polls-public';
 import {privacyRoutes} from './routes/privacy';
+import {providerAdminRoutes} from './routes/provider-admin';
+import {providerWebhooks} from './routes/provider-webhooks';
 import {rsvpRoutes, setPaidCheckoutHook} from './routes/rsvp';
 import {startTicketCheckout} from './ticket-checkout';
 import {getDb} from '../platform/db';
@@ -83,6 +85,9 @@ async function databaseReachable(): Promise<boolean> {
  *   GET  /site          the site's brand                        routes/site.ts
  *   *    /checkout/...  start and confirm a payment             routes/checkout.ts
  *   *    /memberships/... the member's memberships               routes/checkout.ts
+ *   *    /payment-settings  the owner's payment provider pick     routes/provider-admin.ts
+ *   POST /payment-webhooks/{stripe,paypal,ezypay}  provider webhooks (before sameOrigin/csrf)
+ *                                                               routes/provider-webhooks.ts
  *
  * Add a feature as a new `routes/<name>.ts` and one `.route()` line below,
  * CHAINED so `AppType` carries every route to the typed client. Errors are
@@ -95,6 +100,9 @@ export const app = new Hono()
   .basePath('/site-api')
   // The editor Preview only: auth cookies carried in headers (its gateway drops cookies).
   .use(previewCookies)
+  // The owner's own payment provider posts here cross-site with no CSRF token: BEFORE `sameOrigin`
+  // and `csrf`, with its own per-IP limit, body limit and signature check (routes/provider-webhooks.ts).
+  .route('/payment-webhooks', providerWebhooks)
   .use(sameOrigin)
   // The Buy button posts here as a plain form too (no JavaScript): BEFORE `csrf`, with its own
   // `formCsrf` (the token, or a same-origin form post). Keep it here (docs/agent/payments.md).
@@ -113,6 +121,7 @@ export const app = new Hono()
   .use('/polls/*', withViewer, requireAuth)
   .use('/refunds/*', withViewer, requireAuth)
   .use('/webhook-endpoints/*', withViewer, requireAuth)
+  .use('/payment-settings', withViewer, requireAuth)
   // Not /event-settings (its /brand route is public) nor /polls-public.
   // JSON bodies only on writes (415), no NUL in the URL or body (422): src/server/validate.ts.
   .use(inputGuard)
@@ -162,6 +171,8 @@ export const app = new Hono()
   .route('/polls', adminPollRoutes)
   .route('/refunds', adminRefundRoutes)
   .route('/webhook-endpoints', adminWebhookRoutes)
+  // How ticket payments are taken: the owner's pick (site:payments:read / :manage).
+  .route('/payment-settings', providerAdminRoutes)
   // ... and the guest-facing ones (token in the path / body; all after csrf).
   .route('/rsvp', rsvpRoutes)
   .route('/event-checkout', eventCheckoutRoutes)

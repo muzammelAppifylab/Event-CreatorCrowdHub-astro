@@ -14,6 +14,7 @@ in [Rules for this app](#rules-for-this-app).
 ## Contents
 
 - [Before you publish this update](#before-you-publish-this-update)
+- [Payments](#payments)
 - [Where things are](#where-things-are)
 - [Quick start](#quick-start)
 - [Setting up, step by step](#setting-up-step-by-step)
@@ -49,6 +50,34 @@ This update fixes the findings in `docs/AUDIT-REPORT.md`. What to know when you 
   `X-Export-Truncated` header.
 - **Guests of an unpublished event**: their manage link (`/r/<token>/`) shows a friendly "no longer
   available" page. Their "Your data" and "Unsubscribe" links keep working.
+
+## Payments
+
+Paid tickets use the platform's **built-in checkout** until the owner picks their own provider in
+**Dashboard → Settings → Payments**: **Ezypay**, **their own Stripe** or **their own PayPal** account.
+The screen shows, for each provider, which secrets are set (never their values), the mode (Test or
+Live), what is wrong, the webhook URL to paste and the events to send. Only a provider whose keys are
+all set can be chosen; "Built-in payments" goes back to the platform's checkout. Admins can change it
+(`site:payments:manage`); the read-only demo role only sees it (`site:payments:read`).
+
+Add the secrets on the app's **Secrets** page, each one twice: the sandbox value under **Staging** and
+the live value under **Production**. The mode follows the keys; a live key in the Preview is refused.
+
+| Provider | Secrets | Webhook URL | Events |
+| --- | --- | --- | --- |
+| Ezypay | `EZYPAY_SECRET_KEY`, `EZYPAY_PUBLISHABLE_KEY`, `EZYPAY_WEBHOOK_SECRET` | `<site address>/site-api/payment-webhooks/ezypay` | `payment.succeeded`, `payment.failed`, `payment.refunded` |
+| Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | `<site address>/site-api/payment-webhooks/stripe` | `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`, `charge.refunded` |
+| PayPal | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_WEBHOOK_ID`, and `PAYPAL_MODE=live` under Production only | `<site address>/site-api/payment-webhooks/paypal` | `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED`, `PAYMENT.CAPTURE.DENIED`, `PAYMENT.CAPTURE.REFUNDED`, `PAYMENT.CAPTURE.REVERSED` |
+
+Sandbox webhooks point at the staging site, live ones at the live site (or its custom domain). The
+Preview gets no webhooks: the thanks page confirms the payment with the provider there. Whichever way
+the money arrives, the ticket is confirmed by the same code as the built-in checkout (seat held while
+paying, `refund_due` when it can't be honoured, the confirmation email). Refund a provider payment in
+that provider's dashboard: the refund webhook closes the order and frees the seat.
+
+Code: `src/server/payments/` (prices, checkout, PayPal Orders, confirm), `src/server/routes/provider-admin.ts`,
+`src/server/routes/provider-webhooks.ts`, `src/portal/screens/payments.tsx`; tables in migration
+`20261119120000_payment_providers`.
 
 ## Where things are
 

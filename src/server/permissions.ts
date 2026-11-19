@@ -50,6 +50,28 @@ export const CATALOGUE = definePermissions({
     ability: 'manageIntegrations',
     roles: [],
   },
+  /**
+   * See how ticket payments are taken (Settings -> Payments): the owner's provider pick and which
+   * secret NAMES are set (booleans only). The read-only demo role holds it, so a store reviewer
+   * sees the choice (docs/agent/store-apps.md).
+   */
+  PAYMENTS_READ: {
+    codename: 'site:payments:read',
+    title: 'View payment settings',
+    description: 'See which payment provider takes ticket payments and whether its keys are set.',
+    group: 'Payments',
+    ability: 'viewPayments',
+    roles: ['admin'],
+  },
+  /** Choose the payment provider (Ezypay, Stripe, PayPal or the built-in checkout). */
+  PAYMENTS_MANAGE: {
+    codename: 'site:payments:manage',
+    title: 'Manage payment settings',
+    description: 'Choose how ticket payments are taken: Ezypay, your own Stripe or PayPal, or the built-in checkout.',
+    group: 'Payments',
+    ability: 'managePayments',
+    roles: ['admin'],
+  },
 });
 
 /** Codenames by key: `PERMISSIONS.EVENT_MANAGE` is `'site:event:manage'`. */

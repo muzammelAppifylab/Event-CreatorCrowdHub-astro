@@ -20,6 +20,7 @@ export const SETTINGS_GROUPS: {label: string; items: SettingsItem[]}[] = [
     items: [
       {to: '/event-settings', label: 'Branding & defaults', icon: 'settings', ability: 'manageEvents'},
       {to: '/integrations', label: 'Integrations', icon: 'zap', ability: 'manageIntegrations'},
+      {to: '/payments', label: 'Payments', icon: 'key', ability: 'viewPayments'},
     ],
   },
   {

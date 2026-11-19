@@ -672,6 +672,7 @@ model Rsvp {
   messageDeliveries  MessageDelivery[]
   pollVotes          PollVote[]
   ticketOrders       TicketOrder[]
+  providerCheckouts  ProviderCheckout[]
   rsvpAnswers        RsvpAnswer[]
   event              Event             @relation(fields: [eventId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "rsvps_event_id_events_id_fk")
   invite             Invite?           @relation(fields: [inviteId], references: [id], onUpdate: NoAction, map: "rsvps_invite_id_invites_id_fk")
@@ -957,4 +958,90 @@ model PrivacyAttempt {
   @@index([tokenHash, createdAt], map: "privacy_attempts_token_created_idx")
   @@index([createdAt], map: "privacy_attempts_created_idx")
   @@map("privacy_attempts")
+}
+
+// ---------------------------------------------------------------- the owner's own payment provider
+// docs/agent/payments-providers.md: Ezypay, Stripe or PayPal with the OWNER's own keys, picked in the
+// dashboard (Settings -> Payments). The provider is the source of truth for what was paid; these rows
+// say what was sold and to whom. Never a key, a card or an email in them.
+
+/// The owner's pick: ONE row (id 1). `provider` null = the platform's built-in checkout.
+model ProviderSettings {
+  id        Int      @id @default(1)
+  /// 'ezypay' | 'stripe' | 'paypal', or null (built-in payments)
+  provider  String?  @db.VarChar(10)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("provider_settings")
+}
+
+/// A price made at the owner's provider for one ticket type's STORED amount, in one mode. Never
+/// changes: a new ticket price is a new key (`providerPriceSpec`), so a new row. PayPal one-time
+/// orders have no price object at PayPal: the row still fixes the amount (`provider_price_id`
+/// is `order:<key>`).
+model ProviderPrice {
+  id              Int                @id @default(autoincrement())
+  /// `tkt-<ticket type>-<cents>-<currency>` (+ `-x<seats>` for Ezypay, which has no quantity)
+  key             String             @db.VarChar(64)
+  name            String             @db.VarChar(120)
+  provider        String             @db.VarChar(10)
+  /// 'test' | 'live': the mode the keys were in when it was made
+  mode            String             @db.VarChar(4)
+  providerPriceId String             @map("provider_price_id") @db.VarChar(120)
+  amountMinor     Int                @map("amount_minor")
+  currency        String             @db.Char(3)
+  /// always 'one_time' here (tickets)
+  interval        String             @default("one_time") @db.VarChar(8)
+  ticketTypeId    String?            @map("ticket_type_id") @db.Uuid
+  archivedAt      DateTime?          @map("archived_at") @db.Timestamptz(6)
+  createdAt       DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  checkouts       ProviderCheckout[]
+
+  @@unique([provider, mode, key])
+  @@map("provider_prices")
+}
+
+/// Each verified provider webhook event, handled once (the primary key refuses a second insert).
+model ProviderEvent {
+  provider String   @db.VarChar(10)
+  eventId  String   @map("event_id") @db.VarChar(120)
+  at       DateTime @default(now()) @db.Timestamptz(6)
+
+  @@id([provider, eventId])
+  @@map("provider_events")
+}
+
+/// One checkout attempt at the owner's provider for one RSVP. `id` (`ppc_<32 hex>`, made from the
+/// RSVP and the attempt) is the `ref` the provider carries, the idempotency key (`checkout:<id>`)
+/// and the `ticket_orders.checkout_id` of its order, so confirmPaidTicket handles it like a
+/// built-in checkout.
+model ProviderCheckout {
+  id                String        @id @db.VarChar(40)
+  rsvpId            String        @map("rsvp_id") @db.Uuid
+  priceId           Int           @map("price_id")
+  provider          String        @db.VarChar(10)
+  mode              String        @db.VarChar(4)
+  /// Stripe `cs_…`, PayPal order id, Ezypay `pay_…`
+  providerRef       String?       @map("provider_ref") @db.VarChar(120)
+  /// What refunds point at: Stripe `pi_…`, PayPal capture id, Ezypay `pay_…`
+  providerPaymentId String?       @map("provider_payment_id") @db.VarChar(120)
+  seats             Int           @db.SmallInt
+  /// The total charged (stored price x seats), minor units
+  amountMinor       Int           @map("amount_minor")
+  currency          String        @db.Char(3)
+  /// 'open' | 'paid' | 'failed' | 'refunded'
+  status            String        @default("open") @db.VarChar(10)
+  /// How the buyer pays while open (the provider's hosted page): no key, card or email
+  step              Json?
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  rsvp              Rsvp          @relation(fields: [rsvpId], references: [id], onDelete: Cascade)
+  price             ProviderPrice @relation(fields: [priceId], references: [id])
+
+  /// Webhooks find the checkout by the provider's own id.
+  @@unique([provider, providerRef])
+  @@index([provider, providerPaymentId])
+  @@index([rsvpId])
+  @@index([priceId])
+  @@map("provider_checkouts")
 }

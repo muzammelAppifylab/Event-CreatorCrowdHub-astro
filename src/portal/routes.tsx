@@ -34,6 +34,7 @@ import {eventsListQuery, eventSettingsQuery} from './events-queries';
 import {hubEventQuery} from './overview-queries';
 import {presenterPollsQuery} from './polls-queries';
 import {firstSettingsPath, isSettingsPath, SettingsLayout} from './settings-layout';
+import {paymentSettingsQuery} from './payments-queries';
 import {useMe, useSite} from './shared';
 import {webhooksQuery} from './webhooks-queries';
 import {
@@ -569,7 +570,15 @@ const integrationsRoute = createRoute({
   loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(webhooksQuery)),
   component: lazyRouteComponent(() => import('./screens/integrations'), 'Integrations'),
 });
-const refundsRoute = createRoute({
+const paymentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/payments',
+  beforeLoad: needs('viewPayments', 'managePayments'),
+  staticData: {title: 'Payments'},
+  loader: ({context: {queryClient}}) => warm(queryClient.ensureQueryData(paymentSettingsQuery)),
+  component: lazyRouteComponent(() => import('./screens/payments'), 'Payments'),
+});
+const refundsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/refunds',
   staticData: {title: 'Refunds to finish'},
@@ -607,6 +616,7 @@ export const routeTree = rootRoute.addChildren([
   checkinEventRoute,
   pollPresenterRoute,
   integrationsRoute,
+  paymentsRoute,
   refundsRoute,
   ...devRoutes,
 ]);

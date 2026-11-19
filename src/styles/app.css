@@ -5328,3 +5328,38 @@ html {
   background: var(--paper);
   border-radius: var(--r-sm, 8px);
 }
+
+/* Settings -> Payments (src/portal/screens/payments.tsx). */
+.screen-payments .payments-provider {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1.25rem;
+}
+.screen-payments .payments-provider h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+}
+.screen-payments .payments-secrets,
+.screen-payments .payments-events {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: grid;
+  gap: 0.375rem;
+}
+.screen-payments .payments-secrets li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.screen-payments .payments-webhook {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.5rem 0;
+}
+.screen-payments .payments-webhook code,
+.screen-payments .payments-events code {
+  overflow-wrap: anywhere;
+}

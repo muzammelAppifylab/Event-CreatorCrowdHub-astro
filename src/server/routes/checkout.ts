@@ -17,7 +17,10 @@ import {
   membershipOf,
   type PaymentEventInfo,
 } from '../../platform/payments';
+import {getDb} from '../../platform/db';
 import {paymentHooks, recordMembership} from '../payments-hooks';
+import {publicProviderCheckout, syncProviderCheckout} from '../payments/provider-confirm';
+import {isProviderCheckoutId} from '../payments/provider-tickets';
 
 /**
  * Payments, the site's side (docs/agent/payments.md).
@@ -212,6 +215,23 @@ export const checkoutRoutes = new Hono()
 
   .get('/:id', async c => {
     const id = c.req.param('id');
+    if (isProviderCheckoutId(id)) {
+      // A ticket checkout at the owner's own provider (Settings -> Payments): asked of the PROVIDER,
+      // then recorded through the same confirm logic as the built-in hooks.
+      const db = getDb();
+      if (!db) return c.json(problem('payments_unavailable', 'Payments are not available right now.'), 503);
+      let synced: Awaited<ReturnType<typeof syncProviderCheckout>>;
+      try {
+        synced = await syncProviderCheckout(db, id);
+      } catch (error) {
+        // The payment stands at the provider; its webhook records it again later.
+        console.error(`[payments] confirm ${id}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 500));
+        return c.json(problem('payments_unavailable', 'We could not confirm this payment yet. Try again in a moment.'), 503);
+      }
+      if (!synced) return c.json(problem('not_found', 'No such checkout.'), 404);
+      c.header('Cache-Control', 'private, no-store');
+      return c.json({checkout: publicProviderCheckout(synced)});
+    }
     if (!CHECKOUT_ID.test(id)) return c.json(problem('not_found', 'No such checkout.'), 404);
     const found = await getCheckout(c.req.url, id);
     if (!found.ok) {

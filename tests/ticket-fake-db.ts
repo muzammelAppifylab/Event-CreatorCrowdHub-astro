@@ -104,9 +104,12 @@ export class FakeDb {
   reminderRule: Table;
   messageDelivery: Table;
   eventSettings: Table;
+  /** The owner's payment provider pick (none: the built-in checkout). */
+  providerSettings: Table;
 
   constructor() {
     const self = () => this;
+    this.providerSettings = new Table(() => ({id: 1, provider: null}));
     this.event = new EventTable(() => ({status: 'published', deletedAt: null, capacity: null, format: 'online', slug: `ev-${uid().slice(-6)}`, title: 'Launch party', timezone: 'UTC', pollJoinCode: 'ABC123', venueName: null, venueAddress: null, mapUrl: null, joinUrl: null, thankYouLink: null}), () => undefined, self);
     this.ticketType = new Table(() => ({priceCents: 2500, currency: 'USD', name: 'General'}));
     this.reminderRule = new Table(() => ({enabled: true, subject: 'See you soon', body: 'Hi {{guest.first_name}}'}));

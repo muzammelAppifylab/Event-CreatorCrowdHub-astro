@@ -12,6 +12,7 @@ import {
   type Refund,
 } from '../platform/payments';
 import {notifyPromoted} from './jobs/holds';
+import {isProviderCheckoutId, pickedProvider, resumeProviderOrder, startProviderTicketCheckout} from './payments/provider-tickets';
 import {queueGuestEmail} from './jobs/guest-emails';
 import {emitCancelledIds, emitSeated, emitWebhook, orderPaidPayload} from './webhook-emit';
 import {isUniqueViolation, lockEvent, seatsTakenOf, siteBase} from './jobs/shared';
@@ -100,10 +101,24 @@ export async function startTicketCheckout(
   const ticket = rsvp.ticketType;
   if (!ticket || ticket.eventId !== rsvp.eventId || ticket.priceCents <= 0) return refuse(422, 'no_payment_due', 'This ticket is free.');
   const requestUrl = options.requestUrl ?? siteBase();
+  const successPath = options.successPath ?? THANKS_PATH;
+  // Never a path with the guest's manage token (`/r/<token>/`): this URL is sent to the payment provider.
+  const cancelPath = safeCancelPath(options.cancelPath) ?? `/events/${rsvp.event.slug}/`;
 
-  // Resume: one pending order per RSVP. An open checkout is reused; a closed one is retired.
-  const pending = await db.ticketOrder.findFirst({where: {rsvpId, status: 'pending'}, select: {id: true, checkoutId: true}, orderBy: {createdAt: 'desc'}});
-  if (pending) {
+  // The owner's own payment provider (Settings -> Payments), or null for the built-in checkout.
+  const [pick, pending] = await Promise.all([
+    pickedProvider(db),
+    // Resume: one pending order per RSVP. An open checkout is reused; a closed one is retired.
+    db.ticketOrder.findFirst({where: {rsvpId, status: 'pending'}, select: {id: true, checkoutId: true}, orderBy: {createdAt: 'desc'}}),
+  ]);
+  if (pending && isProviderCheckoutId(pending.checkoutId)) {
+    const resumed = await resumeProviderOrder(db, pending, pick);
+    if (resumed.kind === 'reuse') return {ok: true, checkoutId: pending.checkoutId, redirectUrl: checkoutPage(pending.checkoutId), embedded: resumed.embedded, reused: true};
+    // Paid (or approved at PayPal): the thanks page confirms with the provider. Nothing new is charged.
+    if (resumed.kind === 'paid') return {ok: true, checkoutId: pending.checkoutId, redirectUrl: thanksPage(successPath, pending.checkoutId), embedded: null, reused: true, paid: true};
+    if (resumed.kind === 'unavailable') return refuse(503, 'payments_unavailable', 'The payment provider did not answer. Try again in a minute.');
+    // Retired: a new attempt below.
+  } else if (pending) {
     const existing = await getCheckout(requestUrl, pending.checkoutId);
     if (existing.ok && existing.data.status === 'open' && existing.data.embedded) {
       return {ok: true, checkoutId: pending.checkoutId, redirectUrl: checkoutPage(pending.checkoutId), embedded: existing.data.embedded, reused: true};
@@ -116,6 +131,18 @@ export async function startTicketCheckout(
 
   const key = ticketPriceKey(ticket);
   const seats = rsvp.seats;
+  if (pick) {
+    return startProviderTicketCheckout(db, {
+      rsvp: {id: rsvp.id, seats},
+      ticket,
+      eventTitle: rsvp.event.title,
+      baseKey: key,
+      provider: pick,
+      origin: new URL(String(requestUrl)).origin,
+      successPath,
+      cancelPath,
+    });
+  }
   const price = await findPrice(requestUrl, key);
   if (!price.ok) return refuse(price.status === 0 ? 503 : 502, price.code.toLowerCase(), price.message);
   if (!price.data) {
@@ -144,15 +171,13 @@ export async function startTicketCheckout(
   // Counted after a closed checkout was retired above, so only a retired attempt gets a new key. A
   // pending order is the attempt in flight (a racing start may have just recorded it): never counted.
   const attempt = await db.ticketOrder.count({where: {rsvpId: rsvp.id, status: {not: 'pending'}}});
-  const successPath = options.successPath ?? THANKS_PATH;
   const started = await createCheckout(requestUrl, {
     price: key,
     quantity: seats,
     email: rsvp.email,
     name: rsvp.name,
     successPath,
-    // Never a path with the guest's manage token (`/r/<token>/`): this URL is sent to the payment platform.
-    cancelPath: safeCancelPath(options.cancelPath) ?? `/events/${rsvp.event.slug}/`,
+    cancelPath,
     metadata: {rsvpId: rsvp.id, ticketTypeId: ticket.id, eventId: rsvp.eventId},
     idempotencyKey: await ticketAttemptKey({rsvpId: rsvp.id, attempt, priceKey: key, seats}),
   });
@@ -203,7 +228,9 @@ async function tellOwnerRefundDue(info: {checkoutId: string; reason: string; amo
   const amount = `${(info.amountCents / 100).toFixed(2)} ${info.currency.toUpperCase()}`;
   const text = [
     `A ticket payment of ${amount}${info.eventTitle ? ` for "${info.eventTitle}"` : ''} arrived but could not be honoured: ${why}.`,
-    `Refund it in the dashboard's Payments tab (checkout ${info.checkoutId}). The order closes by itself once it is refunded.`,
+    info.checkoutId.startsWith('ppc_')
+      ? `Refund it in your payment provider's dashboard (reference ${info.checkoutId}). The order closes by itself once it is refunded.`
+      : `Refund it in the dashboard's Payments tab (checkout ${info.checkoutId}). The order closes by itself once it is refunded.`,
   ].join('\n\n');
   try {
     await siteKeyPost(siteBase(), '/emails', {kind: 'notification', subject: 'A ticket payment needs a refund', text: text.slice(0, 2000), path: REFUNDS_SCREEN});

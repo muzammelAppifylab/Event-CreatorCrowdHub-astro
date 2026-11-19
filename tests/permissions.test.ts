@@ -32,8 +32,23 @@ describe('the permission catalogue', () => {
     expect(CATALOGUE.EVENT_MANAGE.roles).toEqual(['admin']);
     // Admins may check guests in too; the door-staff role is granted by migration, not here.
     expect(CATALOGUE.EVENT_CHECKIN.roles).toEqual(['admin']);
+    expect(PERMISSIONS.PAYMENTS_READ).toBe('site:payments:read');
+    expect(PERMISSIONS.PAYMENTS_MANAGE).toBe('site:payments:manage');
+    expect(CATALOGUE.PAYMENTS_READ.roles).toEqual(['admin']);
+    expect(CATALOGUE.PAYMENTS_MANAGE.roles).toEqual(['admin']);
     expect(Object.keys(NO_ABILITIES).sort()).toEqual(
-      ['checkinGuests', 'editRoles', 'manageEvents', 'manageIntegrations', 'manageRoles', 'manageUsers', 'readAudit', 'updateUsers'].sort()
+      [
+        'checkinGuests',
+        'editRoles',
+        'manageEvents',
+        'manageIntegrations',
+        'manageRoles',
+        'manageUsers',
+        'readAudit',
+        'updateUsers',
+        'viewPayments',
+        'managePayments',
+      ].sort()
     );
     expect(Object.values(NO_ABILITIES).every(v => v === false)).toBe(true);
   });
@@ -51,7 +66,13 @@ describe('the permission catalogue', () => {
       manageEvents: true,
       checkinGuests: false,
       manageIntegrations: false,
+      viewPayments: false,
+      managePayments: false,
     } satisfies Abilities);
+    // The read-only demo role: it may SEE the payment provider choice, never change it.
+    const demo = abilitiesFor(new Set(['site:payments:read']));
+    expect(demo.viewPayments).toBe(true);
+    expect(demo.managePayments).toBe(false);
     // The type is exact: a key nobody declared does not exist.
     // @ts-expect-error not in the catalogue
     void NO_ABILITIES.manageEverything;
